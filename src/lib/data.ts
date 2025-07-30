@@ -1,16 +1,40 @@
 export async function getChildren() {
-  // Aqui futuramente você pode integrar com banco de dados ou API
   return [
     {
-      id: 1,
-      nome: 'Ana Clara',
-      idade: 8,
-      cidade: 'Montes Claros',
-      categoria: 'Bonecas',
-      foto: 'https://images.unsplash.com/photo-1554151228-14d9def656e4?w=300&h=300&fit=crop&crop=face',
+      id: 2004,
+      nome: 'Isabella Nogueira Santana',
+      idade: 5,
+      cidade: 'Bonito',
+      comunidade: 'Agua Doce',
+      escola: 'Escola Francisco Borges- Agua Doce',
+      categoria: 'Barbie',
+      descricao: 'Gosta de brincar com bonecas Barbie.',
       apadrinhado: false,
-      descricao: 'Ama brincar de casinha e desenhar'
+      foto: '/assets/artes/2004.png'
     },
-    // ...restante dos dados
+    {
+      id: 2005,
+      nome: 'Elias Gabriel Pereira dos Santos',
+      idade: 6,
+      cidade: 'Bonito',
+      comunidade: 'Agua Doce',
+      escola: 'Escola Francisco Borges- Agua Doce',
+      categoria: 'Pipa',
+      descricao: 'Adora empinar pipa com os amigos.',
+      apadrinhado: false,
+      foto: '/assets/artes/2005.png'
+    },
+    {
+      id: 2006,
+      nome: 'Heloísa Carneiro Santana',
+      idade: 6,
+      cidade: 'Bonito',
+      comunidade: 'Agua Doce',
+      escola: 'Escola Francisco Borges- Agua Doce',
+      categoria: 'Maleta de Médico',
+      descricao: 'Quer ser médica quando crescer.',
+      apadrinhado: false,
+      foto: '/assets/artes/2006.png'
+    }
   ];
 }

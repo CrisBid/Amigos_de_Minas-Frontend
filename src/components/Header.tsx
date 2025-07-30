@@ -26,13 +26,23 @@ export function Header() {
         <div className="flex items-center gap-6">
           <nav className="flex gap-5 text-base font-medium">
             <NavLink href="/apadrinhamento" label="Apadrinhamento" />
-            <NavLink href="/construcao-casas" label="Projeto de Moradias" />
+            <NavLink href="/cidades" label="Cidades Atendidas" />
+            {
+              //<NavLink href="/construcao-casas" label="Projeto de Moradias" />
+            }
+            
           </nav>
 
           {/* Botão de Login */}
           <Link
-            href="/admin/login"
-            className="ml-4 px-4 py-1.5 bg-[#253243] text-white text-sm rounded-md hover:bg-[#375A7F] transition"
+            href="/auth/signin"
+            className="px-4 py-1.5 bg-[#253243] text-white text-sm rounded-md hover:bg-[#375A7F] transition"
+          >
+            Cadastrar
+          </Link>
+          <Link
+            href="/auth/login"
+            className="px-4 py-1.5 bg-[#253243] text-white text-sm rounded-md hover:bg-[#375A7F] transition"
           >
             Login
           </Link>

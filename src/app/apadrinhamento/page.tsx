@@ -1,16 +1,18 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Stats from '@/components/Apadrinhamento/Stats';
 import AddChildForm from '@/components/Apadrinhamento/AddChildForm';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
 import { Plus, Filter, Search } from 'lucide-react';
+import { getChildren } from '@/lib/data';
 
 interface Child {
   id: number;
   nome: string;
   idade: number;
   cidade: string;
+  comunidade: string;
   escola: string;
   categoria: string;
   descricao: string;
@@ -23,7 +25,7 @@ interface Props {
 }
 
 const cidades = [
-  "Bonito de Minas",
+  "Bonito",
   "Itacarambi",
   "Juvenília",
   "Manga",
@@ -62,7 +64,7 @@ const faixasEtarias = ['0-3 anos', '4-6 anos', '7-9 anos', '10-12 anos', '13+ an
 const escolar = ["Escola Galho de São Domingos","Escola Francisco Borges-Larga","Escola Municipal TV Croá","Escola Municipal TV Japão","Escola Francisco Borges- Agua Doce","Lourenço Alves- Almescla/Catulé /Lorão","Escola Sumidoro-Barra da Ema","Escola Sumidoro-Cajueiro"]
 
 export default function ClientSideApadrinhamento({ initialChildren = [] }: Props) {
-  const [children, setChildren] = useState<Child[]>(initialChildren);
+  const [children, setChildren] = useState<Child[]>([]);
   const [showForm, setShowForm] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -73,6 +75,10 @@ export default function ClientSideApadrinhamento({ initialChildren = [] }: Props
     idade: '',
     apadrinhado: ''
   });
+
+  useEffect(() => {
+    getChildren().then(setChildren);
+  }, []);
 
   const handleAddChild = (childData: Omit<Child, 'id' | 'apadrinhado' | 'foto'>) => {
     const newChild: Child = {

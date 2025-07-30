@@ -6,7 +6,7 @@ import React from 'react';
 export default function ChildCard({ child }:any) {
   return (
     <div className="bg-white shadow-md rounded-xl overflow-hidden">
-      <img src={child.foto} alt={child.nome} className="w-full h-56 object-cover" />
+      <img src={child.foto} alt={child.nome} className="w-full h-120 object-cover" />
       <div className="p-4">
         <h3 className="font-bold text-lg">{child.nome}</h3>
         <p>{child.idade} anos</p>
