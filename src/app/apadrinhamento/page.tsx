@@ -1,71 +1,57 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useSession } from 'next-auth/react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Filter, Search, Loader2, AlertCircle } from 'lucide-react';
 import Stats from '@/components/Apadrinhamento/Stats';
-import AddChildForm from '@/components/Apadrinhamento/AddChildForm';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
-import { Plus, Filter, Search } from 'lucide-react';
-import { getChildren } from '@/lib/data';
 
-interface Child {
-  id: number;
-  nome: string;
-  idade: number;
-  cidade: string;
-  comunidade: string;
-  escola: string;
-  categoria: string;
-  descricao: string;
-  apadrinhado: boolean;
-  foto: string;
-}
+type SponsorshipStatus = 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED' | 'NONE';
 
-interface Props {
-  initialChildren?: Child[];
-}
+type City = { id: string; publicId?: number | null; name: string; state?: string | null; };
 
-const cidades = [
-  "Bonito",
-  "Itacarambi",
-  "Juvenília",
-  "Manga",
-  "São João Das Missões"
-];
-const categorias = [
-  "Boneca",
-  "Barbie",
-  "Pelúcia",
-  "Bebê",
-  "Kit Cozinha",
-  "Maquiagem",
-  "Sandalia",
-  "Maleta De Médico",
-  "Kit Miçangas",
-  "Boneco Super Herói",
-  "Carrinho",
-  "Caminhão",
-  "Carreta",
-  "Dinossauro",
-  "Ônibus",
-  "Trator",
-  "Bola",
-  "Pipa",
-  "Jogo",
-  "Tênis",
-  "Roupas",
-  "Brinquedos Bebê",
-  "Fraldas",
-  "Leite",
-  "Cesta De Doces",
-  "Material Escolar"
-];
+type Child = {
+  id: string;
+  name: string;
+  age?: number;
+  cityName?: string;
+  city?: City | null;
+  school?: string;
+  category?: string;
+  wantedGift?: string;
+  description?: string;
+  photoUrl?: string;
+  media?: Array<{ framedUrl?: string; processedUrl?: string }>;
+  sponsorshipStatus: SponsorshipStatus;
+};
 
-const faixasEtarias = ['0-3 anos', '4-6 anos', '7-9 anos', '10-12 anos', '13+ anos'];
-const escolar = ["Escola Galho de São Domingos","Escola Francisco Borges-Larga","Escola Municipal TV Croá","Escola Municipal TV Japão","Escola Francisco Borges- Agua Doce","Lourenço Alves- Almescla/Catulé /Lorão","Escola Sumidoro-Barra da Ema","Escola Sumidoro-Cajueiro"]
+type Campaign = {
+  id: string;
+  name: string;
+  slug: string;
+  year?: number;
+  status: 'DRAFT' | 'ACTIVE' | 'FINISHED' | 'ARCHIVED';
+};
 
-export default function ClientSideApadrinhamento({ initialChildren = [] }: Props) {
+const FAIXAS_ETARIAS = ['0-3 anos', '4-6 anos', '7-9 anos', '10-12 anos', '13+ anos'];
+
+export default function ApadrinhamentoPage() {
+  const { data: session, status } = useSession(); // agora não redirecionamos se não logado
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const api = process.env.NEXT_PUBLIC_NEST_API_URL;
+
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [campaignId, setCampaignId] = useState<string>('');
+
   const [children, setChildren] = useState<Child[]>([]);
-  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [sponsoringId, setSponsoringId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const scanQuery = searchParams.get('scan');
+  const [scanFs, setScanFs] = useState<boolean>(scanQuery === '1');
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filtros, setFiltros] = useState({
@@ -73,97 +59,200 @@ export default function ClientSideApadrinhamento({ initialChildren = [] }: Props
     escola: '',
     categoria: '',
     idade: '',
-    apadrinhado: ''
+    status: 'disponivel' as '' | 'disponivel' | 'apadrinhado',
   });
 
+  // 1) carregar campanhas (sem exigir login)
   useEffect(() => {
-    getChildren().then(setChildren);
-  }, []);
-
-  const handleAddChild = (childData: Omit<Child, 'id' | 'apadrinhado' | 'foto'>) => {
-    const newChild: Child = {
-      id: children.length + 1,
-      ...childData,
-      idade: parseInt(childData.idade.toString()),
-      apadrinhado: false,
-      foto: `https://picsum.photos/300?random=${Date.now()}`
-    };
-    setChildren(prev => [...prev, newChild]);
-    setShowForm(false);
-  };
-
-  const toggleApadrinhamento = (id: number) => {
-    setChildren(prev =>
-      prev.map(child =>
-        child.id === id ? { ...child, apadrinhado: !child.apadrinhado } : child
-      )
-    );
-  };
-
-  const stats = {
-    total: children.length,
-    apadrinhadas: children.filter(c => c.apadrinhado).length,
-    disponiveis: children.filter(c => !c.apadrinhado).length
-  };
-
-  const childrenFiltradas = children.filter(child => {
-    const matchesSearch = child.nome.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCidade = !filtros.cidade || child.cidade === filtros.cidade;
-    const matchesEscola = !filtros.escola || child.escola === filtros.escola;
-    const matchesCategoria = !filtros.categoria || child.categoria === filtros.categoria;
-    const matchesApadrinhado =
-      !filtros.apadrinhado ||
-      (filtros.apadrinhado === 'apadrinhado' && child.apadrinhado) ||
-      (filtros.apadrinhado === 'disponivel' && !child.apadrinhado);
-
-    let matchesIdade = true;
-    const idade = child.idade;
-    switch (filtros.idade) {
-      case '0-3 anos':
-        matchesIdade = idade <= 3;
-        break;
-      case '4-6 anos':
-        matchesIdade = idade >= 4 && idade <= 6;
-        break;
-      case '7-9 anos':
-        matchesIdade = idade >= 7 && idade <= 9;
-        break;
-      case '10-12 anos':
-        matchesIdade = idade >= 10 && idade <= 12;
-        break;
-      case '13+ anos':
-        matchesIdade = idade >= 13;
-        break;
+    if (!api) {
+      setError('Defina NEXT_PUBLIC_NEST_API_URL.');
+      setLoading(false);
+      return;
     }
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const [cRes, allRes] = await Promise.all([
+          fetch(`${api}/campaigns?status=ACTIVE`, { cache: 'no-store' }),
+          fetch(`${api}/campaigns`, { cache: 'no-store' }),
+        ]);
+        const active = cRes.ok ? await cRes.json() : [];
+        const all = allRes.ok ? await allRes.json() : [];
+        const unique = uniqBy<Campaign>([...active, ...all], 'id').sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+        setCampaigns(unique);
+        setCampaignId(unique[0]?.id || '');
+      } catch (e: any) {
+        setError(e?.message || 'Falha ao carregar campanhas.');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [api]);
 
-    return matchesSearch && matchesCidade && matchesEscola && matchesCategoria && matchesApadrinhado && matchesIdade;
-  });
+  // 2) carregar crianças da campanha
+  useEffect(() => {
+    if (!campaignId || !api) return;
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const url = new URL(`${api}/children`);
+        url.searchParams.set('campaignId', campaignId);
+        if (scanFs) url.searchParams.set('scan', '1');
+        const res = await fetch(url.toString(), { cache: 'no-store' });
+        if (!res.ok) throw new Error(await safeErrMsg(res));
+        const data = await res.json();
+        const mapped: Child[] = (data ?? []).map((c: any) => {
+        // 👉 Pega o sponsorship RELACIONADO à campanha selecionada
+        const rel = Array.isArray(c.sponsorships)
+          ? c.sponsorships.find(
+              (s: any) =>
+                s.campaignId === campaignId &&
+                (s.status === 'ACTIVE' || s.status === 'PENDING')
+            )
+          : null;
+
+        // status correto para a campanha atual
+        const status: SponsorshipStatus = rel?.status ?? 'NONE';
+
+        // foto (mantém sua lógica atual)
+        const mediaUrl = c.media?.[0]?.framedUrl ?? c.media?.[0]?.processedUrl ?? null;
+        const photoUrl = mediaUrl ?? c.photoUrl ?? null;
+
+        return {
+          id: c.id,
+          name: c.name,
+          age: c.age ?? c.idade,
+          cityName: c.city?.name ?? c.cityName,
+          city: c.city ?? null,
+          school: c.school ?? c.escola,
+          category: c.category ?? c.categoria,
+          wantedGift: c.wantedGift,
+          description: c.description,
+          photoUrl: photoUrl ?? undefined,
+          media: c.media,
+          sponsorshipStatus: status,
+        };
+      });
+        setChildren(mapped);
+      } catch (e: any) {
+        setError(e?.message || 'Falha ao carregar crianças.');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [campaignId, api, scanFs]);
+
+  // 3) clique em "Apadrinhar" → redireciona conforme login
+  async function handleSponsor(childId: string) {
+    if (!campaignId) {
+      setError('Selecione uma campanha.');
+      return;
+    }
+    setSponsoringId(childId);
+    try {
+      if (status === 'authenticated') {
+        router.push(`/apadrinhamento/concluir?childId=${encodeURIComponent(childId)}&campaignId=${encodeURIComponent(campaignId)}`);
+      } else {
+        router.push(`/apadrinhamento/registro?childId=${encodeURIComponent(childId)}&campaignId=${encodeURIComponent(campaignId)}`);
+      }
+    } finally {
+      setSponsoringId(null);
+    }
+  }
+
+  // 4) stats
+  const stats = useMemo(() => {
+    const total = children.length;
+    const indisponiveis = children.filter(c => ['ACTIVE', 'PENDING'].includes(c.sponsorshipStatus)).length;
+    const disponiveis = total - indisponiveis;
+    return { total, apadrinhadas: indisponiveis, disponiveis };
+  }, [children]);
+
+  // 5) filtros (derivados)
+  const cidades = useMemo(() => uniq(children.map(c => c.city?.name ?? c.cityName).filter(Boolean) as string[]), [children]);
+  const escolas = useMemo(() => uniq(children.map(c => c.school).filter(Boolean) as string[]), [children]);
+  const categorias = useMemo(() => uniq(children.map(c => c.category).filter(Boolean) as string[]), [children]);
+
+  // 6) aplicar filtros
+  const childrenFiltradas = useMemo(() => {
+    return children.filter((child) => {
+      const nomeCidade = child.city?.name ?? child.cityName ?? '';
+      const matchesSearch = child.name?.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesCidade = !filtros.cidade || nomeCidade === filtros.cidade;
+      const matchesEscola = !filtros.escola || child.school === filtros.escola;
+      const matchesCategoria = !filtros.categoria || child.category === filtros.categoria;
+      const isIndisp = ['ACTIVE', 'PENDING'].includes(child.sponsorshipStatus);
+      const matchesStatus =
+        !filtros.status ||
+        (filtros.status === 'disponivel' && !isIndisp) ||
+        (filtros.status === 'apadrinhado' && isIndisp);
+      let matchesIdade = true;
+      const idade = Number(child.age ?? 0);
+      switch (filtros.idade) {
+        case '0-3 anos': matchesIdade = idade <= 3; break;
+        case '4-6 anos': matchesIdade = idade >= 4 && idade <= 6; break;
+        case '7-9 anos': matchesIdade = idade >= 7 && idade <= 9; break;
+        case '10-12 anos': matchesIdade = idade >= 10 && idade <= 12; break;
+        case '13+ anos': matchesIdade = idade >= 13; break;
+      }
+      return matchesSearch && matchesCidade && matchesEscola && matchesCategoria && matchesStatus && matchesIdade;
+    });
+  }, [children, searchTerm, filtros]);
 
   return (
     <div className="max-w-6xl mx-auto px-6">
-      <div className="flex justify-between items-center mb-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Crianças Para Apadrinhamento</h2>
 
-        {/* 
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="bg-gradient-to-r from-green-500 to-blue-600 text-white px-4 py-2 rounded-lg hover:from-green-600 hover:to-blue-700 transition"
-        >
-          <Plus className="inline mr-2 h-4 w-4" /> Cadastrar Criança
-        </button>
-        */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-600">Campanha:</label>
+            <select
+              value={campaignId}
+              onChange={(e) => setCampaignId(e.target.value)}
+              className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
+            >
+              {campaigns.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.name}{c.year ? ` (${c.year})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* scan opcional (carga manual inicial) */}
+          <label className="flex items-center gap-2 text-sm text-gray-600">
+            <input
+              type="checkbox"
+              checked={scanFs}
+              onChange={(e) => setScanFs(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            Ler imagens do disco (scan)
+          </label>
+        </div>
       </div>
+
+      {/* banner opcional para convidados */}
+      {status !== 'authenticated' && (
+        <div className="mb-4 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded-xl p-3">
+          Você pode navegar livremente. Para concluir o apadrinhamento, faremos um cadastro rápido no próximo passo. 💚
+        </div>
+      )}
 
       <Stats stats={stats} />
 
-      {showForm && (
-        <AddChildForm
-          onAdd={handleAddChild}
-          onCancel={() => setShowForm(false)}
-        />
+      {error && (
+        <div className="mt-4 mb-2 flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3">
+          <AlertCircle className="w-4 h-4" />
+          {error}
+        </div>
       )}
 
-      {/* Filtros e Busca */}
+      {/* Filtros e busca */}
       <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-8">
         <div className="flex items-center mb-4">
           <Filter className="h-5 w-5 text-gray-600 mr-2" />
@@ -173,7 +262,7 @@ export default function ClientSideApadrinhamento({ initialChildren = [] }: Props
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
           <div className="sm:col-span-2 xl:col-span-2">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
               <input
                 type="text"
                 placeholder="Buscar por nome..."
@@ -184,61 +273,82 @@ export default function ClientSideApadrinhamento({ initialChildren = [] }: Props
             </div>
           </div>
 
-          <select
-            value={filtros.cidade}
-            onChange={(e) => setFiltros({ ...filtros, cidade: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-          >
+          <select value={filtros.cidade} onChange={(e) => setFiltros({ ...filtros, cidade: e.target.value })} className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white">
             <option value="">Todas as cidades</option>
-            {cidades.map(cidade => (
-              <option key={cidade} value={cidade}>{cidade}</option>
-            ))}
+            {cidades.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
 
-          <select
-            value={filtros.escola}
-            onChange={(e) => setFiltros({ ...filtros, escola: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-          >
-            <option value="">Todas as escolar</option>
-            {escolar.map(escola => (
-              <option key={escola} value={escola}>{escola}</option>
-            ))}
+          <select value={filtros.escola} onChange={(e) => setFiltros({ ...filtros, escola: e.target.value })} className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white">
+            <option value="">Todas as escolas</option>
+            {escolas.map(e => <option key={e} value={e}>{e}</option>)}
           </select>
 
-          <select
-            value={filtros.categoria}
-            onChange={(e) => setFiltros({ ...filtros, categoria: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-          >
+          <select value={filtros.categoria} onChange={(e) => setFiltros({ ...filtros, categoria: e.target.value })} className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white">
             <option value="">Todas as categorias</option>
-            {categorias.map(categoria => (
-              <option key={categoria} value={categoria}>{categoria}</option>
-            ))}
+            {categorias.map(cat => <option key={cat} value={cat}>{cat}</option>)}
           </select>
 
-          <select
-            value={filtros.apadrinhado}
-            onChange={(e) => setFiltros({ ...filtros, apadrinhado: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-          >
+          <select value={filtros.status} onChange={(e) => setFiltros({ ...filtros, status: e.target.value as any })} className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white">
             <option value="">Todos os status</option>
             <option value="disponivel">Disponíveis</option>
-            <option value="apadrinhado">Apadrinhados</option>
+            <option value="apadrinhado">Indisponíveis</option>
+          </select>
+
+          <select value={filtros.idade} onChange={(e) => setFiltros({ ...filtros, idade: e.target.value })} className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white">
+            <option value="">Todas as idades</option>
+            {FAIXAS_ETARIAS.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
         </div>
       </div>
 
-      {/* Grid de Crianças */}
+      {/* Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {childrenFiltradas.map(child => (
-          <ChildCard key={child.id} child={child} onToggle={toggleApadrinhamento} />
-        ))}
+        {childrenFiltradas.map(child => {
+          const nomeCidade = child.city?.name ?? child.cityName ?? '';
+          return (
+            <ChildCard
+              key={child.id}
+              child={{
+                id: child.id,
+                nome: child.name,
+                idade: child.age ?? 0,
+                cidade: nomeCidade,
+                escola: child.school ?? '',
+                categoria: child.category ?? '',
+                descricao: child.description ?? '',
+                apadrinhado: ['ACTIVE', 'PENDING'].includes(child.sponsorshipStatus),
+                foto: child.photoUrl ?? '',
+                status: child.sponsorshipStatus,
+              }}
+              onSponsor={() => handleSponsor(child.id)}
+              sponsoring={sponsoringId === child.id}
+            />
+          );
+        })}
       </div>
 
-      {childrenFiltradas.length === 0 && (
-        <div className="text-center text-gray-500 py-10">Nenhuma criança encontrada com os filtros aplicados.</div>
+      {loading && (
+        <div className="flex items-center gap-2 text-gray-600 py-8">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Carregando…
+        </div>
+      )}
+
+      {!loading && childrenFiltradas.length === 0 && (
+        <div className="text-center text-gray-500 py-10">
+          Nenhuma criança encontrada com os filtros aplicados.
+        </div>
       )}
     </div>
   );
 }
+
+/* helpers */
+function uniq(arr: (string | undefined | null)[]) { return Array.from(new Set(arr.filter(Boolean) as string[])); }
+function uniqBy<T extends Record<string, any>>(arr: T[], key: keyof T) {
+  const seen = new Set<string>(); const out: T[] = [];
+  for (const it of arr) { const k = String(it[key]); if (!seen.has(k)) { seen.add(k); out.push(it); } }
+  return out;
+}
+function normalizeStatus(s?: string): SponsorshipStatus { return (s === 'ACTIVE' || s === 'PENDING' || s === 'ENDED' || s === 'CANCELLED') ? s : 'NONE'; }
+async function safeErrMsg(res: Response) { try { const d = await res.json(); return d?.message || d?.error || res.statusText } catch { return res.statusText } }
