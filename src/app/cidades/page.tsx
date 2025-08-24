@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { MapPin, Users, Heart, Award, Calendar, TrendingUp, Phone, Mail, Globe, ChevronDown } from 'lucide-react';
 
 export default function BonitoDeMinasPage() {
-  const [activeSection, setActiveSection] = useState(null);
+  const [activeSection, setActiveSection] = useState<number | null>(null);
   const [selectedCity, setSelectedCity] = useState("Bonito");
   
   const cidades = [
