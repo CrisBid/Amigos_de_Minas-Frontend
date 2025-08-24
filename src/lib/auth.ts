@@ -93,7 +93,7 @@ export const authOptions: NextAuthOptions = {
         token.provider = "google"
         token.googleAccessToken = account.access_token
         token.googleRefreshToken = account.refresh_token // pode vir vazio se o usuário já consentiu antes
-        token.googleAccessTokenExpires = Date.now() + (account.expires_in ?? 3600) * 1000
+        token.googleAccessTokenExpires = Date.now() + (Number(account.expires_in ?? 3600)) * 1000
         return token
       }
 
