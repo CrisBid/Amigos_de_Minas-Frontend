@@ -1,52 +1,38 @@
-// src/app/api/admin/cities/[id]/route.ts
 import { getToken } from 'next-auth/jwt';
 
 const API = process.env.NEXT_PUBLIC_NEST_API_URL!;
 
 async function requireAccessToken(request: Request) {
   const token = await getToken({ req: request as any, secret: process.env.NEXTAUTH_SECRET });
-  const accessToken = (token as any)?.accessToken as string | undefined;
-  if (!accessToken) throw new Response('Unauthorized', { status: 401 });
-  return accessToken;
+  const at = (token as any)?.accessToken as string | undefined;
+  if (!at) throw new Response('Unauthorized', { status: 401 });
+  return at;
 }
 
-export async function GET(request: Request, { params }: { params: { id: string } }) {
-  const accessToken = await requireAccessToken(request);
-  const res = await fetch(`${API}/cities/${params.id}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    cache: 'no-store',
-  });
-  return new Response(await res.text(), {
-    status: res.status,
-    headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
-  });
+type Ctx = { params: Promise<{ id: string }> };
+
+export async function GET(request: Request, ctx: Ctx) {
+  const at = await requireAccessToken(request);
+  const { id } = await ctx.params;
+  const r = await fetch(`${API}/cities/${id}`, { headers: { Authorization: `Bearer ${at}` }, cache: 'no-store' });
+  return new Response(await r.text(), { status: r.status, headers: { 'content-type': r.headers.get('content-type') ?? 'application/json' } });
 }
 
-export async function PATCH(request: Request, { params }: { params: { id: string } }) {
-  const accessToken = await requireAccessToken(request);
+export async function PATCH(request: Request, ctx: Ctx) {
+  const at = await requireAccessToken(request);
+  const { id } = await ctx.params;
   const body = await request.text();
-  const res = await fetch(`${API}/cities/${params.id}`, {
+  const r = await fetch(`${API}/cities/${id}`, {
     method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'content-type': 'application/json',
-    },
+    headers: { Authorization: `Bearer ${at}`, 'content-type': 'application/json' },
     body,
   });
-  return new Response(await res.text(), {
-    status: res.status,
-    headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
-  });
+  return new Response(await r.text(), { status: r.status, headers: { 'content-type': r.headers.get('content-type') ?? 'application/json' } });
 }
 
-export async function DELETE(request: Request, { params }: { params: { id: string } }) {
-  const accessToken = await requireAccessToken(request);
-  const res = await fetch(`${API}/cities/${params.id}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  return new Response(await res.text(), {
-    status: res.status,
-    headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
-  });
+export async function DELETE(request: Request, ctx: Ctx) {
+  const at = await requireAccessToken(request);
+  const { id } = await ctx.params;
+  const r = await fetch(`${API}/cities/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${at}` } });
+  return new Response(await r.text(), { status: r.status, headers: { 'content-type': r.headers.get('content-type') ?? 'application/json' } });
 }

@@ -9,19 +9,20 @@ async function requireAccessToken(request: Request) {
   return at;
 }
 
-export async function GET(request: Request, { params }: { params: { id: string } }) {
+type Ctx = { params: Promise<{ id: string }> };
+
+export async function GET(request: Request, ctx: Ctx) {
   const at = await requireAccessToken(request);
-  const r = await fetch(`${API}/children/${params.id}`, {
-    headers: { Authorization: `Bearer ${at}` },
-    cache: 'no-store',
-  });
+  const { id } = await ctx.params;
+  const r = await fetch(`${API}/children/${id}`, { headers: { Authorization: `Bearer ${at}` }, cache: 'no-store' });
   return new Response(await r.text(), { status: r.status, headers: { 'content-type': r.headers.get('content-type') ?? 'application/json' } });
 }
 
-export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+export async function PATCH(request: Request, ctx: Ctx) {
   const at = await requireAccessToken(request);
+  const { id } = await ctx.params;
   const body = await request.text();
-  const r = await fetch(`${API}/children/${params.id}`, {
+  const r = await fetch(`${API}/children/${id}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${at}`, 'content-type': 'application/json' },
     body,
@@ -29,11 +30,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
   return new Response(await r.text(), { status: r.status, headers: { 'content-type': r.headers.get('content-type') ?? 'application/json' } });
 }
 
-export async function DELETE(request: Request, { params }: { params: { id: string } }) {
+export async function DELETE(request: Request, ctx: Ctx) {
   const at = await requireAccessToken(request);
-  const r = await fetch(`${API}/children/${params.id}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${at}` },
-  });
+  const { id } = await ctx.params;
+  const r = await fetch(`${API}/children/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${at}` } });
   return new Response(await r.text(), { status: r.status, headers: { 'content-type': r.headers.get('content-type') ?? 'application/json' } });
 }
