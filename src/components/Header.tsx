@@ -17,6 +17,9 @@ export function Header() {
   // Roles (garanta no NextAuth session callback algo como: session.user.roles = token.user.roles)
   const roles: string[] = (session as any)?.user?.roles ?? []
 
+  //console.log({ session, status });
+  
+
   return (
     <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-50">
       <div className="w-full max-w-screen-xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -39,7 +42,7 @@ export function Header() {
         <div className="flex items-center gap-6">
           <nav className="flex gap-5 text-base font-medium">
             <NavLink href="/apadrinhamento" label="Apadrinhamento" active={isActive('/apadrinhamento')} />
-            <NavLink href="/cidades" label="Cidades Atendidas" active={isActive('/cidades')} />
+            {/*<NavLink href="/cidades" label="Cidades Atendidas" active={isActive('/cidades')} />*/}
             {/* <NavLink href="/construcao-casas" label="Projeto de Moradias" active={isActive('/construcao-casas')} /> */}
           </nav>
 
@@ -200,12 +203,6 @@ function ProfileDropdown({
                 <MenuSeparator />
                 <MenuItem onClick={() => router.push('/admin')}>
                   Painel administrativo
-                </MenuItem>
-                <MenuItem onClick={() => router.push('/admin/criancas')}>
-                  Gerir crianças
-                </MenuItem>
-                <MenuItem onClick={() => router.push('/admin/apadrinhamentos')}>
-                  Gerir apadrinhamentos
                 </MenuItem>
               </>
             )}

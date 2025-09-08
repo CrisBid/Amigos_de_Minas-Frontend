@@ -255,6 +255,7 @@ export default function MeuPerfilPage() {
               </Section>
 
               {/* Perfil socioeconômico */}
+              {/* 
               <Section title="Perfil">
                 <div className="grid md:grid-cols-2 gap-6">
                   <Field
@@ -283,6 +284,7 @@ export default function MeuPerfilPage() {
                   />
                 </div>
               </Section>
+              */}
 
               {/* Ações */}
               <div className="flex items-center justify-end gap-3 pt-2">

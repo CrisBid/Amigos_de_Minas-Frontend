@@ -49,11 +49,12 @@ export const authOptions: NextAuthOptions = {
         // { user: { id, name, email, ... }, access_token, refresh_token, expires_in }
         const { user, access_token, refresh_token, expires_in } = data
         if (!user || !access_token) return null
+
         return {
           id: String(user.id),
           name: user.name,
           email: user.email,
-          // guardamos tokens no JWT via callback
+          roles: user.roles ?? [],                 // <-- importante (opcional, mas útil)
           accessToken: access_token,
           refreshToken: refresh_token,
           accessTokenExpires: Date.now() + expires_in * 1000,
@@ -85,6 +86,7 @@ export const authOptions: NextAuthOptions = {
         token.refreshToken = u.refreshToken
         token.accessTokenExpires = u.accessTokenExpires
         token.user = u.rawUser
+        token.roles = u.roles ?? u.rawUser?.roles ?? token.roles ?? []   // <-- AQUI
         return token
       }
 
@@ -92,38 +94,38 @@ export const authOptions: NextAuthOptions = {
       if (account?.provider === "google") {
         token.provider = "google"
         token.googleAccessToken = account.access_token
-        token.googleRefreshToken = account.refresh_token // pode vir vazio se o usuário já consentiu antes
+        token.googleRefreshToken = account.refresh_token
         token.googleAccessTokenExpires = Date.now() + (Number(account.expires_in ?? 3600)) * 1000
+        // Se seu backend precisa mapear roles para logins Google, você pode
+        // buscar no Nest aqui e preencher token.roles, senão defina um default:
+        token.roles = token.roles ?? ["SPONSOR"]                        // <-- opcional
         return token
       }
 
-      // Renovação quando expirar
+      // Renovação quando expirar (Nest)
       if (token.provider === "nest") {
-        // Se o access token ainda é válido, retorna como está
         if (token.accessToken && token.accessTokenExpires && Date.now() < (token.accessTokenExpires as number)) {
-          return token
+          return token // preserva token.roles como está
         }
-        // Tenta renovar no Nest
         try {
           const data = await refreshNestToken(String(token.refreshToken))
           token.accessToken = data.access_token
           token.accessTokenExpires = Date.now() + data.expires_in * 1000
           if (data.refresh_token) token.refreshToken = data.refresh_token
+          token.roles = token.roles ?? []                                 // <-- preserva roles
           return token
         } catch {
-          // falhou: força re-login
-          return { name: token.name, email: token.email } as any
+          // Ao “quebrar” para re-login, você descartava tudo e perdia roles:
+          return { name: token.name, email: token.email, roles: token.roles ?? [] } as any
         }
       }
 
       if (token.provider === "google") {
-        // regra simples: se expirou, apenas force re-login do Google
         if (token.googleAccessTokenExpires && Date.now() < (token.googleAccessTokenExpires as number)) {
           return token
         }
-        // Aqui você poderia implementar refresh via Google OAuth (opcional).
-        // Se não fizer, força re-login:
-        return { name: token.name, email: token.email } as any
+        // Se for forçar re-login, não perca roles por acidente:
+        return { name: token.name, email: token.email, roles: token.roles ?? ["SPONSOR"] } as any
       }
 
       return token
@@ -134,16 +136,17 @@ export const authOptions: NextAuthOptions = {
       session.user = session.user || {}
       ;(session.user as any).id = (token.sub ?? (token.user as any)?.id) as string | undefined
       ;(session.user as any).provider = token.provider
+      ;(session.user as any).roles = (token as any).roles ?? []   // <-- AQUI
 
       if (token.provider === "nest") {
-        ;(session as any).accessToken = token.accessToken
-        ;(session as any).refreshToken = token.refreshToken
-        ;(session as any).accessTokenExpires = token.accessTokenExpires
+        ;(session as any).accessToken = (token as any).accessToken
+        ;(session as any).refreshToken = (token as any).refreshToken
+        ;(session as any).accessTokenExpires = (token as any).accessTokenExpires
       }
 
       if (token.provider === "google") {
-        ;(session as any).googleAccessToken = token.googleAccessToken
-        ;(session as any).googleAccessTokenExpires = token.googleAccessTokenExpires
+        ;(session as any).googleAccessToken = (token as any).googleAccessToken
+        ;(session as any).googleAccessTokenExpires = (token as any).googleAccessTokenExpires
       }
 
       return session

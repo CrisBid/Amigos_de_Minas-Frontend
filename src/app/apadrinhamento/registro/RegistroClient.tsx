@@ -3,7 +3,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession, signIn, getSession } from 'next-auth/react';
-import { AlertCircle, ArrowLeft, ArrowRight, CheckCircle, Loader2, Shield } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle,
+  Loader2,
+  Shield,
+  Copy,
+  Check
+} from 'lucide-react';
 
 type MainStep = 1 | 2 | 3 | 4;
 type RegSubStep = 'credentials' | 'profile';
@@ -45,7 +54,17 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
-  // Captura/atualiza o token quando a sessão mudar (sem redirect automático)
+  // ENV de instruções
+  const PIX_KEY = process.env.NEXT_PUBLIC_PIX_KEY || '';
+  const PIX_FAV = process.env.NEXT_PUBLIC_PIX_FAVORECIDO || 'ONG Amigos de Minas';
+  const PIX_CNPJ = process.env.NEXT_PUBLIC_PIX_CNPJ || '';
+  const PIX_OBS  = process.env.NEXT_PUBLIC_PIX_OBS || 'Apadrinhamento';
+  const DROP_IMG = process.env.NEXT_PUBLIC_DROPPOINTS_IMAGE || '/images/pontos-coleta.png';
+
+  // UX copiar
+  const [copied, setCopied] = useState(false);
+
+  // token pós-login
   useEffect(() => {
     (async () => {
       const s = await getSession();
@@ -156,10 +175,14 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     setErr(null);
     try {
       setLoading(true);
+
+      // Mapeia para o que o backend espera (igual ConcluirClient)
+      const deliveryMethod = donationMethod === 'ponto' ? 'DROP_OFF' : 'PIX';
+
       const r = await fetch(`${api}/sponsorships`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ childId, campaignId, donationMethod }),
+        body: JSON.stringify({ childId, campaignId, deliveryMethod }),
       });
       if (!r.ok) throw new Error(await safeErrMsg(r));
       setDone(true);
@@ -185,6 +208,83 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
       <button onClick={onClick} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800">
         <ArrowLeft className="w-4 h-4" /> Voltar
       </button>
+    );
+  }
+
+  function PixInstructions() {
+    return (
+      <div className="space-y-3">
+        <p className="text-emerald-800">
+          Obrigado por apadrinhar! 💚 Para realizar a contribuição via <b>PIX</b>, use os dados abaixo:
+        </p>
+
+        <div className="bg-white border border-emerald-200 rounded-xl p-4">
+          <div className="text-sm text-gray-700 space-y-2">
+            <div><b>Chave PIX:</b> <span className="select-all">{PIX_KEY || '—'}</span></div>
+            <div><b>Favorecido:</b> {PIX_FAV}</div>
+            {PIX_CNPJ && <div><b>CNPJ:</b> {PIX_CNPJ}</div>}
+            {PIX_OBS && <div><b>Observação:</b> {PIX_OBS}</div>}
+            <div className="text-xs text-gray-500">
+              Informe no comprovante: “Campanha {campaignId} — Criança {childId}”.
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <button
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(PIX_KEY);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                } catch {}
+              }}
+              className="px-3 py-1.5 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 inline-flex items-center gap-2 disabled:opacity-70"
+              disabled={!PIX_KEY}
+              title={PIX_KEY ? 'Copiar chave PIX' : 'Nenhuma chave configurada'}
+            >
+              {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              {copied ? 'Copiado!' : 'Copiar chave'}
+            </button>
+          </div>
+        </div>
+
+        <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
+          <li>Guarde o comprovante. Se necessário, nossa equipe poderá solicitar.</li>
+          <li>O presente será providenciado pela ONG conforme a campanha.</li>
+        </ul>
+      </div>
+    );
+  }
+
+  function DropOffInstructions() {
+    return (
+      <div className="space-y-3">
+        <p className="text-emerald-800">
+          Obrigado por apadrinhar! 💚 Você escolheu <b>entregar o presente em um ponto de coleta</b>.
+        </p>
+
+        <div className="bg-white border border-emerald-200 rounded-xl p-4">
+          <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
+            <li>Embale o presente com cuidado.</li>
+            <li>
+              Identifique o pacote com: <b>Campanha {campaignId}</b> e <b>Criança {childId}</b>.
+            </li>
+            <li>Entregue em um dos pontos de coleta abaixo.</li>
+          </ul>
+
+          <div className="mt-4">
+            <img
+              src={DROP_IMG}
+              alt="Pontos de coleta"
+              className="w-full rounded-lg border border-emerald-100"
+            />
+          </div>
+        </div>
+
+        <p className="text-sm text-gray-600">
+          Dúvidas? Fale com a equipe pelo WhatsApp da ONG. ✨
+        </p>
+      </div>
     );
   }
 
@@ -369,15 +469,6 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                   placeholder="Sua cidade"
                 />
               </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">Profissão</label>
-                <input
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
-                  value={profile.profession}
-                  onChange={e => setProfile({ ...profile, profession: e.target.value })}
-                  placeholder="Sua área de atuação"
-                />
-              </div>
 
               <div className="flex items-center gap-2">
                 <button
@@ -445,9 +536,9 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                 checked={donationMethod === 'dinheiro'}
                 onChange={() => setDonationMethod('dinheiro')}
               />
-              Doar em dinheiro
+              Doar em dinheiro (PIX)
               <p className="text-xs text-gray-500 mt-1">
-                Você fará uma doação em dinheiro para que a equipe providencie o presente.
+                Você fará uma doação via PIX para que a equipe providencie o presente.
               </p>
             </label>
           </div>
@@ -465,37 +556,21 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
         </div>
       )}
 
-      {/* Etapa 4: Confirmação */}
+      {/* Etapa 4: Confirmação (com instruções detalhadas) */}
       {mainStep === 4 && done && (
-        <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5">
-          <div className="flex items-center gap-2 text-emerald-700 font-semibold mb-2">
+        <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5 space-y-4">
+          <div className="flex items-center gap-2 text-emerald-700 font-semibold">
             <CheckCircle className="w-5 h-5" /> Apadrinhamento concluído!
           </div>
-          {donationMethod === 'ponto' ? (
-            <div className="text-sm text-gray-700 space-y-2">
-              <p>Leve o presente até um ponto de coleta oficial dos Amigos de Minas.</p>
-              <ul className="list-disc pl-5">
-                <li>
-                  Identifique o pacote com o <b>ID da criança</b> e a <b>campanha</b>.
-                </li>
-                <li>Verifique datas e horários dos pontos de coleta no site.</li>
-              </ul>
-            </div>
-          ) : (
-            <div className="text-sm text-gray-700 space-y-2">
-              <p>Para doar em dinheiro, utilize uma das opções abaixo:</p>
-              <ul className="list-disc pl-5">
-                <li>
-                  <b>PIX:</b> amigosdeminas@ong.org (Amigos de Minas)
-                </li>
-                <li>
-                  Coloque no comentário: “Campanha {campaignId} — Criança {childId}”.
-                </li>
-              </ul>
-            </div>
-          )}
 
-          <div className="mt-4 flex gap-2">
+          <div className="bg-white border border-gray-200 rounded-xl p-3 text-sm text-gray-700">
+            <div><b>Campanha:</b> {campaignId}</div>
+            <div><b>Criança:</b> {childId}</div>
+          </div>
+
+          {donationMethod === 'dinheiro' ? <PixInstructions /> : <DropOffInstructions />}
+
+          <div className="flex gap-2 pt-2">
             <button
               onClick={() => router.push('/meus-apadrinhamentos')}
               className="px-3 py-1.5 bg-emerald-600 text-white rounded-md hover:bg-emerald-700"

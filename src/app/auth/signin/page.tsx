@@ -277,6 +277,7 @@ export default function CadastroApadrinhamento() {
               />
 
               {/* Profissão / Renda / Estado civil */}
+              {/* 
               <Field
                 label="Profissão"
                 name="profissao"
@@ -299,6 +300,7 @@ export default function CadastroApadrinhamento() {
                 onChange={handleInputChange}
                 options={estadosCivis}
               />
+              */}
 
               {/* Senha */}
               <Field
