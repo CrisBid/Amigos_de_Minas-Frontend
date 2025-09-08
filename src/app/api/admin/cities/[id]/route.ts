@@ -1,30 +1,30 @@
-import { NextRequest } from 'next/server'
-import { getToken } from 'next-auth/jwt'
+// src/app/api/admin/cities/[id]/route.ts
+import { getToken } from 'next-auth/jwt';
 
-const API = process.env.NEXT_PUBLIC_NEST_API_URL!
+const API = process.env.NEXT_PUBLIC_NEST_API_URL!;
 
-async function requireAccessToken(req: NextRequest) {
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
-  const accessToken = (token as any)?.accessToken as string | undefined
-  if (!accessToken) throw new Response('Unauthorized', { status: 401 })
-  return accessToken
+async function requireAccessToken(request: Request) {
+  const token = await getToken({ req: request as any, secret: process.env.NEXTAUTH_SECRET });
+  const accessToken = (token as any)?.accessToken as string | undefined;
+  if (!accessToken) throw new Response('Unauthorized', { status: 401 });
+  return accessToken;
 }
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const accessToken = await requireAccessToken(req) as unknown as string
+export async function GET(request: Request, { params }: { params: { id: string } }) {
+  const accessToken = await requireAccessToken(request);
   const res = await fetch(`${API}/cities/${params.id}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     cache: 'no-store',
-  })
+  });
   return new Response(await res.text(), {
     status: res.status,
     headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
-  })
+  });
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const accessToken = await requireAccessToken(req) as unknown as string
-  const body = await req.text()
+export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+  const accessToken = await requireAccessToken(request);
+  const body = await request.text();
   const res = await fetch(`${API}/cities/${params.id}`, {
     method: 'PATCH',
     headers: {
@@ -32,21 +32,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       'content-type': 'application/json',
     },
     body,
-  })
+  });
   return new Response(await res.text(), {
     status: res.status,
     headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
-  })
+  });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const accessToken = await requireAccessToken(req) as unknown as string
+export async function DELETE(request: Request, { params }: { params: { id: string } }) {
+  const accessToken = await requireAccessToken(request);
   const res = await fetch(`${API}/cities/${params.id}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${accessToken}` },
-  })
+  });
   return new Response(await res.text(), {
     status: res.status,
     headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
-  })
+  });
 }

@@ -11,7 +11,7 @@ async function requireAccessToken(request: Request) {
 
 export async function GET(request: Request, { params }: { params: { id: string } }) {
   const at = await requireAccessToken(request);
-  const r = await fetch(`${API}/children/${params.id}`, {
+  const r = await fetch(`${API}/sponsorships/${params.id}`, {
     headers: { Authorization: `Bearer ${at}` },
     cache: 'no-store',
   });
@@ -21,7 +21,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   const at = await requireAccessToken(request);
   const body = await request.text();
-  const r = await fetch(`${API}/children/${params.id}`, {
+  const r = await fetch(`${API}/sponsorships/${params.id}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${at}`, 'content-type': 'application/json' },
     body,
@@ -31,7 +31,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 
 export async function DELETE(request: Request, { params }: { params: { id: string } }) {
   const at = await requireAccessToken(request);
-  const r = await fetch(`${API}/children/${params.id}`, {
+  const r = await fetch(`${API}/sponsorships/${params.id}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${at}` },
   });
