@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { Search, Filter, Heart, Users, Clock, UserCheck, Calendar, Trash2, ChevronLeft, ChevronRight, ExternalLink, User } from 'lucide-react';
 
 type SponsorshipStatus = 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
 
@@ -40,15 +41,15 @@ export default function AdminSponsorshipsPage() {
 
   const [data, setData] = useState<PageResp<Sponsorship> | null>(null);
   const [loading, setLoading] = useState(false);
-
-  // dropdown de campanhas
   const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
+
+  // Carrega campanhas para o filtro
   useEffect(() => {
     (async () => {
       try {
         const url = new URL('/api/admin/campaigns', window.location.origin);
         url.searchParams.set('page', '1');
-        url.searchParams.set('pageSize', '200'); // simples
+        url.searchParams.set('pageSize', '200');
         const r = await fetch(url.toString(), { cache: 'no-store' });
         if (!r.ok) return;
         const raw = await r.json();
@@ -109,36 +110,64 @@ export default function AdminSponsorshipsPage() {
   const rows: Sponsorship[] = Array.isArray(data?.items) ? (data!.items as Sponsorship[]) : [];
   const noRows = !loading && rows.length === 0;
 
-  const header = useMemo(() => {
+  const headerStats = useMemo(() => {
     const total = typeof data?.total === 'number' ? data.total : rows.length;
-    return {
-      total,
-      pending: rows.filter(r => r.status === 'PENDING').length,
-      active: rows.filter(r => r.status === 'ACTIVE').length,
-    };
+    const pending = rows.filter(r => r.status === 'PENDING').length;
+    const active = rows.filter(r => r.status === 'ACTIVE').length;
+    const ended = rows.filter(r => r.status === 'ENDED').length;
+    const cancelled = rows.filter(r => r.status === 'CANCELLED').length;
+    return { total, pending, active, ended, cancelled };
   }, [data?.total, rows]);
 
   const fmtDate = (s?: string | null) => {
     if (!s) return '—';
     const d = new Date(s);
-    return isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
-    // ajuste locale se quiser: toLocaleDateString('pt-BR')
+    return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR');
   };
 
-  const pill = (s: SponsorshipStatus) => {
-    const base = 'text-xs px-2 py-1 rounded';
+  const getStatusConfig = (s: SponsorshipStatus) => {
     switch (s) {
       case 'ACTIVE':
-        return <span className={`${base} bg-green-100 text-green-700`}>Ativo</span>;
+        return { 
+          label: 'Ativo', 
+          className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+          dot: 'bg-emerald-500'
+        };
       case 'PENDING':
-        return <span className={`${base} bg-amber-100 text-amber-700`}>Pendente</span>;
+        return { 
+          label: 'Pendente', 
+          className: 'bg-amber-50 text-amber-700 border-amber-200',
+          dot: 'bg-amber-500'
+        };
       case 'ENDED':
-        return <span className={`${base} bg-blue-100 text-blue-700`}>Encerrado</span>;
+        return { 
+          label: 'Encerrado', 
+          className: 'bg-blue-50 text-blue-700 border-blue-200',
+          dot: 'bg-blue-500'
+        };
       case 'CANCELLED':
-        return <span className={`${base} bg-red-100 text-red-700`}>Cancelado</span>;
+        return { 
+          label: 'Cancelado', 
+          className: 'bg-red-50 text-red-700 border-red-200',
+          dot: 'bg-red-500'
+        };
       default:
-        return <span className={`${base} bg-gray-100 text-gray-600`}>—</span>;
+        return { 
+          label: '—', 
+          className: 'bg-gray-50 text-gray-600 border-gray-200',
+          dot: 'bg-gray-500'
+        };
     }
+  };
+
+  const StatusBadge = ({ status }: { status: SponsorshipStatus }) => {
+    const config = getStatusConfig(status);
+    return (
+      <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border ${config.className}`}>
+        <div className={`w-1.5 h-1.5 rounded-full ${config.dot}`}></div>
+        {config.label}
+      </span>
+    );
   };
 
   async function changeStatus(id: string, newStatus: SponsorshipStatus) {
@@ -159,131 +188,286 @@ export default function AdminSponsorshipsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Apadrinhamentos</h1>
-          <p className="text-sm text-gray-600">Acompanhe e gerencie os vínculos entre padrinhos e crianças por campanha.</p>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Header Section */}
+        <div className="mb-8">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">
+                Apadrinhamentos dos Amigos de Minas
+              </h1>
+              <p className="text-gray-600 text-lg">
+                Acompanhe e gerencie os vínculos entre padrinhos e crianças
+              </p>
+            </div>
+            {/* Espaço para botões futuros como importar/exportar */}
+            <div className="flex gap-3">
+              <div className="text-sm text-gray-500 px-4 py-2 bg-white/50 rounded-xl border border-white/20">
+                Funcionalidades extras em breve
+              </div>
+            </div>
+          </div>
         </div>
-        {/* Botões futuros: importar/exportar, criar manualmente, etc. */}
-      </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="rounded-xl border bg-white p-4">
-          <div className="text-xs text-gray-500">Total</div>
-          <div className="text-lg font-semibold">{header.total}</div>
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600 mb-1">Total</p>
+                <p className="text-3xl font-bold text-gray-900">{headerStats.total}</p>
+              </div>
+              <div className="p-3 bg-blue-100 rounded-xl">
+                <Heart className="w-6 h-6 text-blue-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600 mb-1">Apadrinhamentos Ativos</p>
+                <p className="text-3xl font-bold text-emerald-600">{headerStats.active}</p>
+              </div>
+              <div className="p-3 bg-emerald-100 rounded-xl">
+                <UserCheck className="w-6 h-6 text-emerald-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600 mb-1">Pendentes</p>
+                <p className="text-3xl font-bold text-amber-600">{headerStats.pending}</p>
+              </div>
+              <div className="p-3 bg-amber-100 rounded-xl">
+                <Clock className="w-6 h-6 text-amber-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600 mb-1">Encerrados</p>
+                <p className="text-3xl font-bold text-blue-600">{headerStats.ended}</p>
+              </div>
+              <div className="p-3 bg-blue-100 rounded-xl">
+                <Users className="w-6 h-6 text-blue-600" />
+              </div>
+            </div>
+          </div>
         </div>
-        <div className="rounded-xl border bg-white p-4">
-          <div className="text-xs text-gray-500">Pendentes</div>
-          <div className="text-lg font-semibold">{header.pending}</div>
+
+        {/* Filters */}
+        <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg mb-8">
+          <div className="flex flex-col lg:flex-row gap-4">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <input
+                className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                placeholder="Buscar por criança ou padrinho..."
+                value={q}
+                onChange={(e) => { setPage(1); setQ(e.target.value); }}
+              />
+            </div>
+            <div className="relative lg:w-48">
+              <Filter className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <select
+                className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 appearance-none cursor-pointer"
+                value={status}
+                onChange={(e) => { setPage(1); setStatus(e.target.value as SponsorshipStatus | ''); }}
+              >
+                <option value="">Todos os status</option>
+                <option value="ACTIVE">Ativo</option>
+                <option value="PENDING">Pendente</option>
+                <option value="ENDED">Encerrado</option>
+                <option value="CANCELLED">Cancelado</option>
+              </select>
+            </div>
+            <div className="relative lg:w-64">
+              <Calendar className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <select
+                className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 appearance-none cursor-pointer"
+                value={campaignId}
+                onChange={(e) => { setPage(1); setCampaignId(e.target.value); }}
+              >
+                <option value="">Todas as campanhas</option>
+                {campaigns.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{c.year ? ` (${c.year})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
-        <div className="rounded-xl border bg-white p-4">
-          <div className="text-xs text-gray-500">Ativos</div>
-          <div className="text-lg font-semibold">{header.active}</div>
+
+        {/* Table */}
+        <div className="bg-white/70 backdrop-blur-sm rounded-2xl border border-white/20 shadow-lg overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
+                <tr>
+                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Criança</th>
+                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Padrinho</th>
+                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Campanha</th>
+                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Status</th>
+                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Início</th>
+                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Fim</th>
+                  <th className="text-right px-6 py-4 text-sm font-semibold text-gray-900">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {loading && (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+                        <p className="text-gray-500 font-medium">Carregando apadrinhamentos...</p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                
+                {!loading && noRows && (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="p-4 bg-gray-100 rounded-full">
+                          <Search className="w-8 h-8 text-gray-400" />
+                        </div>
+                        <p className="text-gray-500 font-medium">Nenhum apadrinhamento encontrado</p>
+                        <p className="text-gray-400 text-sm">Tente ajustar os filtros de busca</p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                
+                {rows.map((sponsorship) => (
+                  <tr key={sponsorship.id} className="hover:bg-blue-50/50 transition-colors duration-150">
+                    <td className="px-6 py-4">
+                      {sponsorship.child ? (
+                        <a 
+                          href={`/admin/children/${sponsorship.child.id}`} 
+                          className="flex items-center gap-2 hover:text-blue-600 transition-colors"
+                        >
+                          <div className="p-2 bg-pink-100 rounded-lg">
+                            <User className="w-4 h-4 text-pink-600" />
+                          </div>
+                          <div>
+                            <span className="text-sm font-semibold text-gray-900">
+                              {sponsorship.child.name}
+                            </span>
+                            <div className="text-xs text-gray-500">
+                              ID: #{sponsorship.child.publicId ?? '—'}
+                            </div>
+                          </div>
+                        </a>
+                      ) : (
+                        <span className="text-sm text-gray-400">—</span>
+                      )}
+                    </td>
+                    
+                    <td className="px-6 py-4">
+                      {sponsorship.sponsor ? (
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 bg-blue-100 rounded-lg">
+                            <UserCheck className="w-4 h-4 text-blue-600" />
+                          </div>
+                          <div>
+                            <span className="text-sm font-semibold text-gray-900">
+                              {sponsorship.sponsor.name}
+                            </span>
+                            {sponsorship.sponsor.email && (
+                              <div className="text-xs text-gray-500">
+                                {sponsorship.sponsor.email}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-gray-400">—</span>
+                      )}
+                    </td>
+                    
+                    <td className="px-6 py-4">
+                      {sponsorship.campaign ? (
+                        <a 
+                          href={`/admin/campaigns/${sponsorship.campaign.id}`}
+                          className="flex items-center gap-2 hover:text-blue-600 transition-colors"
+                        >
+                          <ExternalLink className="w-4 h-4 text-gray-400" />
+                          <div>
+                            <span className="text-sm font-medium text-gray-900">
+                              {sponsorship.campaign.name}
+                            </span>
+                            {sponsorship.campaign.year && (
+                              <div className="text-xs text-gray-500">
+                                {sponsorship.campaign.year}
+                              </div>
+                            )}
+                          </div>
+                        </a>
+                      ) : (
+                        <span className="text-sm text-gray-400">—</span>
+                      )}
+                    </td>
+                    
+                    <td className="px-6 py-4">
+                      <StatusBadge status={sponsorship.status} />
+                    </td>
+                    
+                    <td className="px-6 py-4">
+                      <span className="text-sm text-gray-600">
+                        {fmtDate(sponsorship.startDate)}
+                      </span>
+                    </td>
+                    
+                    <td className="px-6 py-4">
+                      <span className="text-sm text-gray-600">
+                        {fmtDate(sponsorship.endDate)}
+                      </span>
+                    </td>
+                    
+                    <td className="px-6 py-4">
+                      <div className="flex items-center justify-end gap-2">
+                        <select
+                          className="px-3 py-1.5 text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors duration-150 cursor-pointer appearance-none"
+                          value={sponsorship.status}
+                          onChange={(e) => changeStatus(sponsorship.id, e.target.value as SponsorshipStatus)}
+                          title="Alterar status"
+                        >
+                          <option value="PENDING">Pendente</option>
+                          <option value="ACTIVE">Ativo</option>
+                          <option value="ENDED">Encerrado</option>
+                          <option value="CANCELLED">Cancelado</option>
+                        </select>
+                        <button 
+                          onClick={() => del(sponsorship.id)}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200 transition-colors duration-150"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          Excluir
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
 
-      {/* Filtros */}
-      <div className="flex flex-col md:flex-row gap-2">
-        <input
-          className="border rounded px-3 py-2 w-full md:w-80"
-          placeholder="Buscar por criança/padrinho"
-          value={q}
-          onChange={(e) => { setPage(1); setQ(e.target.value); }}
-        />
-        <select
-          className="border rounded px-3 py-2 md:w-56"
-          value={status}
-          onChange={(e) => { setPage(1); setStatus(e.target.value as SponsorshipStatus | ''); }}
-        >
-          <option value="">Todos os status</option>
-          {STATUS_OPTS.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select
-          className="border rounded px-3 py-2 md:w-72"
-          value={campaignId}
-          onChange={(e) => { setPage(1); setCampaignId(e.target.value); }}
-        >
-          <option value="">Todas as campanhas</option>
-          {campaigns.map(c => (
-            <option key={c.id} value={c.id}>{c.name}{c.year ? ` (${c.year})` : ''}</option>
-          ))}
-        </select>
+        {/* Pagination */}
+        {data && (data.pages ?? 1) > 1 && (
+          <div className="mt-8">
+            <Pagination page={data.page} pages={data.pages} onChange={setPage} />
+          </div>
+        )}
       </div>
-
-      {/* Tabela */}
-      <div className="overflow-x-auto rounded border bg-white">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="text-left px-3 py-2">Criança</th>
-              <th className="text-left px-3 py-2">Padrinho</th>
-              <th className="text-left px-3 py-2">Campanha</th>
-              <th className="text-left px-3 py-2">Status</th>
-              <th className="text-left px-3 py-2">Início</th>
-              <th className="text-left px-3 py-2">Fim</th>
-              <th className="text-right px-3 py-2">Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-500">Carregando…</td></tr>
-            )}
-            {!loading && noRows && (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-500">Nenhum apadrinhamento encontrado.</td></tr>
-            )}
-            {rows.map((s) => (
-              <tr key={s.id} className="border-t">
-                <td className="px-3 py-2">
-                  {s.child ? (
-                    <a href={`/admin/children/${s.child.id}`} className="hover:underline">
-                      #{s.child.publicId ?? '—'} {s.child.name}
-                    </a>
-                  ) : '—'}
-                </td>
-                <td className="px-3 py-2">
-                  {s.sponsor ? (
-                    <>
-                      <span>{s.sponsor.name}</span>
-                      {s.sponsor.email ? <span className="text-gray-500"> — {s.sponsor.email}</span> : null}
-                    </>
-                  ) : '—'}
-                </td>
-                <td className="px-3 py-2">
-                  {s.campaign ? (
-                    <a href={`/admin/campaigns/${s.campaign.id}`} className="hover:underline">
-                      {s.campaign.name}{s.campaign.year ? ` • ${s.campaign.year}` : ''}
-                    </a>
-                  ) : '—'}
-                </td>
-                <td className="px-3 py-2">{pill(s.status)}</td>
-                <td className="px-3 py-2">{fmtDate(s.startDate)}</td>
-                <td className="px-3 py-2">{fmtDate(s.endDate)}</td>
-                <td className="px-3 py-2 text-right">
-                  <select
-                    className="border px-2 py-1 rounded"
-                    value={s.status}
-                    onChange={(e) => changeStatus(s.id, e.target.value as SponsorshipStatus)}
-                    title="Alterar status"
-                  >
-                    {STATUS_OPTS.map(st => <option key={st} value={st}>{st}</option>)}
-                  </select>
-                  <button onClick={() => del(s.id)} className="border px-2 py-1 rounded hover:bg-gray-50 ml-2">
-                    Excluir
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Paginação */}
-      {data && (data.pages ?? 1) > 1 && (
-        <Pagination page={data.page} pages={data.pages} onChange={setPage} />
-      )}
     </div>
   );
 }
@@ -291,11 +475,32 @@ export default function AdminSponsorshipsPage() {
 function Pagination({ page, pages, onChange }: { page: number; pages: number; onChange: (p: number) => void }) {
   const prev = () => onChange(Math.max(1, page - 1));
   const next = () => onChange(Math.min(pages, page + 1));
+  
   return (
-    <div className="flex items-center gap-2">
-      <button className="border px-3 py-1 rounded" onClick={prev} disabled={page <= 1}>Anterior</button>
-      <span className="text-gray-600">Página {page} de {pages}</span>
-      <button className="border px-3 py-1 rounded" onClick={next} disabled={page >= pages}>Próxima</button>
+    <div className="flex items-center justify-center gap-4">
+      <button 
+        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+        onClick={prev} 
+        disabled={page <= 1}
+      >
+        <ChevronLeft className="w-4 h-4" />
+        Anterior
+      </button>
+      
+      <div className="bg-white/70 backdrop-blur-sm px-4 py-2 rounded-xl border border-white/20 shadow-lg">
+        <span className="text-gray-700 font-medium">
+          Página {page} de {pages}
+        </span>
+      </div>
+      
+      <button 
+        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+        onClick={next} 
+        disabled={page >= pages}
+      >
+        Próxima
+        <ChevronRight className="w-4 h-4" />
+      </button>
     </div>
   );
 }
