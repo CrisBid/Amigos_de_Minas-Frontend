@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Edit, Trash2, Upload, Users, Heart, Baby, MapPin, Gift, ChevronLeft, ChevronRight, Camera } from 'lucide-react';
+import { useSession } from 'next-auth/react';
+import { apiPath, apiFetch, apiJson, createApiClient } from '@/lib/api';
 
 type Sponsorship = {
   id: string;
@@ -39,6 +41,9 @@ type PageResp = {
 const PAGE_SIZE = 20;
 
 export default function AdminChildrenPage() {
+  const { data: session, status } = useSession()
+  const token = (session as any)?.accessToken ?? null; // vem do seu NextAuth
+
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
   const [data, setData] = useState<PageResp | null>(null);
@@ -61,12 +66,21 @@ export default function AdminChildrenPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const url = new URL('/api/admin/children', window.location.origin);
+      const url = new URL(apiPath('/children'));
       url.searchParams.set('page', String(page));
       url.searchParams.set('pageSize', String(PAGE_SIZE));
       if (q.trim()) url.searchParams.set('q', q.trim());
 
-      const res = await fetch(url.toString(), { cache: 'no-store' });
+      const res = await apiFetch(
+        url.toString(), 
+        {
+          cache: 'no-store',
+          credentials: 'include',
+          headers: { accept: 'application/json' },
+        }, 
+        token
+      );
+
       if (!res.ok) {
         setData({ items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pages: 1 });
       } else {
@@ -88,34 +102,34 @@ export default function AdminChildrenPage() {
   const getStatusConfig = (s?: Sponsorship['status']) => {
     switch (s) {
       case 'ACTIVE':
-        return { 
-          label: 'Apadrinhado', 
+        return {
+          label: 'Apadrinhado',
           className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-          dot: 'bg-emerald-500'
+          dot: 'bg-emerald-500',
         };
       case 'PENDING':
-        return { 
-          label: 'Pendente', 
+        return {
+          label: 'Pendente',
           className: 'bg-amber-50 text-amber-700 border-amber-200',
-          dot: 'bg-amber-500'
+          dot: 'bg-amber-500',
         };
       case 'ENDED':
-        return { 
-          label: 'Encerrado', 
+        return {
+          label: 'Encerrado',
           className: 'bg-blue-50 text-blue-700 border-blue-200',
-          dot: 'bg-blue-500'
+          dot: 'bg-blue-500',
         };
       case 'CANCELLED':
-        return { 
-          label: 'Cancelado', 
+        return {
+          label: 'Cancelado',
           className: 'bg-red-50 text-red-700 border-red-200',
-          dot: 'bg-red-500'
+          dot: 'bg-red-500',
         };
       default:
-        return { 
-          label: 'Disponível', 
+        return {
+          label: 'Disponível',
           className: 'bg-slate-50 text-slate-700 border-slate-200',
-          dot: 'bg-slate-500'
+          dot: 'bg-slate-500',
         };
     }
   };
@@ -171,14 +185,14 @@ export default function AdminChildrenPage() {
               </p>
             </div>
             <div className="flex flex-col sm:flex-row gap-3">
-              <Link 
+              <Link
                 href="/admin/children/import"
                 className="inline-flex items-center gap-2 bg-white/70 backdrop-blur-sm hover:bg-white text-gray-700 px-6 py-3 rounded-xl font-semibold border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105"
               >
                 <Upload className="w-5 h-5" />
                 Importar CSV
               </Link>
-              <Link 
+              <Link
                 href="/admin/children/new"
                 className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105"
               >
@@ -311,7 +325,7 @@ export default function AdminChildrenPage() {
                     : (child.cityName || '—');
 
                   return (
-                    <tr key={child.id} className="hover:bg-blue-50/50 transition-colors duration-150">
+                    <tr key={child.id} className="hover:bg-blue-50/50 transition-colors duração-150">
                       <td className="px-6 py-4 text-sm font-medium text-gray-900">
                         {child.publicId}
                       </td>
@@ -377,7 +391,7 @@ export default function AdminChildrenPage() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-end gap-2">
-                          <Link 
+                          <Link
                             href={`/admin/children/${child.id}`}
                             className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg border border-blue-200 transition-colors duration-150"
                           >
@@ -412,9 +426,9 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
   
   return (
     <div className="flex items-center justify-center gap-4">
-      <button 
-        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
-        onClick={prev} 
+      <button
+        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duração-200"
+        onClick={prev}
         disabled={page <= 1}
       >
         <ChevronLeft className="w-4 h-4" />
@@ -427,9 +441,9 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
         </span>
       </div>
       
-      <button 
-        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
-        onClick={next} 
+      <button
+        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duração-200"
+        onClick={next}
         disabled={page >= pages}
       >
         Próxima
@@ -442,8 +456,9 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
 function DeleteChildButton({ id, name, onDone }: { id: string; name: string; onDone: () => void }) {
   const del = async () => {
     if (!confirm(`Excluir (soft) "${name}"? Essa ação pode ser revertida.`)) return;
-    const res = await fetch(`/api/admin/children/${id}`, {
+    const res = await fetch(apiPath(`/children/${id}`), {
       method: 'PATCH',
+      credentials: 'include',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ deletedAt: new Date().toISOString() }),
     });
@@ -455,7 +470,7 @@ function DeleteChildButton({ id, name, onDone }: { id: string; name: string; onD
   };
   
   return (
-    <button 
+    <button
       onClick={del}
       className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200 transition-colors duration-150"
     >

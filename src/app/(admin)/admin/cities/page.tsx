@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Edit, Trash2, MapPin, Building2, Map, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { useSession } from 'next-auth/react';
+import { apiPath, apiFetch, apiJson, createApiClient } from '@/lib/api';
 
 type City = { 
   id: string; 
@@ -21,21 +23,52 @@ type PageResp = {
 };
 
 export default function AdminCitiesPage() {
+  const { data: session, status } = useSession()
+  const token = (session as any)?.accessToken ?? null; // vem do seu NextAuth
+
   const [data, setData] = useState<PageResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
+  const normalize = (raw: any): PageResp => {
+    const items: City[] = Array.isArray(raw?.items)
+      ? raw.items
+      : Array.isArray(raw?.data)
+      ? raw.data
+      : Array.isArray(raw)
+      ? raw
+      : [];
+    const total = typeof raw?.total === 'number' ? raw.total : items.length;
+    const pages = typeof raw?.pages === 'number' ? raw.pages : Math.max(1, Math.ceil(total / pageSize));
+    const currentPage = typeof raw?.page === 'number' ? raw.page : page;
+    return { items, total, page: currentPage, pageSize, pages };
+  };
+
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/cities?q=${encodeURIComponent(q)}&page=${page}&pageSize=${pageSize}`, { cache: 'no-store' });
+      const url = new URL(apiPath('/cities'));
+      url.searchParams.set('q', q);
+      url.searchParams.set('page', String(page));
+      url.searchParams.set('pageSize', String(pageSize));
+
+      const res = await apiFetch(
+        url.toString(), 
+        {
+          cache: 'no-store',
+          credentials: 'include',
+          headers: { accept: 'application/json' },
+        }, 
+        token
+      );
+
       if (!res.ok) {
         setData({ items: [], total: 0, page: 1, pageSize, pages: 1 });
       } else {
         const json = await res.json();
-        setData(json);
+        setData(normalize(json));
       }
     } catch {
       setData({ items: [], total: 0, page: 1, pageSize, pages: 1 });
@@ -234,7 +267,7 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
       </div>
       
       <button 
-        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duração-200"
         onClick={next} 
         disabled={page >= pages}
       >
@@ -251,7 +284,7 @@ function CreateCityButton({ onCreated }: { onCreated: () => void }) {
   return (
     <>
       <button 
-        className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105"
+        className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duração-200 transform hover:scale-105"
         onClick={() => setOpen(true)}
       >
         <Plus className="w-5 h-5" />
@@ -262,8 +295,9 @@ function CreateCityButton({ onCreated }: { onCreated: () => void }) {
           title="Nova Cidade" 
           onClose={() => setOpen(false)} 
           onSubmit={async (payload) => {
-            const res = await fetch('/api/admin/cities', { 
-              method: 'POST', 
+            const res = await fetch(apiPath('/cities'), { 
+              method: 'POST',
+              credentials: 'include',
               headers: { 'content-type': 'application/json' }, 
               body: JSON.stringify(payload) 
             });
@@ -286,7 +320,7 @@ function EditCityButton({ city, onUpdated }: { city: City; onUpdated: () => void
   return (
     <>
       <button 
-        className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg border border-blue-200 transition-colors duration-150"
+        className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg border border-blue-200 transition-colors duração-150"
         onClick={() => setOpen(true)}
       >
         <Edit className="w-4 h-4" />
@@ -298,8 +332,9 @@ function EditCityButton({ city, onUpdated }: { city: City; onUpdated: () => void
           initial={city} 
           onClose={() => setOpen(false)} 
           onSubmit={async (payload) => {
-            const res = await fetch(`/api/admin/cities/${city.id}`, { 
-              method: 'PATCH', 
+            const res = await fetch(apiPath(`/cities/${city.id}`), { 
+              method: 'PATCH',
+              credentials: 'include',
               headers: { 'content-type': 'application/json' }, 
               body: JSON.stringify(payload) 
             });
@@ -319,7 +354,10 @@ function EditCityButton({ city, onUpdated }: { city: City; onUpdated: () => void
 function DeleteCityButton({ city, onDeleted }: { city: City; onDeleted: () => void }) {
   const del = async () => {
     if (!confirm(`Excluir a cidade "${city.name}"? Esta ação não pode ser desfeita.`)) return;
-    const res = await fetch(`/api/admin/cities/${city.id}`, { method: 'DELETE' });
+    const res = await fetch(apiPath(`/cities/${city.id}`), { 
+      method: 'DELETE',
+      credentials: 'include',
+    });
     if (!res.ok) { 
       alert(await res.text()); 
       return; 
@@ -329,7 +367,7 @@ function DeleteCityButton({ city, onDeleted }: { city: City; onDeleted: () => vo
   
   return (
     <button 
-      className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200 transition-colors duration-150"
+      className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200 transition-colors duração-150"
       onClick={del}
     >
       <Trash2 className="w-4 h-4" />
@@ -375,7 +413,7 @@ function CityDialog({
             </div>
             <button 
               onClick={onClose} 
-              className="p-2 hover:bg-gray-100 rounded-xl transition-colors duration-150"
+              className="p-2 hover:bg-gray-100 rounded-xl transition-colors duração-150"
             >
               <X className="w-6 h-6 text-gray-500" />
             </button>
@@ -387,7 +425,7 @@ function CityDialog({
             <div className="space-y-2">
               <label className="text-sm font-semibold text-gray-700">ID Público (Opcional)</label>
               <input 
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duração-200"
                 type="number" 
                 min={1} 
                 value={publicId} 
@@ -399,7 +437,7 @@ function CityDialog({
             <div className="space-y-2">
               <label className="text-sm font-semibold text-gray-700">Nome da Cidade *</label>
               <input 
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duração-200"
                 value={name} 
                 onChange={(e) => setName(e.target.value)} 
                 required 
@@ -410,7 +448,7 @@ function CityDialog({
             <div className="space-y-2">
               <label className="text-sm font-semibold text-gray-700">Estado (UF)</label>
               <input 
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duração-200"
                 maxLength={10} 
                 placeholder="MG" 
                 value={state ?? ''} 
@@ -423,13 +461,13 @@ function CityDialog({
         <div className="sticky bottom-0 bg-white border-t border-gray-100 px-6 py-4 rounded-b-3xl">
           <div className="flex justify-end gap-3">
             <button 
-              className="px-6 py-3 text-gray-700 hover:bg-gray-100 rounded-xl font-semibold transition-all duration-200"
+              className="px-6 py-3 text-gray-700 hover:bg-gray-100 rounded-xl font-semibold transition-all duração-200"
               onClick={onClose}
             >
               Cancelar
             </button>
             <button 
-              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105"
+              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duração-200 transform hover:scale-105"
               onClick={submit}
             >
               Salvar Cidade

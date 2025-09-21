@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSession } from 'next-auth/react';
+import { apiPath, apiFetch } from '@/lib/api';
 import { Search, Filter, Heart, Users, Clock, UserCheck, Calendar, Trash2, ChevronLeft, ChevronRight, ExternalLink, User } from 'lucide-react';
 
 type SponsorshipStatus = 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
@@ -34,12 +36,15 @@ const PAGE_SIZE = 20;
 const STATUS_OPTS: SponsorshipStatus[] = ['PENDING', 'ACTIVE', 'ENDED', 'CANCELLED'];
 
 export default function AdminSponsorshipsPage() {
+  const { data } = useSession();
+  const token = (data as any)?.accessToken ?? null;
+
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<'' | SponsorshipStatus>('');
   const [campaignId, setCampaignId] = useState<string>('');
   const [page, setPage] = useState(1);
 
-  const [data, setData] = useState<PageResp<Sponsorship> | null>(null);
+  const [dataState, setDataState] = useState<PageResp<Sponsorship> | null>(null);
   const [loading, setLoading] = useState(false);
   const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
 
@@ -47,10 +52,10 @@ export default function AdminSponsorshipsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const url = new URL('/api/admin/campaigns', window.location.origin);
+        const url = new URL(apiPath('/campaigns'));
         url.searchParams.set('page', '1');
         url.searchParams.set('pageSize', '200');
-        const r = await fetch(url.toString(), { cache: 'no-store' });
+        const r = await apiFetch(url.toString(), { cache: 'no-store' }, token);
         if (!r.ok) return;
         const raw = await r.json();
         const items: CampaignLite[] = Array.isArray(raw?.items)
@@ -63,7 +68,7 @@ export default function AdminSponsorshipsPage() {
         setCampaigns(items);
       } catch {}
     })();
-  }, []);
+  }, [token]);
 
   function normalize(raw: any): PageResp<Sponsorship> {
     const items: Sponsorship[] = Array.isArray(raw?.items)
@@ -81,22 +86,22 @@ export default function AdminSponsorshipsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const url = new URL('/api/admin/sponsorships', window.location.origin);
+      const url = new URL(apiPath('/sponsorships'));
       url.searchParams.set('page', String(page));
       url.searchParams.set('pageSize', String(PAGE_SIZE));
       if (q.trim()) url.searchParams.set('q', q.trim());
       if (status) url.searchParams.set('status', status);
       if (campaignId) url.searchParams.set('campaignId', campaignId);
 
-      const res = await fetch(url.toString(), { cache: 'no-store' });
+      const res = await apiFetch(url.toString(), { cache: 'no-store' }, token);
       if (!res.ok) {
-        setData({ items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pages: 1 });
+        setDataState({ items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pages: 1 });
       } else {
         const json = await res.json();
-        setData(normalize(json));
+        setDataState(normalize(json));
       }
     } catch {
-      setData({ items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pages: 1 });
+      setDataState({ items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pages: 1 });
     } finally {
       setLoading(false);
     }
@@ -105,19 +110,19 @@ export default function AdminSponsorshipsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, status, campaignId, page]);
+  }, [q, status, campaignId, page, token]);
 
-  const rows: Sponsorship[] = Array.isArray(data?.items) ? (data!.items as Sponsorship[]) : [];
+  const rows: Sponsorship[] = Array.isArray(dataState?.items) ? (dataState!.items as Sponsorship[]) : [];
   const noRows = !loading && rows.length === 0;
 
   const headerStats = useMemo(() => {
-    const total = typeof data?.total === 'number' ? data.total : rows.length;
+    const total = typeof dataState?.total === 'number' ? dataState.total : rows.length;
     const pending = rows.filter(r => r.status === 'PENDING').length;
     const active = rows.filter(r => r.status === 'ACTIVE').length;
     const ended = rows.filter(r => r.status === 'ENDED').length;
     const cancelled = rows.filter(r => r.status === 'CANCELLED').length;
     return { total, pending, active, ended, cancelled };
-  }, [data?.total, rows]);
+  }, [dataState?.total, rows]);
 
   const fmtDate = (s?: string | null) => {
     if (!s) return '—';
@@ -128,35 +133,15 @@ export default function AdminSponsorshipsPage() {
   const getStatusConfig = (s: SponsorshipStatus) => {
     switch (s) {
       case 'ACTIVE':
-        return { 
-          label: 'Ativo', 
-          className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-          dot: 'bg-emerald-500'
-        };
+        return { label: 'Ativo', className: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' };
       case 'PENDING':
-        return { 
-          label: 'Pendente', 
-          className: 'bg-amber-50 text-amber-700 border-amber-200',
-          dot: 'bg-amber-500'
-        };
+        return { label: 'Pendente', className: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' };
       case 'ENDED':
-        return { 
-          label: 'Encerrado', 
-          className: 'bg-blue-50 text-blue-700 border-blue-200',
-          dot: 'bg-blue-500'
-        };
+        return { label: 'Encerrado', className: 'bg-blue-50 text-blue-700 border-blue-200', dot: 'bg-blue-500' };
       case 'CANCELLED':
-        return { 
-          label: 'Cancelado', 
-          className: 'bg-red-50 text-red-700 border-red-200',
-          dot: 'bg-red-500'
-        };
+        return { label: 'Cancelado', className: 'bg-red-50 text-red-700 border-red-200', dot: 'bg-red-500' };
       default:
-        return { 
-          label: '—', 
-          className: 'bg-gray-50 text-gray-600 border-gray-200',
-          dot: 'bg-gray-500'
-        };
+        return { label: '—', className: 'bg-gray-50 text-gray-600 border-gray-200', dot: 'bg-gray-500' };
     }
   };
 
@@ -171,18 +156,18 @@ export default function AdminSponsorshipsPage() {
   };
 
   async function changeStatus(id: string, newStatus: SponsorshipStatus) {
-    const r = await fetch(`/api/admin/sponsorships/${id}`, {
+    const r = await apiFetch(`/sponsorships/${id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ status: newStatus }),
-    });
+    }, token);
     if (!r.ok) return alert('Falha ao alterar status.');
     load();
   }
 
   async function del(id: string) {
     if (!confirm('Excluir apadrinhamento? Esta ação não pode ser desfeita.')) return;
-    const r = await fetch(`/api/admin/sponsorships/${id}`, { method: 'DELETE' });
+    const r = await apiFetch(`/sponsorships/${id}`, { method: 'DELETE' }, token);
     if (!r.ok) return alert('Falha ao excluir.');
     load();
   }
@@ -201,7 +186,6 @@ export default function AdminSponsorshipsPage() {
                 Acompanhe e gerencie os vínculos entre padrinhos e crianças
               </p>
             </div>
-            {/* Espaço para botões futuros como importar/exportar */}
             <div className="flex gap-3">
               <div className="text-sm text-gray-500 px-4 py-2 bg-white/50 rounded-xl border border-white/20">
                 Funcionalidades extras em breve
@@ -248,7 +232,7 @@ export default function AdminSponsorshipsPage() {
             </div>
           </div>
 
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duração-200">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600 mb-1">Encerrados</p>
@@ -462,9 +446,9 @@ export default function AdminSponsorshipsPage() {
         </div>
 
         {/* Pagination */}
-        {data && (data.pages ?? 1) > 1 && (
+        {dataState && (dataState.pages ?? 1) > 1 && (
           <div className="mt-8">
-            <Pagination page={data.page} pages={data.pages} onChange={setPage} />
+            <Pagination page={dataState.page} pages={dataState.pages} onChange={setPage} />
           </div>
         )}
       </div>
@@ -494,7 +478,7 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
       </div>
       
       <button 
-        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duração-200"
         onClick={next} 
         disabled={page >= pages}
       >
