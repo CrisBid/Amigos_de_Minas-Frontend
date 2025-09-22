@@ -185,12 +185,9 @@ export default function AdminChildrenPage() {
               </p>
             </div>
             <div className="flex flex-col sm:flex-row gap-3">
-              <Link
-                href="/admin/children/import"
-                className="inline-flex items-center gap-2 bg-white/70 backdrop-blur-sm hover:bg-white text-gray-700 px-6 py-3 rounded-xl font-semibold border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105"
-              >
+              <Link href="/admin/children/bulk" className="inline-flex items-center gap-2 bg-white/70 backdrop-blur-sm hover:bg-white text-gray-700 px-6 py-3 rounded-xl font-semibold border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105">
                 <Upload className="w-5 h-5" />
-                Importar CSV
+                Cadastro Guiado (colar tabela)
               </Link>
               <Link
                 href="/admin/children/new"

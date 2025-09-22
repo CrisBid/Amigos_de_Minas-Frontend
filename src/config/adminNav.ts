@@ -18,7 +18,6 @@ export const ADMIN_ROUTES: AdminRoute[] = [
     children: [
       { label: "Listagem", href: "/admin/children" },
       { label: "Cadastrar", href: "/admin/children/new" },
-      { label: "Importação CSV", href: "/admin/children/import" },
     ],
   },
   {
