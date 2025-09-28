@@ -1,19 +1,32 @@
-import { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
+import { cookies } from 'next/headers';
 
-const API = process.env.NEXT_PUBLIC_NEST_API_URL;
+const API = process.env.NEXT_PUBLIC_NEST_API_URL!;
 
-export async function POST(req: NextRequest, { params }: { params: { pid: string } }) {
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+type Params = { id: string }; // a pasta é [id]; se quiser [pid], renomeie a pasta e troque aqui
+
+export async function POST(
+  req: Request,
+  context: { params: Promise<Params> } // Next 15.4.x tipa params como Promise
+) {
+  const { id } = await context.params; // await no params
+
+  // next-auth v4: passe apenas o header Cookie
+  const token = await getToken({
+    req: { headers: { cookie: cookies().toString() } } as any,
+    secret: process.env.NEXTAUTH_SECRET,
+  });
+
   const accessToken = (token as any)?.accessToken as string | undefined;
   if (!accessToken) return new Response('Unauthorized', { status: 401 });
 
   const form = await req.formData();
-  const res = await fetch(`${API}/children/${encodeURIComponent(params.pid)}/photo`, {
+
+  const res = await fetch(`${API}/children/${encodeURIComponent(id)}/photo`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
-      // não setar 'content-type' aqui — o fetch define com o boundary correto
+      // não defina 'content-type' com FormData; o fetch cuida do boundary
     },
     body: form,
     cache: 'no-store',
