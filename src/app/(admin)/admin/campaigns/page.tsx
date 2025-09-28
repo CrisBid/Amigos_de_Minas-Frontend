@@ -2,8 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Edit, Trash2, Calendar, Users, TrendingUp, Filter, ChevronLeft, ChevronRight, X } from 'lucide-react';
-import { useSession } from 'next-auth/react';
-import { apiPath, apiFetch, apiJson, createApiClient } from '@/lib/api';
 
 type CampaignStatus = 'DRAFT' | 'ACTIVE' | 'FINISHED' | 'ARCHIVED';
 
@@ -36,9 +34,6 @@ const PAGE_SIZE = 20;
 const STATUS_OPTIONS: CampaignStatus[] = ['DRAFT', 'ACTIVE', 'FINISHED', 'ARCHIVED'];
 
 export default function AdminCampaignsPage() {
-  const { data: session } = useSession()
-  const token = (session as any)?.accessToken ?? null; // vem do seu NextAuth
-
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<'' | CampaignStatus>('');
   const [page, setPage] = useState(1);
@@ -62,22 +57,13 @@ export default function AdminCampaignsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const url = new URL(apiPath('/campaigns'));
+      const url = new URL('/api/admin/campaigns', window.location.origin);
       url.searchParams.set('page', String(page));
       url.searchParams.set('pageSize', String(PAGE_SIZE));
       if (q.trim()) url.searchParams.set('q', q.trim());
       if (status) url.searchParams.set('status', status);
 
-      const res = await apiFetch(
-        url.toString(), 
-        {
-          cache: 'no-store',
-          credentials: 'include', // necessário se usar cookies/sessão
-          headers: { 'accept': 'application/json' },
-        },
-        token
-      );
-
+      const res = await fetch(url.toString(), { cache: 'no-store', credentials: 'include' });
       if (!res.ok) {
         setData({ items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pages: 1 });
       } else {
@@ -116,35 +102,15 @@ export default function AdminCampaignsPage() {
   const getStatusConfig = (s: CampaignStatus) => {
     switch (s) {
       case 'ACTIVE':
-        return { 
-          label: 'Ativa', 
-          className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-          dot: 'bg-emerald-500'
-        };
+        return { label: 'Ativa', className: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' };
       case 'DRAFT':
-        return { 
-          label: 'Rascunho', 
-          className: 'bg-slate-50 text-slate-700 border-slate-200',
-          dot: 'bg-slate-500'
-        };
+        return { label: 'Rascunho', className: 'bg-slate-50 text-slate-700 border-slate-200', dot: 'bg-slate-500' };
       case 'FINISHED':
-        return { 
-          label: 'Finalizada', 
-          className: 'bg-blue-50 text-blue-700 border-blue-200',
-          dot: 'bg-blue-500'
-        };
+        return { label: 'Finalizada', className: 'bg-blue-50 text-blue-700 border-blue-200', dot: 'bg-blue-500' };
       case 'ARCHIVED':
-        return { 
-          label: 'Arquivada', 
-          className: 'bg-amber-50 text-amber-700 border-amber-200',
-          dot: 'bg-amber-500'
-        };
+        return { label: 'Arquivada', className: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' };
       default:
-        return { 
-          label: '—', 
-          className: 'bg-gray-50 text-gray-600 border-gray-200',
-          dot: 'bg-gray-500'
-        };
+        return { label: '—', className: 'bg-gray-50 text-gray-600 border-gray-200', dot: 'bg-gray-500' };
     }
   };
 
@@ -159,7 +125,7 @@ export default function AdminCampaignsPage() {
   };
 
   async function changeStatus(id: string, newStatus: CampaignStatus) {
-    const res = await fetch(apiPath(`/admin/campaigns/${id}`), {
+    const res = await fetch(`/api/admin/campaigns/${id}`, {
       method: 'PATCH',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },
@@ -174,7 +140,7 @@ export default function AdminCampaignsPage() {
 
   async function deleteCampaign(id: string, name: string) {
     if (!confirm(`Excluir campanha "${name}"? Essa ação não pode ser desfeita.`)) return;
-    const res = await fetch(apiPath(`/admin/campaigns/${id}`), { method: 'DELETE', credentials: 'include' });
+    const res = await fetch(`/api/admin/campaigns/${id}`, { method: 'DELETE', credentials: 'include' });
     if (!res.ok) {
       alert('Falha ao excluir.');
       return;
@@ -478,7 +444,7 @@ function CreateCampaignDialog({ onClose, onCreated }: { onClose: () => void; onC
     if (endDate) payload.endDate = new Date(endDate).toISOString();
     if (description) payload.description = description.trim();
 
-    const res = await fetch(apiPath('/admin/campaigns'), {
+    const res = await fetch('/api/admin/campaigns', {
       method: 'POST',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },

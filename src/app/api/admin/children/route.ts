@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
 
-const API = process.env.NEST_AUTH_BASE_URL!;
+const API = process.env.NEXT_PUBLIC_NEST_API_URL;
 
 export async function GET(req: NextRequest) {
   const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });

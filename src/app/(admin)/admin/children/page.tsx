@@ -3,8 +3,6 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Edit, Trash2, Upload, Users, Heart, Baby, MapPin, Gift, ChevronLeft, ChevronRight, Camera } from 'lucide-react';
-import { useSession } from 'next-auth/react';
-import { apiPath, apiFetch, apiJson, createApiClient } from '@/lib/api';
 
 type Sponsorship = {
   id: string;
@@ -41,9 +39,6 @@ type PageResp = {
 const PAGE_SIZE = 20;
 
 export default function AdminChildrenPage() {
-  const { data: session, status } = useSession()
-  const token = (session as any)?.accessToken ?? null; // vem do seu NextAuth
-
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
   const [data, setData] = useState<PageResp | null>(null);
@@ -66,20 +61,16 @@ export default function AdminChildrenPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const url = new URL(apiPath('/children'));
+      const url = new URL('/api/admin/children', window.location.origin);
       url.searchParams.set('page', String(page));
       url.searchParams.set('pageSize', String(PAGE_SIZE));
       if (q.trim()) url.searchParams.set('q', q.trim());
 
-      const res = await apiFetch(
-        url.toString(), 
-        {
-          cache: 'no-store',
-          credentials: 'include',
-          headers: { accept: 'application/json' },
-        }, 
-        token
-      );
+      const res = await fetch(url.toString(), {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: { accept: 'application/json' },
+      });
 
       if (!res.ok) {
         setData({ items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pages: 1 });
@@ -322,7 +313,7 @@ export default function AdminChildrenPage() {
                     : (child.cityName || '—');
 
                   return (
-                    <tr key={child.id} className="hover:bg-blue-50/50 transition-colors duração-150">
+                    <tr key={child.id} className="hover:bg-blue-50/50 transition-colors duration-150">
                       <td className="px-6 py-4 text-sm font-medium text-gray-900">
                         {child.publicId}
                       </td>
@@ -424,7 +415,7 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
   return (
     <div className="flex items-center justify-center gap-4">
       <button
-        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duração-200"
+        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
         onClick={prev}
         disabled={page <= 1}
       >
@@ -439,7 +430,7 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
       </div>
       
       <button
-        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duração-200"
+        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
         onClick={next}
         disabled={page >= pages}
       >
@@ -453,7 +444,7 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
 function DeleteChildButton({ id, name, onDone }: { id: string; name: string; onDone: () => void }) {
   const del = async () => {
     if (!confirm(`Excluir (soft) "${name}"? Essa ação pode ser revertida.`)) return;
-    const res = await fetch(apiPath(`/children/${id}`), {
+    const res = await fetch(`/api/admin/children/${id}`, {
       method: 'PATCH',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },

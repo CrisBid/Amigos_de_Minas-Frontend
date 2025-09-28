@@ -1,6 +1,6 @@
 import { getToken } from 'next-auth/jwt';
 
-const API = process.env.NEXT_PUBLIC_NEST_API_URL!;
+const API = process.env.NEXT_PUBLIC_NEST_API_URL;
 
 async function requireAccessToken(request: Request) {
   const token = await getToken({ req: request as any, secret: process.env.NEXTAUTH_SECRET });

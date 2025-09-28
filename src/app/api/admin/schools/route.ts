@@ -9,10 +9,11 @@ export async function GET(req: NextRequest) {
   if (!accessToken) return new Response('Unauthorized', { status: 401 });
 
   const qs = req.nextUrl.searchParams.toString();
-  const res = await fetch(`${API}/campaigns?${qs}`, {
+  const res = await fetch(`${API}/schools?${qs}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     cache: 'no-store',
   });
+
   return new Response(await res.text(), {
     status: res.status,
     headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
   if (!accessToken) return new Response('Unauthorized', { status: 401 });
 
   const body = await req.text();
-  const res = await fetch(`${API}/campaigns`, {
+  const res = await fetch(`${API}/schools`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -33,6 +34,7 @@ export async function POST(req: NextRequest) {
     },
     body,
   });
+
   return new Response(await res.text(), {
     status: res.status,
     headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },

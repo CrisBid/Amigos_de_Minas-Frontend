@@ -3,14 +3,18 @@ import { getToken } from 'next-auth/jwt';
 
 const API = process.env.NEXT_PUBLIC_NEST_API_URL;
 
-export async function GET(req: NextRequest) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
   const accessToken = (token as any)?.accessToken as string | undefined;
   if (!accessToken) return new Response('Unauthorized', { status: 401 });
 
-  const qs = req.nextUrl.searchParams.toString();
-  const res = await fetch(`${API}/sponsorships?${qs}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  const form = await req.formData();
+  const res = await fetch(`${API}/campaigns/${encodeURIComponent(params.id)}/layout`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: form,
     cache: 'no-store',
   });
 
@@ -19,6 +23,3 @@ export async function GET(req: NextRequest) {
     headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
   });
 }
-
-// Caso queira criar manualmente um apadrinhamento depois:
-// export async function POST(req: NextRequest) { ... }

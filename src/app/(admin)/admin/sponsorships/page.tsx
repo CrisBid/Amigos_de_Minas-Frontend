@@ -1,8 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useSession } from 'next-auth/react';
-import { apiPath, apiFetch } from '@/lib/api';
 import { Search, Filter, Heart, Users, Clock, UserCheck, Calendar, Trash2, ChevronLeft, ChevronRight, ExternalLink, User } from 'lucide-react';
 
 type SponsorshipStatus = 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
@@ -36,9 +34,6 @@ const PAGE_SIZE = 20;
 const STATUS_OPTS: SponsorshipStatus[] = ['PENDING', 'ACTIVE', 'ENDED', 'CANCELLED'];
 
 export default function AdminSponsorshipsPage() {
-  const { data } = useSession();
-  const token = (data as any)?.accessToken ?? null;
-
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<'' | SponsorshipStatus>('');
   const [campaignId, setCampaignId] = useState<string>('');
@@ -48,14 +43,14 @@ export default function AdminSponsorshipsPage() {
   const [loading, setLoading] = useState(false);
   const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
 
-  // Carrega campanhas para o filtro
+  // Carrega campanhas para o filtro (via Next API)
   useEffect(() => {
     (async () => {
       try {
-        const url = new URL(apiPath('/campaigns'));
+        const url = new URL('/api/admin/campaigns', window.location.origin);
         url.searchParams.set('page', '1');
         url.searchParams.set('pageSize', '200');
-        const r = await apiFetch(url.toString(), { cache: 'no-store' }, token);
+        const r = await fetch(url.toString(), { cache: 'no-store', credentials: 'include' });
         if (!r.ok) return;
         const raw = await r.json();
         const items: CampaignLite[] = Array.isArray(raw?.items)
@@ -68,7 +63,7 @@ export default function AdminSponsorshipsPage() {
         setCampaigns(items);
       } catch {}
     })();
-  }, [token]);
+  }, []);
 
   function normalize(raw: any): PageResp<Sponsorship> {
     const items: Sponsorship[] = Array.isArray(raw?.items)
@@ -86,14 +81,14 @@ export default function AdminSponsorshipsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const url = new URL(apiPath('/sponsorships'));
+      const url = new URL('/api/admin/sponsorships', window.location.origin);
       url.searchParams.set('page', String(page));
       url.searchParams.set('pageSize', String(PAGE_SIZE));
       if (q.trim()) url.searchParams.set('q', q.trim());
       if (status) url.searchParams.set('status', status);
       if (campaignId) url.searchParams.set('campaignId', campaignId);
 
-      const res = await apiFetch(url.toString(), { cache: 'no-store' }, token);
+      const res = await fetch(url.toString(), { cache: 'no-store', credentials: 'include' });
       if (!res.ok) {
         setDataState({ items: [], total: 0, page: 1, pageSize: PAGE_SIZE, pages: 1 });
       } else {
@@ -110,7 +105,7 @@ export default function AdminSponsorshipsPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, status, campaignId, page, token]);
+  }, [q, status, campaignId, page]);
 
   const rows: Sponsorship[] = Array.isArray(dataState?.items) ? (dataState!.items as Sponsorship[]) : [];
   const noRows = !loading && rows.length === 0;
@@ -156,18 +151,19 @@ export default function AdminSponsorshipsPage() {
   };
 
   async function changeStatus(id: string, newStatus: SponsorshipStatus) {
-    const r = await apiFetch(`/sponsorships/${id}`, {
+    const r = await fetch(`/api/admin/sponsorships/${id}`, {
       method: 'PATCH',
+      credentials: 'include',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ status: newStatus }),
-    }, token);
+    });
     if (!r.ok) return alert('Falha ao alterar status.');
     load();
   }
 
   async function del(id: string) {
     if (!confirm('Excluir apadrinhamento? Esta ação não pode ser desfeita.')) return;
-    const r = await apiFetch(`/sponsorships/${id}`, { method: 'DELETE' }, token);
+    const r = await fetch(`/api/admin/sponsorships/${id}`, { method: 'DELETE', credentials: 'include' });
     if (!r.ok) return alert('Falha ao excluir.');
     load();
   }
@@ -232,7 +228,7 @@ export default function AdminSponsorshipsPage() {
             </div>
           </div>
 
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duração-200">
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600 mb-1">Encerrados</p>
@@ -478,7 +474,7 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
       </div>
       
       <button 
-        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duração-200"
+        className="inline-flex items-center gap-2 px-4 py-2 bg-white/70 backdrop-blur-sm border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
         onClick={next} 
         disabled={page >= pages}
       >

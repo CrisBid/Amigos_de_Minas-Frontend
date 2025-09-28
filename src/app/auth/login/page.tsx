@@ -174,7 +174,7 @@ export default function ModernLoginScreen() {
               {/* Google */}
               <button
                 onClick={handleGoogleLogin}
-                disabled={submitting}
+                disabled
                 className="w-full py-4 px-6 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-2xl transition-all duration-300 flex items-center justify-center gap-3 group disabled:opacity-70"
               >
                 <div className="w-6 h-6 bg-gradient-to-br from-red-500 to-yellow-500 rounded-lg flex items-center justify-center">

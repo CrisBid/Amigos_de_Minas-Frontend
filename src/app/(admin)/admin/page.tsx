@@ -3,9 +3,9 @@
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { apiPath, apiFetch } from '@/lib/api';
-import { 
-  Heart, Users, Calendar, Baby, MapPin, TrendingUp, Clock, 
-  UserCheck, Building2, ArrowUp, Activity, Target 
+import {
+  Heart, Users, Calendar, Baby, MapPin, TrendingUp, Clock,
+  UserCheck, Building2, ArrowUp, Activity, Target
 } from 'lucide-react';
 
 type DashboardStats = {
@@ -33,23 +33,47 @@ export default function AdminDashboard() {
   const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Extrai lista e contadores de respostas que podem vir como { items }, { data } ou array puro
+  const extract = (raw: any) => {
+    const items: any[] = Array.isArray(raw?.items)
+      ? raw.items
+      : Array.isArray(raw?.data)
+      ? raw.data
+      : Array.isArray(raw)
+      ? raw
+      : [];
+    const total = typeof raw?.total === 'number' ? raw.total : items.length;
+    const pages = typeof raw?.pages === 'number' ? raw.pages : 1;
+    return { items, total, pages };
+  };
+
   const getTotal = async (path: string, signal?: AbortSignal) => {
     const url = new URL(apiPath(path));
     url.searchParams.set('pageSize', '1');
-    const res = await apiFetch(url.toString(), { cache: 'no-store', signal }, token);
+    const res = await apiFetch(url.toString(), {
+      cache: 'no-store',
+      credentials: 'include',
+      headers: { accept: 'application/json' },
+      signal,
+    }, token);
     if (!res.ok) return 0;
-    const json = await res.json();
-    return typeof json?.total === 'number' ? json.total : Array.isArray(json?.items) ? json.items.length : 0;
+    const { total, items } = extract(await res.json());
+    return typeof total === 'number' ? total : items.length;
   };
 
   const getTotalByStatus = async (path: string, st: string, signal?: AbortSignal) => {
     const url = new URL(apiPath(path));
     url.searchParams.set('status', st);
     url.searchParams.set('pageSize', '1');
-    const res = await apiFetch(url.toString(), { cache: 'no-store', signal }, token);
+    const res = await apiFetch(url.toString(), {
+      cache: 'no-store',
+      credentials: 'include',
+      headers: { accept: 'application/json' },
+      signal,
+    }, token);
     if (!res.ok) return 0;
-    const json = await res.json();
-    return typeof json?.total === 'number' ? json.total : Array.isArray(json?.items) ? json.items.length : 0;
+    const { total, items } = extract(await res.json());
+    return typeof total === 'number' ? total : items.length;
   };
 
   const getAllCitiesStatesCount = async (signal?: AbortSignal) => {
@@ -57,42 +81,49 @@ export default function AdminDashboard() {
     const firstUrl = new URL(apiPath('/cities'));
     firstUrl.searchParams.set('page', '1');
     firstUrl.searchParams.set('pageSize', String(pageSize));
-    const firstRes = await apiFetch(firstUrl.toString(), { cache: 'no-store', signal }, token);
+    const firstRes = await apiFetch(firstUrl.toString(), {
+      cache: 'no-store',
+      credentials: 'include',
+      headers: { accept: 'application/json' },
+      signal,
+    }, token);
     if (!firstRes.ok) return { total: 0, states: 0 };
-    const firstJson = await firstRes.json();
 
-    const total = typeof firstJson?.total === 'number' ? firstJson.total : Array.isArray(firstJson?.items) ? firstJson.items.length : 0;
-    const pages = typeof firstJson?.pages === 'number' ? firstJson.pages : 1;
+    const firstJson = await firstRes.json();
+    const { items: firstItems, total, pages } = extract(firstJson);
 
     const statesSet = new Set<string>();
-    const pushStates = (arr: any[]) => arr?.forEach((c: any) => { if (c?.state) statesSet.add(String(c.state)); });
-    pushStates(Array.isArray(firstJson?.items) ? firstJson.items : []);
+    const pushStates = (arr: any[]) =>
+      arr?.forEach((c: any) => { if (c?.state) statesSet.add(String(c.state)); });
+    pushStates(firstItems);
 
+    // Pega demais páginas (se houver)
     for (let p = 2; p <= pages; p++) {
       const url = new URL(apiPath('/cities'));
       url.searchParams.set('page', String(p));
       url.searchParams.set('pageSize', String(pageSize));
-      const r = await apiFetch(url.toString(), { cache: 'no-store', signal }, token);
+      const r = await apiFetch(url.toString(), {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: { accept: 'application/json' },
+        signal,
+      }, token);
       if (!r.ok) continue;
       const j = await r.json();
-      pushStates(Array.isArray(j?.items) ? j.items : []);
+      const { items } = extract(j);
+      pushStates(items);
     }
+
     return { total, states: statesSet.size };
   };
 
   useEffect(() => {
-    if (!ready) {
-      console.debug('[dashboard] aguardando auth. status:', status, 'token?', !!token);
-      return;
-    }
+    if (!ready) return;
 
     const ac = new AbortController();
     const { signal } = ac;
 
     (async () => {
-      console.debug('[dashboard] load start');
-      console.time('[dashboard] total');
-
       try {
         setLoading(true);
 
@@ -112,12 +143,6 @@ export default function AdminDashboard() {
           getTotalByStatus('/campaigns', 'DRAFT', signal),
         ]);
 
-        console.debug('[dashboard] numbers', {
-          totalChildren, totalSponsorships, totalCampaigns,
-          activeSponsorships, pendingSponsorships, endedSponsorships,
-          activeCampaigns, finishedCampaigns, draftCampaigns,
-        });
-
         const { total: citiesTotal, states: statesCount } = await getAllCitiesStatesCount(signal);
 
         const sponsorshipRate = totalChildren > 0 ? (activeSponsorships / totalChildren) * 100 : 0;
@@ -131,7 +156,7 @@ export default function AdminDashboard() {
           trends: { childrenGrowth: 0, sponsorshipRate: Math.round(sponsorshipRate * 10) / 10, activeCampaigns },
         });
 
-        // Recent activity
+        // Atividade recente
         const recentChildrenUrl = new URL(apiPath('/children'));
         recentChildrenUrl.searchParams.set('pageSize', '5');
         recentChildrenUrl.searchParams.set('orderBy', 'createdAt');
@@ -143,22 +168,40 @@ export default function AdminDashboard() {
         recentSponsorshipsUrl.searchParams.set('order', 'desc');
 
         const [recentChildrenRes, recentSponsorshipsRes] = await Promise.all([
-          apiFetch(recentChildrenUrl.toString(), { cache: 'no-store', signal }, token),
-          apiFetch(recentSponsorshipsUrl.toString(), { cache: 'no-store', signal }, token),
+          apiFetch(recentChildrenUrl.toString(), {
+            cache: 'no-store',
+            credentials: 'include',
+            headers: { accept: 'application/json' },
+            signal,
+          }, token),
+          apiFetch(recentSponsorshipsUrl.toString(), {
+            cache: 'no-store',
+            credentials: 'include',
+            headers: { accept: 'application/json' },
+            signal,
+          }, token),
         ]);
 
-        const recentChildrenData = recentChildrenRes.ok ? await recentChildrenRes.json() : null;
-        const recentSponsorshipsData = recentSponsorshipsRes.ok ? await recentSponsorshipsRes.json() : null;
+        const rc = recentChildrenRes.ok ? extract(await recentChildrenRes.json()).items : [];
+        const rs = recentSponsorshipsRes.ok ? extract(await recentSponsorshipsRes.json()).items : [];
 
         const acts: RecentActivity[] = [];
-        recentChildrenData?.items?.slice(0, 2).forEach((child: any) => {
-          acts.push({ id: `child-${child.id}`, type: 'child', message: `Criança ${child.name} foi cadastrada`, timestamp: child.createdAt, status: 'success' });
+        rc.slice(0, 2).forEach((child: any) => {
+          acts.push({
+            id: `child-${child.id}`,
+            type: 'child',
+            message: `Criança ${child.name} foi cadastrada`,
+            timestamp: child.createdAt,
+            status: 'success',
+          });
         });
-        recentSponsorshipsData?.items?.slice(0, 3).forEach((s: any) => {
+        rs.slice(0, 3).forEach((s: any) => {
           acts.push({
             id: `sponsorship-${s.id}`,
             type: 'sponsorship',
-            message: s.status === 'ACTIVE' ? `Apadrinhamento confirmado: ${s.sponsor?.name || 'Padrinho'} ↔ ${s.child?.name || 'Criança'}` : `Nova solicitação de apadrinhamento para ${s.child?.name || 'Criança'}`,
+            message: s.status === 'ACTIVE'
+              ? `Apadrinhamento confirmado: ${s.sponsor?.name || 'Padrinho'} ↔ ${s.child?.name || 'Criança'}`
+              : `Nova solicitação de apadrinhamento para ${s.child?.name || 'Criança'}`,
             timestamp: s.createdAt,
             status: s.status === 'ACTIVE' ? 'success' : 'pending',
           });
@@ -166,15 +209,9 @@ export default function AdminDashboard() {
 
         acts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         setRecentActivity(acts.slice(0, 4));
-
-        console.debug('[dashboard] load done');
       } catch (error: any) {
-        // Ignora aborts silenciosamente
-        if (error?.name === 'AbortError') {
-          console.debug('[dashboard] aborted (ok)');
-          return;
-        }
-        console.error('Erro ao carregar dados do dashboard:', error);
+        if (error?.name === 'AbortError') return;
+        console.error('[dashboard] error:', error);
         setStats({
           children: { total: 0, sponsored: 0, available: 0, pending: 0 },
           campaigns: { total: 0, active: 0, finished: 0, draft: 0 },
@@ -185,15 +222,11 @@ export default function AdminDashboard() {
         setRecentActivity([]);
       } finally {
         setLoading(false);
-        console.timeEnd('[dashboard] total');
       }
     })();
 
-    return () => {
-      console.debug('[dashboard] cleanup → abort');
-      ac.abort();
-    };
-  }, [ready, token, status]);
+    return () => ac.abort();
+  }, [ready, token]);
 
   // UI helpers
   const formatDate = (ts: string) => {
@@ -203,22 +236,19 @@ export default function AdminDashboard() {
     if (diffH < 24) return `${diffH}h atrás`;
     return date.toLocaleDateString('pt-BR');
   };
-  const getActivityIcon = (t: string) => t === 'sponsorship' ? <Heart className="w-4 h-4" /> : t === 'child' ? <Baby className="w-4 h-4" /> : t === 'campaign' ? <Calendar className="w-4 h-4" /> : <Activity className="w-4 h-4" />;
-  const getStatusColor = (s: string) => s === 'success' ? 'text-emerald-600 bg-emerald-50 border-emerald-200' : s === 'pending' ? 'text-amber-600 bg-amber-50 border-amber-200' : s === 'info' ? 'text-blue-600 bg-blue-50 border-blue-200' : 'text-gray-600 bg-gray-50 border-gray-200';
+  const getActivityIcon = (t: string) =>
+    t === 'sponsorship' ? <Heart className="w-4 h-4" /> :
+    t === 'child' ? <Baby className="w-4 h-4" /> :
+    t === 'campaign' ? <Calendar className="w-4 h-4" /> :
+    <Activity className="w-4 h-4" />;
+  const getStatusColor = (s: string) =>
+    s === 'success' ? 'text-emerald-600 bg-emerald-50 border-emerald-200' :
+    s === 'pending' ? 'text-amber-600 bg-amber-50 border-amber-200' :
+    s === 'info'    ? 'text-blue-600 bg-blue-50 border-blue-200' :
+                      'text-gray-600 bg-gray-50 border-gray-200';
 
-  // Loading/guard
-  if (status === 'loading' || (status === 'authenticated' && !ready) || loading || !stats) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
-          <p className="text-gray-600 font-medium">Carregando dashboard...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (loading || !stats) {
+  // Loading (único guard)
+  if (!ready || loading || !stats) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -245,7 +275,7 @@ export default function AdminDashboard() {
         {/* Main Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           {/* Crianças */}
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duração-200">
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
             <div className="flex items-center justify-between mb-4">
               <div className="p-3 bg-pink-100 rounded-xl">
                 <Baby className="w-6 h-6 text-pink-600" />
@@ -272,7 +302,7 @@ export default function AdminDashboard() {
           </div>
 
           {/* Apadrinhamentos */}
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duração-200">
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
             <div className="flex items-center justify-between mb-4">
               <div className="p-3 bg-emerald-100 rounded-xl">
                 <Heart className="w-6 h-6 text-emerald-600" />
@@ -299,7 +329,7 @@ export default function AdminDashboard() {
           </div>
 
           {/* Campanhas */}
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duração-200">
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
             <div className="flex items-center justify-between mb-4">
               <div className="p-3 bg-blue-100 rounded-xl">
                 <Calendar className="w-6 h-6 text-blue-600" />
@@ -326,7 +356,7 @@ export default function AdminDashboard() {
           </div>
 
           {/* Localização */}
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duração-200">
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
             <div className="flex items-center justify-between mb-4">
               <div className="p-3 bg-indigo-100 rounded-xl">
                 <MapPin className="w-6 h-6 text-indigo-600" />
@@ -348,14 +378,14 @@ export default function AdminDashboard() {
               <div className="flex justify-between text-xs">
                 <span className="text-slate-600">Média/Estado</span>
                 <span className="font-medium">
-                  {Math.round((stats.cities.total || 0) / (stats.cities.states || 1))}
+                  {stats.cities.states > 0 ? Math.round(stats.cities.total / stats.cities.states) : 0}
                 </span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Second Row - Progress Cards (mantidos; personalize quando tiver métricas reais) */}
+        {/* Second Row - Progress Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg">
             <div className="flex items-center gap-3 mb-4">
@@ -375,7 +405,10 @@ export default function AdminDashboard() {
                 </span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2">
-                <div className="bg-emerald-500 h-2 rounded-full" style={{width: `${Math.min(100, stats.trends.sponsorshipRate)}%`}}></div>
+                <div
+                  className="bg-emerald-500 h-2 rounded-full"
+                  style={{ width: `${Math.min(100, stats.trends.sponsorshipRate)}%` }}
+                />
               </div>
             </div>
           </div>
@@ -429,11 +462,14 @@ export default function AdminDashboard() {
               </div>
             </div>
           </div>
-          
+
           <div className="p-6">
             <div className="space-y-4">
               {recentActivity.map((activity) => (
-                <div key={activity.id} className="flex items-start gap-4 p-4 rounded-xl bg-gray-50/50 hover:bg-gray-100/50 transition-colors duração-150">
+                <div
+                  key={activity.id}
+                  className="flex items-start gap-4 p-4 rounded-xl bg-gray-50/50 hover:bg-gray-100/50 transition-colors duration-150"
+                >
                   <div className={`p-2 rounded-lg border ${getStatusColor(activity.status)}`}>
                     {getActivityIcon(activity.type)}
                   </div>
@@ -446,13 +482,14 @@ export default function AdminDashboard() {
                     </p>
                   </div>
                   <div className={`px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(activity.status)}`}>
-                    {activity.status === 'success' ? 'Concluído' : 
-                     activity.status === 'pending' ? 'Pendente' : 'Info'}
+                    {activity.status === 'success' ? 'Concluído'
+                      : activity.status === 'pending' ? 'Pendente'
+                      : 'Info'}
                   </div>
                 </div>
               ))}
             </div>
-            
+
             <div className="mt-6 text-center">
               <button className="text-blue-600 hover:text-blue-700 text-sm font-medium">
                 Ver todas as atividades →
@@ -463,7 +500,7 @@ export default function AdminDashboard() {
 
         {/* Quick Actions */}
         <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <a href="/admin/children/new" className="group p-4 bg-white/50 hover:bg-white/80 rounded-xl border border-white/20 hover:shadow-lg transition-all duração-200">
+          <a href="/admin/children/new" className="group p-4 bg-white/50 hover:bg-white/80 rounded-xl border border-white/20 hover:shadow-lg transition-all duration-200">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-pink-100 group-hover:bg-pink-200 rounded-lg transition-colors">
                 <Baby className="w-5 h-5 text-pink-600" />
@@ -471,8 +508,8 @@ export default function AdminDashboard() {
               <span className="font-medium text-gray-700 group-hover:text-gray-900">Cadastrar Criança</span>
             </div>
           </a>
-          
-          <a href="/admin/campaigns/new" className="group p-4 bg-white/50 hover:bg-white/80 rounded-xl border border-white/20 hover:shadow-lg transition-all duração-200">
+
+          <a href="/admin/campaigns/new" className="group p-4 bg-white/50 hover:bg-white/80 rounded-xl border border-white/20 hover:shadow-lg transition-all duration-200">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-blue-100 group-hover:bg-blue-200 rounded-lg transition-colors">
                 <Calendar className="w-5 h-5 text-blue-600" />
@@ -480,8 +517,8 @@ export default function AdminDashboard() {
               <span className="font-medium text-gray-700 group-hover:text-gray-900">Nova Campanha</span>
             </div>
           </a>
-          
-          <a href="/admin/sponsorships" className="group p-4 bg-white/50 hover:bg-white/80 rounded-xl border border-white/20 hover:shadow-lg transition-all duração-200">
+
+          <a href="/admin/sponsorships" className="group p-4 bg-white/50 hover:bg-white/80 rounded-xl border border-white/20 hover:shadow-lg transition-all duration-200">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-emerald-100 group-hover:bg-emerald-200 rounded-lg transition-colors">
                 <Heart className="w-5 h-5 text-emerald-600" />
@@ -489,8 +526,8 @@ export default function AdminDashboard() {
               <span className="font-medium text-gray-700 group-hover:text-gray-900">Ver Apadrinhamentos</span>
             </div>
           </a>
-          
-          <a href="/admin/cities/new" className="group p-4 bg-white/50 hover:bg-white/80 rounded-xl border border-white/20 hover:shadow-lg transition-all duração-200">
+
+          <a href="/admin/cities/new" className="group p-4 bg-white/50 hover:bg-white/80 rounded-xl border border-white/20 hover:shadow-lg transition-all duration-200">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-indigo-100 group-hover:bg-indigo-200 rounded-lg transition-colors">
                 <MapPin className="w-5 h-5 text-indigo-600" />
