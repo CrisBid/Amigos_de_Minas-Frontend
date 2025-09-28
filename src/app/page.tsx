@@ -9,7 +9,7 @@ import Footer from '@/components/Footer'
 export const metadata = {
   title: 'ONG Amigos de Minas - Transformando Vidas no Norte de Minas',
   description: 'Organização dedicada a ajudar famílias carentes do norte de Minas Gerais através de projetos sociais e ações comunitárias.',
-  keywords: 'ONG, Minas Gerais, ajuda social, famílias carentes, norte de minas',
+  keywords: 'ONG, Minas Gerais, ajuda social, famílias carentes, Norte de Minas',
 }
 
 export default function Home() {
