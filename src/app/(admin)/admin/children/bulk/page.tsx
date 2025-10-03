@@ -550,7 +550,11 @@ export default function BulkChildrenWizardPage() {
       const uploadOne = async (pid: string, file: File) => {
         const fd = new FormData();
         fd.append('file', file);
-        const r = await fetch(`/api/admin/children/${encodeURIComponent(pid)}/photo`, {
+
+        // adiciona campaignId na query para atender o backend
+        const url = `/api/admin/children/${encodeURIComponent(pid)}/photo?campaignId=${encodeURIComponent(campaignId)}`;
+
+        const r = await fetch(url, {
           method: 'POST',
           body: fd,
           credentials: 'include',

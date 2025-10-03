@@ -8,7 +8,9 @@ export async function POST(req: NextRequest) {
   const accessToken = (token as any)?.accessToken as string | undefined;
   if (!accessToken) return new Response('Unauthorized', { status: 401 });
 
-  const body = await req.text();
+  // corpo JSON vindo do front
+  const body = await req.text(); // mantém JSON bruto
+
   const res = await fetch(`${API}/children/bulk/commit`, {
     method: 'POST',
     headers: {
@@ -16,7 +18,11 @@ export async function POST(req: NextRequest) {
       'content-type': 'application/json',
     },
     body,
+    cache: 'no-store',
   });
+
+  console.log(body);
+  console.log(res);
 
   return new Response(await res.text(), {
     status: res.status,
