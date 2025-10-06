@@ -66,6 +66,71 @@ function labelOrDash(v?: string | number | null) {
   return String(v);
 }
 
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h4 className="mt-4 mb-2 text-sm font-semibold text-gray-900">{children}</h4>;
+}
+
+function KV({ label, value }: { label: string; value?: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="min-w-28 text-xs text-gray-500">{label}</div>
+      <div className="text-sm font-medium text-gray-900 break-words">{value ?? '—'}</div>
+    </div>
+  );
+}
+
+function Badge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-700 border border-gray-200">
+      {children}
+    </span>
+  );
+}
+
+function ImageThumb({ url, label }: { url: string; label: string }) {
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="group block">
+      <div className="aspect-square overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <img src={url} alt={label} className="w-full h-full object-cover group-hover:opacity-90" />
+      </div>
+      <div className="mt-1 text-[11px] text-gray-600 text-center">{label}</div>
+    </a>
+  );
+}
+
+function LinkPill({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center px-2 py-1 rounded-full text-[11px] border border-gray-300 text-blue-700 hover:text-blue-900 hover:bg-blue-50"
+    >
+      {children}
+    </a>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        } catch {}
+      }}
+      className="text-xs px-2 py-1 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
+      title="Copiar"
+    >
+      {copied ? 'Copiado!' : 'Copiar'}
+    </button>
+  );
+}
+
 /* ===================== */
 /* Modal reutilizável */
 /* ===================== */
@@ -275,13 +340,12 @@ export default function AdminSponsorshipsPage() {
     setModalLoading(true);
     try {
       // tenta sponsors/:id
-      let r = await fetch(`/api/admin/sponsors/${id}`, { credentials: 'include', cache: 'no-store' });
-      if (r.status === 404) {
-        // fallback para users/:id
-        r = await fetch(`/api/admin/users/${id}`, { credentials: 'include', cache: 'no-store' });
-      }
+      let r = await fetch(`/api/admin/users/${id}`, { credentials: 'include', cache: 'no-store' });
       if (!r.ok) throw new Error('Erro ao carregar padrinho');
       const json = await r.json();
+      
+      console.log(json);
+      
       setSponsorDetail(json);
     } catch (e) {
       setSponsorDetail({ __error: 'Não foi possível carregar os dados do padrinho.' });
@@ -611,34 +675,147 @@ export default function AdminSponsorshipsPage() {
             Carregando...
           </div>
         )}
+
         {!modalLoading && childDetail && (
-          <div className="space-y-4">
+          <div className="space-y-6">
             {childDetail.__error ? (
               <p className="text-red-600">{childDetail.__error}</p>
             ) : (
               <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <InfoRow icon={<User className="w-4 h-4" />} label="Nome" value={labelOrDash(childDetail.name)} />
-                  <InfoRow icon={<Hash className="w-4 h-4" />} label="ID Público" value={labelOrDash(childDetail.publicId)} />
-                  <InfoRow icon={<Calendar className="w-4 h-4" />} label="Nascimento" value={fmtDateBR(childDetail.birthDate)} />
-                  <InfoRow icon={<MapPin className="w-4 h-4" />} label="Cidade" value={labelOrDash(childDetail.city?.name ?? childDetail.cityName)} />
-                  <InfoRow icon={<Hash className="w-4 h-4" />} label="Categoria" value={labelOrDash(childDetail.category)} />
-                  <InfoRow icon={<Heart className="w-4 h-4" />} label="Presente desejado" value={labelOrDash(childDetail.wantedGift)} />
-                  <InfoRow icon={<Users className="w-4 h-4" />} label="Escola" value={labelOrDash(childDetail.school?.name ?? childDetail.school)} />
-                  <InfoRow icon={<Clock className="w-4 h-4" />} label="Criado em" value={fmtDateBR(childDetail.createdAt)} />
+                {/* Header com foto e dados principais */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="md:col-span-1">
+                    <div className="aspect-[4/5] w-full overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
+                      <img
+                        src={childDetail.photoUrl ?? childDetail.images?.[0]?.framedUrl ?? childDetail.images?.[0]?.processedUrl ?? childDetail.images?.[0]?.originalUrl}
+                        alt={childDetail.name}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    {/* mini-galeria */}
+                    {Array.isArray(childDetail.images) && childDetail.images.length > 0 && (
+                      <div className="mt-3 grid grid-cols-4 gap-2">
+                        {['framedUrl','processedUrl','originalUrl','layoutUrl'].map((k) => {
+                          const first = childDetail.images[0];
+                          const url = first?.[k];
+                          if (!url) return null;
+                          return (
+                            <ImageThumb key={k} url={url} label={k.replace('Url','')} />
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <KV label="Nome" value={labelOrDash(childDetail.name)} />
+                      <div className="flex items-center gap-2">
+                        <KV label="ID Público" value={labelOrDash(childDetail.publicId)} />
+                        <CopyButton text={String(childDetail.publicId ?? '')} />
+                      </div>
+                      <KV label="Nascimento" value={fmtDateBR(childDetail.birthDate)} />
+                      <KV label="Idade (calc.)" value={childDetail.age ? `${childDetail.age} anos` : '—'} />
+                      <KV label="Categoria" value={labelOrDash(childDetail.category)} />
+                      <KV label="Presente desejado" value={labelOrDash(childDetail.wantedGift)} />
+                      <KV label="Criado em" value={fmtDateBR(childDetail.createdAt)} />
+                      <KV label="Atualizado em" value={fmtDateBR(childDetail.updatedAt)} />
+                    </div>
+
+                    {/* Localização */}
+                    <SectionTitle>Localização</SectionTitle>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <KV label="Cidade" value={labelOrDash(childDetail.city?.name ?? childDetail.cityName)} />
+                      <KV label="UF" value={labelOrDash(childDetail.city?.state)} />
+                      <KV label="Comunidade" value={labelOrDash(childDetail.community?.name)} />
+                    </div>
+
+                    {/* Escola */}
+                    <SectionTitle>Escola</SectionTitle>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <KV label="Nome" value={labelOrDash(childDetail.school?.name ?? childDetail.schoolLegacy)} />
+                      <KV label="Código" value={labelOrDash(childDetail.school?.publicId)} />
+                      <KV label="Endereço" value={labelOrDash(childDetail.school?.address)} />
+                    </div>
+                  </div>
                 </div>
 
-                {Array.isArray(childDetail.sponsorships) && childDetail.sponsorships.length > 0 && (
-                  <div className="mt-4">
-                    <h4 className="text-sm font-semibold text-gray-900 mb-2">Apadrinhamentos</h4>
+                {/* Apadrinhamentos */}
+                <div>
+                  <SectionTitle>Apadrinhamentos</SectionTitle>
+                  {Array.isArray(childDetail.sponsorships) && childDetail.sponsorships.length > 0 ? (
                     <div className="space-y-2">
                       {childDetail.sponsorships.map((s: any) => (
-                        <div key={s.id} className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                          <div className="flex flex-wrap gap-x-4 gap-y-1">
-                            <span><b>Status:</b> {s.status}</span>
+                        <div
+                          key={s.id}
+                          className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-gray-50"
+                        >
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
+                            <span><b>Status:</b> <Badge>{s.status}</Badge></span>
                             <span><b>Início:</b> {fmtDateBR(s.startDate)}</span>
                             <span><b>Fim:</b> {fmtDateBR(s.endDate)}</span>
-                            {s.sponsor?.name && <span><b>Padrinho:</b> {s.sponsor.name}</span>}
+                            {s.campaignId && (
+                              <a
+                                href={`/admin/campaigns/${s.campaignId}`}
+                                className="underline underline-offset-4 text-blue-700 hover:text-blue-900"
+                              >
+                                abrir campanha
+                              </a>
+                            )}
+                          </div>
+                          {s.sponsorId && (
+                            <button
+                              onClick={() => openSponsor(s.sponsorId)}
+                              className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
+                              title="Ver padrinho"
+                            >
+                              Ver padrinho
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">Nenhum apadrinhamento encontrado.</p>
+                  )}
+                </div>
+
+                {/* Composição (JSON) */}
+                {Array.isArray(childDetail.images) && childDetail.images[0]?.Config && (
+                  <details className="group rounded-xl border border-gray-200 bg-white">
+                    <summary className="cursor-pointer select-none px-4 py-3 flex items-center justify-between">
+                      <span className="font-semibold text-gray-900">Composição da Imagem (JSON)</span>
+                      <span className="text-xs text-gray-500 group-open:hidden">clicar para abrir</span>
+                      <span className="text-xs text-gray-500 hidden group-open:inline">clicar para fechar</span>
+                    </summary>
+                    <div className="px-4 pb-4">
+                      <pre className="max-h-80 overflow-auto text-xs bg-gray-50 border border-gray-200 rounded-lg p-3">
+      {JSON.stringify(childDetail.images[0].Config, null, 2)}
+                      </pre>
+                    </div>
+                  </details>
+                )}
+
+                {/* Metadados de imagem */}
+                {Array.isArray(childDetail.images) && childDetail.images.length > 0 && (
+                  <div>
+                    <SectionTitle>Imagens (1ª versão)</SectionTitle>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                      {childDetail.images.map((im: any) => (
+                        <div key={im.id} className="rounded-lg border border-gray-200 p-3 bg-white">
+                          <div className="mb-2 flex items-center justify-between">
+                            <span className="text-sm font-medium text-gray-900">#{im.id.slice(-6)}</span>
+                            <Badge>{im.status ?? '—'}</Badge>
+                          </div>
+                          <div className="space-y-1 text-xs text-gray-600">
+                            <div><b>Campanha:</b> {im.campaignId ?? '—'}</div>
+                            <div><b>Created:</b> {fmtDateBR(im.createdAt)}</div>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              {im.framedUrl && <LinkPill href={im.framedUrl}>framed</LinkPill>}
+                              {im.processedUrl && <LinkPill href={im.processedUrl}>processed</LinkPill>}
+                              {im.originalUrl && <LinkPill href={im.originalUrl}>original</LinkPill>}
+                              {im.layoutUrl && <LinkPill href={im.layoutUrl}>layout</LinkPill>}
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -672,11 +849,13 @@ export default function AdminSponsorshipsPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <InfoRow icon={<User className="w-4 h-4" />} label="Nome" value={labelOrDash(sponsorDetail.name)} />
                   <InfoRow icon={<Mail className="w-4 h-4" />} label="E-mail" value={labelOrDash(sponsorDetail.email)} />
-                  <InfoRow icon={<Phone className="w-4 h-4" />} label="Telefone" value={labelOrDash(sponsorDetail.phone ?? sponsorDetail.mobile)} />
-                  <InfoRow icon={<Hash className="w-4 h-4" />} label="Documento" value={labelOrDash(sponsorDetail.document ?? sponsorDetail.cpfCnpj)} />
+                  {/* 
+                  <InfoRow icon={<Phone className="w-4 h-4" />} label="Telefone" value={labelOrDash(sponsorDetail.profile.phone ?? sponsorDetail.mobile)} />
+                  <InfoRow icon={<Hash className="w-4 h-4" />} label="Documento" value={labelOrDash(sponsorDetail.profile.document ?? sponsorDetail.cpfCnpj)} />
+                  */}
                   <InfoRow icon={<MapPin className="w-4 h-4" />} label="Endereço" value={labelOrDash(
                     sponsorDetail.address
-                      ? `${sponsorDetail.address.street ?? ''} ${sponsorDetail.address.number ?? ''} ${sponsorDetail.address.city ?? ''}`.trim()
+                      ? `${sponsorDetail.address ?? ''} ${sponsorDetail.city ?? ''}`.trim()
                       : sponsorDetail.city ? `${sponsorDetail.city} - ${sponsorDetail.state ?? ''}` : undefined
                   )} />
                   <InfoRow icon={<Clock className="w-4 h-4" />} label="Criado em" value={fmtDateBR(sponsorDetail.createdAt)} />

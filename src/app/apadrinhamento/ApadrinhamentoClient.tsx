@@ -135,7 +135,8 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             description: c.description,
             // 🔸 prioriza preview dinâmico; se falhar, backend/edge responde erro e a imagem não carrega,
             // mas mantemos também o legado como fallback (se quiser trocar ordem, fique à vontade)
-            photoUrl: previewUrl || c.media?.[0]?.framedUrl || c.media?.[0]?.processedUrl || c.photoUrl || undefined,
+            //photoUrl: previewUrl || c.media?.[0]?.framedUrl || c.media?.[0]?.processedUrl || c.photoUrl || undefined,
+            photoUrl: c.photoUrl,
             media: c.media,
             sponsorshipStatus: status,
           };
@@ -203,7 +204,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       const matchesCidade = !filtros.cidade || nomeCidade === filtros.cidade;
       const matchesEscola = !filtros.escola || child.school === filtros.escola;
       const matchesCategoria = !filtros.categoria || child.category === filtros.categoria;
-      const isIndisp = ['ACTIVE', 'PENDING'].includes(child.sponsorshipStatus);
+      const isIndisp = ['COMPLETED', 'PENDING'].includes(child.sponsorshipStatus);
       const matchesStatus =
         !filtros.status ||
         (filtros.status === 'disponivel' && !isIndisp) ||
@@ -383,7 +384,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
                 escola: child.school ?? '',
                 categoria: child.category ?? '',
                 descricao: child.description ?? '',
-                apadrinhado: ['ACTIVE', 'PENDING'].includes(child.sponsorshipStatus),
+                apadrinhado: ['COMPLETED', 'PENDING'].includes(child.sponsorshipStatus),
                 foto: child.photoUrl ?? '',
                 status: child.sponsorshipStatus,
               }}
