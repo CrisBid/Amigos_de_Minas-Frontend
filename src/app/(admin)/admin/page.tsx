@@ -499,6 +499,7 @@ export default function AdminDashboard() {
         </div>
 
         {/* Quick Actions */}
+        {/* 
         <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <a href="/admin/children/new" className="group p-4 bg-white/50 hover:bg-white/80 rounded-xl border border-white/20 hover:shadow-lg transition-all duration-200">
             <div className="flex items-center gap-3">
@@ -536,6 +537,7 @@ export default function AdminDashboard() {
             </div>
           </a>
         </div>
+        */}
       </div>
     </div>
   );

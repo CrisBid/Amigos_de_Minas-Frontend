@@ -10,12 +10,13 @@ export async function POST(req: NextRequest) {
 
   // corpo JSON vindo do front
   const body = await req.text(); // mantém JSON bruto
-
+  
   const res = await fetch(`${API}/children/bulk/commit`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'content-type': 'application/json',
+      accept: 'application/json',
     },
     body,
     cache: 'no-store',

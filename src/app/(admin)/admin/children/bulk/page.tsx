@@ -829,7 +829,7 @@ export default function BulkChildrenWizardPage() {
       const uploadOne = async (pid: string, file: File) => {
         const fd = new FormData();
         fd.append('file', file);
-        fd.append('config', JSON.stringify(composeCfg)); // ESSENCIAL: salva em ChildImage.Config
+        fd.append('Config', JSON.stringify(composeCfg)); // ESSENCIAL: salva em ChildImage.Config
 
         const qs = new URLSearchParams();
         qs.set('campaignId', campaignId);
