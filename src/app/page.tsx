@@ -1,4 +1,5 @@
 import { Metadata } from 'next'
+import { redirect } from 'next/navigation'
 import Hero from '@/components/Home/Hero'
 import About from '@/components/Home/About'
 import Projects from '@/components/Home/Projects'
@@ -13,6 +14,7 @@ export const metadata = {
 }
 
 export default function Home() {
+  redirect('/apadrinhamento')
   return (
     <main className="min-h-screen bg-white">
       <Hero />
