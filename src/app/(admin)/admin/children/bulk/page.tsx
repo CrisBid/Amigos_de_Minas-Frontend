@@ -1566,7 +1566,7 @@ function downloadDataUrl(dataUrl: string, filename: string) {
   a.click();
 }
 
-export function LayoutComposerModal({
+function LayoutComposerModal({
   layoutUrl, value, onChange, onClose,
 }: {
   layoutUrl: string;
