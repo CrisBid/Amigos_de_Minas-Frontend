@@ -112,16 +112,16 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         if (!res.ok) throw new Error(await safeErrMsg(res));
         const data = await res.json();
         const mapped: Child[] = (data ?? []).map((c: any) => {
-          // sponsorship da campanha atual
-          const rel = Array.isArray(c.sponsorships)
-            ? c.sponsorships.find(
-                (s: any) => s.campaignId === campaignId && (s.status === 'ACTIVE' || s.status === 'PENDING')
-              )
-            : null;
+        const rel = Array.isArray(c.sponsorships)
+          ? c.sponsorships.find(
+              (s: any) => s.campaignId === campaignId && (s.status === 'ACTIVE' || s.status === 'PENDING')
+            )
+          : null;
 
           const status: SponsorshipStatus = rel?.status ?? 'NONE';
-          const mediaUrl = c.media?.[0]?.framedUrl ?? c.media?.[0]?.processedUrl ?? null;
-          const photoUrl = mediaUrl ?? c.photoUrl ?? null;
+          const previewUrl = `/api/admin/children/${encodeURIComponent(c.id)}/preview?campaignId=${encodeURIComponent(
+            campaignId
+          )}&format=webp&q=82`;
 
           return {
             id: c.id,
@@ -133,7 +133,9 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             category: c.category ?? c.categoria,
             wantedGift: c.wantedGift,
             description: c.description,
-            photoUrl: photoUrl ?? undefined,
+            // 🔸 prioriza preview dinâmico; se falhar, backend/edge responde erro e a imagem não carrega,
+            // mas mantemos também o legado como fallback (se quiser trocar ordem, fique à vontade)
+            photoUrl: previewUrl || c.media?.[0]?.framedUrl || c.media?.[0]?.processedUrl || c.photoUrl || undefined,
             media: c.media,
             sponsorshipStatus: status,
           };

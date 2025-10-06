@@ -28,7 +28,14 @@ export default function ChildCard({
     <div className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition bg-white">
       <div className="aspect-[1/1] bg-gray-100 relative">
         {child.foto ? (
-          <Image unoptimized src={child.foto} alt={child.nome} fill className="object-cover" />
+          <Image
+            unoptimized
+            src={child.foto}
+            alt={child.nome}
+            fill
+            className="object-cover"
+            onError={(e) => { (e.currentTarget as any).style.display = 'none'; }}
+          />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-gray-400">Sem foto</div>
         )}

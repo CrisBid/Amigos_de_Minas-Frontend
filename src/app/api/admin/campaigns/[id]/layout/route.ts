@@ -1,4 +1,3 @@
-// src/app/api/admin/campaigns/[id]/layout/route.ts
 import { getToken } from 'next-auth/jwt';
 import { cookies } from 'next/headers';
 

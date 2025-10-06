@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Upload,
   ClipboardPaste,
@@ -18,9 +18,9 @@ import {
   Download,
 } from 'lucide-react';
 
-// =====================
-// Tipos
-// =====================
+/* =====================
+   Tipos
+===================== */
 
 type DraftChild = {
   publicId: number | string;
@@ -46,9 +46,96 @@ type Option = { id: string; name: string; state?: string | null };
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
-// =====================
-// Componente principal
-// =====================
+type CampaignFrame = {
+  id: string;
+  url: string;
+  key: string;
+  name?: string | null;
+  config?: any;
+  active?: boolean;
+};
+
+/* ===== Novo modelo de composição ===== */
+
+type Gravity =
+  | 'north' | 'northeast' | 'east' | 'southeast'
+  | 'south' | 'southwest' | 'west' | 'northwest' | 'center';
+
+type PhotoRect = {
+  x: number; y: number; width: number; height: number;
+  fit: 'cover' | 'contain' | 'fill' | 'inside' | 'outside';
+  gravity: Gravity;
+  cornerRadius: number;
+  scale?: number;
+  offsetX?: number;
+  offsetY?: number;
+};
+
+type TextSpec = {
+  id: string;
+  template: string;
+  x: number;
+  y: number;
+  maxWidth: number;
+  align: 'left'|'center'|'right';
+  font: { family: string; size: number; weight: number };
+  fill: string;
+  uppercase?: boolean;
+  letterSpacing?: number;
+  lineHeight?: number;
+};
+
+type ComposeConfig = {
+  version: number;
+  canvas: { width: number; height: number; background?: null | { r:number; g:number; b:number; alpha:number } };
+  layout: { resizeToCanvas: boolean; opacity?: number; onTop?: boolean }; // <— novo onTop
+  photoRect: PhotoRect;
+  texts: TextSpec[];
+};
+
+/* ===== Defaults ===== */
+
+const DEFAULT_CONFIG: ComposeConfig = {
+  version: 2,
+  canvas: { width: 1080, height: 1350, background: null },
+  layout: { resizeToCanvas: true, opacity: 1, onTop: true },
+  photoRect: {
+    x: 60, y: 200, width: 960, height: 960,
+    fit: 'cover', gravity: 'center', cornerRadius: 0,
+    scale: 1, offsetX: 0, offsetY: 0
+  },
+  texts: [
+    {
+      id: 'name',
+      template: '{name}',
+      x: 72, y: 140, maxWidth: 936,
+      align: 'center',
+      font: { family: 'Inter, sans-serif', size: 54, weight: 800 },
+      fill: '#0f172a',
+      uppercase: true, letterSpacing: 0, lineHeight: 1.1
+    },
+    {
+      id: 'meta',
+      template: 'ID {publicId} • {age} • {cityName}',
+      x: 72, y: 1180, maxWidth: 936,
+      align: 'center',
+      font: { family: 'Inter, sans-serif', size: 40, weight: 700 },
+      fill: '#111827'
+    },
+    {
+      id: 'gift',
+      template: '{wantedGift}',
+      x: 72, y: 1240, maxWidth: 936,
+      align: 'center',
+      font: { family: 'Inter, sans-serif', size: 34, weight: 600 },
+      fill: '#374151'
+    }
+  ]
+};
+
+/* =====================
+   Componente principal
+===================== */
 
 export default function BulkChildrenWizardPage() {
   const [step, setStep] = useState<Step>(1);
@@ -74,10 +161,16 @@ export default function BulkChildrenWizardPage() {
   const [drafts, setDrafts] = useState<DraftChild[]>([]);
   const [localErrors, setLocalErrors] = useState<string[]>([]);
 
-  // Step 3: layout
+  // Step 3: layouts e config
   const [layoutFile, setLayoutFile] = useState<File | null>(null);
   const [layoutUploadedUrl, setLayoutUploadedUrl] = useState<string | null>(null);
   const [uploadingLayout, setUploadingLayout] = useState(false);
+
+  const [frames, setFrames] = useState<CampaignFrame[]>([]);
+  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
+
+  // Config de composição (que vai junto no upload da foto)
+  const [composeCfg, setComposeCfg] = useState<ComposeConfig>(DEFAULT_CONFIG);
 
   // Step 4: fotos
   const [files, setFiles] = useState<File[]>([]);
@@ -92,9 +185,9 @@ export default function BulkChildrenWizardPage() {
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<any>(null);
 
-  // =====================
-  // Helpers
-  // =====================
+  /* =====================
+     Helpers
+  ===================== */
 
   const normalizeName = (s?: string | null) =>
     (s ?? '')
@@ -143,7 +236,6 @@ export default function BulkChildrenWizardPage() {
   };
 
   const parseBrazilianDate = (s: string): string | null => {
-    // espera formato DD/MM/YYYY
     const parts = s.split('/');
     if (parts.length !== 3) return null;
     const [ddStr, mmStr, yyyyStr] = parts;
@@ -153,9 +245,8 @@ export default function BulkChildrenWizardPage() {
     if (!dd || !mm || !yyyy) return null;
     const date = new Date(yyyy, mm - 1, dd);
     if (isNaN(date.getTime())) return null;
-    // garante coerência
     if (date.getFullYear() !== yyyy || date.getMonth() + 1 !== mm || date.getDate() !== dd) return null;
-    return date.toISOString().split('T')[0]; // YYYY-MM-DD
+    return date.toISOString().split('T')[0];
   };
 
   const formatBrazilianDate = (iso?: string | null) => {
@@ -177,9 +268,9 @@ export default function BulkChildrenWizardPage() {
     }));
   };
 
-  // =====================
-  // Carregar opções Passo 1
-  // =====================
+  /* =====================
+     Carregar opções Passo 1
+  ===================== */
 
   useEffect(() => {
     const loadCities = async () => {
@@ -267,9 +358,45 @@ export default function BulkChildrenWizardPage() {
     loadSchools();
   }, [communityId]);
 
-  // =====================
-  // Reações Passo 2
-  // =====================
+  /* =====================
+     Layouts + carregar frames da campanha
+  ===================== */
+
+  useEffect(() => {
+    const loadFrames = async () => {
+      if (!campaignId) {
+        setFrames([]);
+        setSelectedFrameId(null);
+        setLayoutUploadedUrl(null);
+        // ao trocar de campanha, resetamos o config para default
+        setComposeCfg(DEFAULT_CONFIG);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/admin/campaigns/${campaignId}/layouts`, {
+          cache: 'no-store',
+          credentials: 'include',
+          headers: { accept: 'application/json' },
+        });
+        if (!res.ok) return;
+        const list: CampaignFrame[] = await res.json();
+        setFrames(list);
+        const active = list.find((f) => f.active);
+        setSelectedFrameId(active?.id ?? null);
+        setLayoutUploadedUrl(active?.url ?? null);
+
+        // se o frame ativo tiver config, mescla no nosso composeCfg
+        if (active?.config) {
+          setComposeCfg((old) => deepMerge(old, active.config));
+        }
+      } catch {}
+    };
+    loadFrames();
+  }, [campaignId]);
+
+  /* =====================
+     Reações Passo 2 (planilha)
+  ===================== */
 
   useEffect(() => {
     if (!rawText.trim()) {
@@ -302,9 +429,9 @@ export default function BulkChildrenWizardPage() {
     setDrafts((prev) => applyCity(prev));
   }, [cityId, cities]);
 
-  // =====================
-  // Upload de layout (Passo 3)
-  // =====================
+  /* =====================
+     Upload de layout (Passo 3)
+  ===================== */
 
   const doUploadLayout = async () => {
     if (!campaignId || !layoutFile) return;
@@ -312,32 +439,42 @@ export default function BulkChildrenWizardPage() {
     try {
       const fd = new FormData();
       fd.append('file', layoutFile);
-      const res = await fetch(`/api/admin/campaigns/${campaignId}/layout`, {
+      fd.append('name', layoutFile.name);
+      fd.append('active', 'true');
+      // envia nosso config atual como sugestão para o layout
+      fd.append('config', JSON.stringify(composeCfg));
+
+      const res = await fetch(`/api/admin/campaigns/${campaignId}/layouts`, {
         method: 'POST',
         body: fd,
         credentials: 'include',
         cache: 'no-store',
       });
-      if (!res.ok) throw new Error('Falha ao enviar layout');
-      const json = await res.json().catch(() => ({}));
-      setLayoutUploadedUrl(json?.url ?? '(enviado)');
+      if (!res.ok) throw new Error(await res.text());
+      const created = await res.json();
+      const r2 = await fetch(`/api/admin/campaigns/${campaignId}/layouts`, { cache: 'no-store', credentials: 'include' });
+      const list = await r2.json();
+      setFrames(list);
+      setSelectedFrameId(created?.id ?? null);
+      setLayoutUploadedUrl(created?.url ?? null);
     } catch (e: any) {
       alert(e?.message || 'Erro no upload do layout');
-      setLayoutUploadedUrl(null);
     } finally {
       setUploadingLayout(false);
     }
   };
 
   const layoutSrc = useMemo(() => {
+    const sel = frames.find((f) => f.id === selectedFrameId);
+    if (sel?.url) return sel.url;
     if (layoutUploadedUrl) return layoutUploadedUrl;
     if (layoutFile) return URL.createObjectURL(layoutFile);
     return null;
-  }, [layoutUploadedUrl, layoutFile]);
+  }, [frames, selectedFrameId, layoutUploadedUrl, layoutFile]);
 
-  // =====================
-  // Fotos (Passo 4): auto-match
-  // =====================
+  /* =====================
+     Fotos (Passo 4): auto-match
+  ===================== */
 
   useEffect(() => {
     if (files.length === 0 || drafts.length === 0) {
@@ -384,9 +521,9 @@ export default function BulkChildrenWizardPage() {
   const unmatchedCount = useMemo(() => Object.values(photoMap).filter((v) => v === null).length, [photoMap]);
   const canGoStep5 = Object.keys(photoMap).length > 0;
 
-  // =====================
-  // Build drafts a partir da tabela (usa data BR)
-  // =====================
+  /* =====================
+     Build drafts a partir da tabela (usa data BR)
+  ===================== */
 
   const buildDrafts = (
     hdrs: string[],
@@ -446,11 +583,37 @@ export default function BulkChildrenWizardPage() {
     return { drafts: ds, errors: errs };
   };
 
-  // =====================
-  // Composição de imagem (Passo 5)
-  // =====================
+  /* =====================
+     Composição de imagem client-side (prévias)
+     Agora: LAYOUT como base + foto dentro do photoRect
+  ===================== */
 
-  const composeOne = async (childFile: File, layoutSrc: string, size = { w: 1080, h: 1350 }) => {
+  // helper: idade simples
+  function calcAgeFromISO(iso?: string | null) {
+    if (!iso) return '';
+    const [y, m, d] = iso.split('-').map(n => parseInt(n,10));
+    if (!y || !m || !d) return '';
+    const birth = new Date(y, m-1, d);
+    const now = new Date();
+    let age = now.getFullYear() - birth.getFullYear();
+    const mm = now.getMonth() - birth.getMonth();
+    if (mm < 0 || (mm === 0 && now.getDate() < birth.getDate())) age--;
+    return `${age} anos`;
+  }
+
+  const composePreviewBrowser = async (
+    childFile: File,
+    layoutSrc: string,
+    cfg: ComposeConfig,
+    sample: { // <<< agora passamos os dados da criança
+      name: string;
+      publicId: string;
+      age: string;
+      wantedGift: string;
+      cityName: string;
+      communityName?: string;
+    }
+  ) => {
     const loadImg = (src: string) =>
       new Promise<HTMLImageElement>((resolve, reject) => {
         const img = new Image();
@@ -462,28 +625,128 @@ export default function BulkChildrenWizardPage() {
 
     const childSrc = URL.createObjectURL(childFile);
     try {
-      const [childImg, layoutImg] = await Promise.all([loadImg(childSrc), loadImg(layoutSrc)]);
+      const [photoImg, layoutImg] = await Promise.all([loadImg(childSrc), loadImg(layoutSrc)]);
+
+      const W = cfg.canvas?.width ?? layoutImg.width ?? 1080;
+      const H = cfg.canvas?.height ?? layoutImg.height ?? 1350;
+
       const canvas = document.createElement('canvas');
-      canvas.width = size.w;
-      canvas.height = size.h;
+      canvas.width = W;
+      canvas.height = H;
       const ctx = canvas.getContext('2d')!;
+      ctx.clearRect(0,0,W,H);
 
-      // cover
-      const coverDraw = (img: HTMLImageElement) => {
-        const { width: W, height: H } = canvas;
-        const iw = img.width,
-          ih = img.height;
-        const r = Math.max(W / iw, H / ih);
-        const nw = iw * r,
-          nh = ih * r;
-        const dx = (W - nw) / 2;
-        const dy = (H - nh) / 2;
-        ctx.drawImage(img, dx, dy, nw, nh);
+      // fundo opcional
+      if (cfg.canvas?.background) {
+        const bg = cfg.canvas.background;
+        ctx.fillStyle = `rgba(${bg.r},${bg.g},${bg.b},${bg.alpha ?? 1})`;
+        ctx.fillRect(0,0,W,H);
+      }
+
+      // 1) foto dentro de photoRect
+      const pr = cfg.photoRect;
+      const dw = pr.width, dh = pr.height;
+      const sw = photoImg.width, sh = photoImg.height;
+      let r = 1;
+      switch (pr.fit) {
+        case 'contain': r = Math.min(dw / sw, dh / sh); break;
+        case 'fill': r = Math.max(dw / sw, dh / sh); break;
+        case 'inside': r = Math.min(dw / sw, dh / sh); break;
+        case 'outside': r = Math.max(dw / sw, dh / sh); break;
+        default: r = Math.max(dw / sw, dh / sh); // cover
+      }
+      if (typeof pr.scale === 'number' && pr.scale !== 1) r *= pr.scale;
+      const nw = Math.round(sw * r);
+      const nh = Math.round(sh * r);
+      const ox = Math.round((dw - nw) / 2) + (pr.offsetX || 0);
+      const oy = Math.round((dh - nh) / 2) + (pr.offsetY || 0);
+      const dx = pr.x + ox;
+      const dy = pr.y + oy;
+
+      if (pr.cornerRadius && pr.cornerRadius > 0) {
+        ctx.save();
+        roundRect(ctx, pr.x, pr.y, pr.width, pr.height, pr.cornerRadius);
+        ctx.clip();
+        ctx.drawImage(photoImg, dx, dy, nw, nh);
+        ctx.restore();
+      } else {
+        ctx.drawImage(photoImg, dx, dy, nw, nh);
+      }
+
+      // 2) layout por cima (com opacidade e resize)
+      const layoutOpacity = Math.max(0, Math.min(1, cfg.layout?.opacity ?? 1));
+      if (layoutOpacity < 1) { ctx.save(); ctx.globalAlpha = layoutOpacity; }
+      if (cfg.layout?.resizeToCanvas) ctx.drawImage(layoutImg, 0, 0, W, H);
+      else ctx.drawImage(layoutImg, 0, 0);
+      if (layoutOpacity < 1) ctx.restore();
+
+      // 3) textos por cima, com substituição + wrap
+      const drawWrappedText = (t: TextSpec) => {
+        let raw = t.template ?? '';
+        raw = raw
+          .replace(/\{name\}/g, sample.name ?? '')
+          .replace(/\{publicId\}/g, sample.publicId ?? '')
+          .replace(/\{age\}/g, sample.age ?? '')
+          .replace(/\{wantedGift\}/g, sample.wantedGift ?? '')
+          .replace(/\{cityName\}/g, sample.cityName ?? '')
+          .replace(/\{communityName\}/g, sample.communityName ?? '');
+        if (t.uppercase) raw = raw.toUpperCase();
+
+        ctx.save();
+        // letterSpacing manual simples: desenhar char a char quando informado
+        const fontSize = t.font?.size ?? 42;
+        const lineH = (t.lineHeight ?? 1.1) * fontSize;
+        ctx.font = `${t.font?.weight ?? 700} ${fontSize}px ${t.font?.family ?? 'Inter, system-ui, sans-serif'}`;
+        ctx.fillStyle = t.fill ?? '#000';
+        ctx.textAlign = (t.align as CanvasTextAlign) ?? 'left';
+        ctx.textBaseline = 'top';
+
+        const maxW = t.maxWidth ?? W;
+        const words = raw.split(/\s+/);
+        let line = '';
+        let y = t.y;
+
+        const measure = (s: string) => {
+          if ((t.letterSpacing ?? 0) === 0) return ctx.measureText(s).width;
+          // aproximação: soma width + spacing*(len-1)
+          const base = ctx.measureText(s).width;
+          const extra = (s.length - 1) * (t.letterSpacing ?? 0);
+          return base + extra;
+        };
+
+        const drawLine = (s: string) => {
+          let x = t.x;
+          if (t.align === 'center') x = t.x + maxW / 2;
+          if (t.align === 'right') x = t.x + maxW;
+          if ((t.letterSpacing ?? 0) === 0) {
+            ctx.fillText(s, x, y, maxW);
+          } else {
+            // desenha com espaçamento de letras
+            let cx = x;
+            if (t.align === 'center') cx = x - measure(s) / 2;
+            if (t.align === 'right') cx = x - measure(s);
+            for (let i = 0; i < s.length; i++) {
+              const ch = s[i];
+              ctx.fillText(ch, cx, y);
+              cx += ctx.measureText(ch).width + (t.letterSpacing ?? 0);
+            }
+          }
+        };
+
+        for (const w of words) {
+          const test = line ? `${line} ${w}` : w;
+          if (measure(test) <= maxW) line = test;
+          else {
+            if (line) drawLine(line);
+            y += lineH;
+            line = w;
+          }
+        }
+        if (line) drawLine(line);
+        ctx.restore();
       };
-      coverDraw(childImg);
 
-      // layout por cima
-      ctx.drawImage(layoutImg, 0, 0, canvas.width, canvas.height);
+      (cfg.texts || []).forEach(drawWrappedText);
 
       const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
       URL.revokeObjectURL(childSrc);
@@ -494,35 +757,51 @@ export default function BulkChildrenWizardPage() {
     }
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!layoutSrc) {
-        setComposed({});
-        return;
-      }
-      setComposing(true);
-      const out: Record<string, string> = {};
-      const entries = Object.entries(photoMap).filter(([, f]) => !!f) as [string, File][];
-      for (const [pid, file] of entries) {
-        try {
-          const img = await composeOne(file, layoutSrc);
-          if (!cancelled) out[pid] = img;
-        } catch {
-          // ignora falhas individuais
-        }
-      }
-      if (!cancelled) setComposed(out);
-      setComposing(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [photoMap, layoutSrc]);
 
-  // =====================
-  // Commit (via rotas Next)
-  // =====================
+  function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+    const radius = Math.min(r, Math.min(w, h) / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.arcTo(x + w, y, x + w, y + h, radius);
+    ctx.arcTo(x + w, y + h, x, y + h, radius);
+    ctx.arcTo(x, y + h, x, y, radius);
+    ctx.arcTo(x, y, x + w, y, radius);
+    ctx.closePath();
+  }
+
+  useEffect(() => {
+  let cancelled = false;
+  (async () => {
+    if (!layoutSrc) { setComposed({}); return; }
+    setComposing(true);
+    const out: Record<string, string> = {};
+    const entries = Object.entries(photoMap).filter(([, f]) => !!f) as [string, File][];
+
+    for (const [pid, file] of entries) {
+      try {
+        const d = drafts.find(x => String(x.publicId) === pid)!;
+        const sample = {
+          name: d.name ?? '',
+          publicId: String(d.publicId ?? ''),
+          age: calcAgeFromISO(d.birthDate),
+          wantedGift: d.wantedGift ?? '',
+          cityName: d.cityName ?? '',
+          communityName: '',
+        };
+        const img = await composePreviewBrowser(file, layoutSrc, composeCfg, sample);
+        if (!cancelled) out[pid] = img;
+      } catch {}
+    }
+    if (!cancelled) setComposed(out);
+    setComposing(false);
+  })();
+  return () => { cancelled = true; };
+}, [photoMap, layoutSrc, composeCfg, drafts]);
+
+
+  /* =====================
+     Commit (via rotas Next)
+  ===================== */
 
   const doCommit = async () => {
     setCommitting(true);
@@ -546,15 +825,17 @@ export default function BulkChildrenWizardPage() {
       const result = await res.json().catch(() => ({}));
       setCommitResult(result);
 
-      // Upload das fotos por publicId
+      // Upload das fotos por publicId (com Config)
       const uploadOne = async (pid: string, file: File) => {
         const fd = new FormData();
         fd.append('file', file);
+        fd.append('config', JSON.stringify(composeCfg)); // ESSENCIAL: salva em ChildImage.Config
 
-        // adiciona campaignId na query para atender o backend
-        const url = `/api/admin/children/${encodeURIComponent(pid)}/photo?campaignId=${encodeURIComponent(campaignId)}`;
+        const qs = new URLSearchParams();
+        qs.set('campaignId', campaignId);
+        if (selectedFrameId) qs.set('layoutId', selectedFrameId);
 
-        const r = await fetch(url, {
+        const r = await fetch(`/api/admin/children/${encodeURIComponent(pid)}/photo?${qs.toString()}`, {
           method: 'POST',
           body: fd,
           credentials: 'include',
@@ -578,16 +859,16 @@ export default function BulkChildrenWizardPage() {
     }
   };
 
-  // =====================
-  // UI
-  // =====================
+  /* =====================
+     UI
+  ===================== */
 
   const StepIndicator = () => (
     <div className="flex items-center gap-3 mb-6">
       {[
         { n: 1, label: 'Contexto' },
         { n: 2, label: 'Colar tabela' },
-        { n: 3, label: 'Layout' },
+        { n: 3, label: 'Layout & Config' },
         { n: 4, label: 'Fotos' },
         { n: 5, label: 'Conferência' },
       ].map((s) => (
@@ -605,6 +886,8 @@ export default function BulkChildrenWizardPage() {
       ))}
     </div>
   );
+
+  const [showEditor, setShowEditor] = useState(false);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
@@ -728,8 +1011,7 @@ export default function BulkChildrenWizardPage() {
                   onChange={(e) => setRawText(e.target.value)}
                 />
                 <p className="text-xs text-gray-500 mt-2 flex items-center gap-2">
-                  <ClipboardPaste className="w-4 h-4" /> Dica: TAB (TSV) do Excel/Sheets é reconhecido automaticamente. Datas devem
-                  estar no formato DD/MM/AAAA.
+                  <ClipboardPaste className="w-4 h-4" /> Dica: TAB (TSV) do Excel/Sheets é reconhecido automaticamente. Datas devem estar no formato DD/MM/AAAA.
                 </p>
               </div>
 
@@ -757,9 +1039,7 @@ export default function BulkChildrenWizardPage() {
                         >
                           <option value="">— (ignorar)</option>
                           {headers.map((h) => (
-                            <option key={h} value={h}>
-                              {h}
-                            </option>
+                            <option key={h} value={h}>{h}</option>
                           ))}
                         </select>
                       </div>
@@ -774,9 +1054,7 @@ export default function BulkChildrenWizardPage() {
                       <thead>
                         <tr className="bg-gray-50">
                           {headers.map((h) => (
-                            <th key={h} className="px-3 py-2 text-left font-semibold text-gray-700">
-                              {h}
-                            </th>
+                            <th key={h} className="px-3 py-2 text-left font-semibold text-gray-700">{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -784,9 +1062,7 @@ export default function BulkChildrenWizardPage() {
                         {rows.slice(0, 10).map((r, i) => (
                           <tr key={i}>
                             {r.map((c, j) => (
-                              <td key={j} className="px-3 py-2 text-gray-700">
-                                {c}
-                              </td>
+                              <td key={j} className="px-3 py-2 text-gray-700">{c}</td>
                             ))}
                           </tr>
                         ))}
@@ -839,12 +1115,12 @@ export default function BulkChildrenWizardPage() {
             </div>
           )}
 
-          {/* STEP 3: LAYOUT */}
+          {/* STEP 3: LAYOUT + CONFIG */}
           {step === 3 && (
             <div className="space-y-6">
               <div className="rounded-xl border border-gray-200 p-4 bg-white">
                 <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                  <LayoutTemplate className="w-5 h-5 text-blue-600" /> Upload do layout da campanha
+                  <LayoutTemplate className="w-5 h-5 text-blue-600" /> Layout da campanha
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="md:col-span-1">
@@ -855,24 +1131,223 @@ export default function BulkChildrenWizardPage() {
                       readOnly
                     />
                     <p className="text-xs text-gray-500 mt-1">Definida no passo 1.</p>
+
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Arquivo do layout</label>
+                      <input type="file" accept="image/*" onChange={(e) => setLayoutFile(e.target.files?.[0] || null)} />
+                      <div className="mt-3 flex items-center gap-3">
+                        <button
+                          disabled={!campaignId || !layoutFile || uploadingLayout}
+                          onClick={doUploadLayout}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                        >
+                          <Upload className="w-4 h-4" /> {uploadingLayout ? 'Enviando…' : 'Enviar layout'}
+                        </button>
+                        {layoutUploadedUrl && <span className="text-sm text-emerald-700">Enviado ✓ {layoutUploadedUrl}</span>}
+                      </div>
+                    </div>
                   </div>
+
                   <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Arquivo do layout</label>
-                    <input type="file" accept="image/*" onChange={(e) => setLayoutFile(e.target.files?.[0] || null)} />
-                    <div className="mt-3 flex items-center gap-3">
-                      <button
-                        disabled={!campaignId || !layoutFile || uploadingLayout}
-                        onClick={doUploadLayout}
-                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
-                      >
-                        <Upload className="w-4 h-4" /> {uploadingLayout ? 'Enviando…' : 'Enviar layout'}
-                      </button>
-                      {layoutUploadedUrl && <span className="text-sm text-emerald-700">Enviado ✓ {layoutUploadedUrl}</span>}
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2">Configuração da composição (padrão para as fotos)</h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                      <div>
+                        <label className="block text-xs text-gray-600">Canvas Largura</label>
+                        <input type="number" className="w-full border rounded px-2 py-1"
+                          value={composeCfg.canvas.width}
+                          onChange={(e)=> setComposeCfg(c => ({...c, canvas: {...c.canvas, width: parseInt(e.target.value||'1080',10)||1080}}))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">Canvas Altura</label>
+                        <input type="number" className="w-full border rounded px-2 py-1"
+                          value={composeCfg.canvas.height}
+                          onChange={(e)=> setComposeCfg(c => ({...c, canvas: {...c.canvas, height: parseInt(e.target.value||'1350',10)||1350}}))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">Layout - Canvas</label>
+                        <select className="w-full border rounded px-2 py-1"
+                          value={composeCfg.layout.resizeToCanvas ? '1' : '0'}
+                          onChange={(e)=> setComposeCfg(c => ({...c, layout: {...c.layout, resizeToCanvas: e.target.value==='1'}}))}
+                        >
+                          <option value="1">Esticar</option>
+                          <option value="0">Tamanho original</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">Opacidade Layout</label>
+                        <input type="number" min={0} max={1} step={0.05} className="w-full border rounded px-2 py-1"
+                          value={composeCfg.layout.opacity ?? 1}
+                          onChange={(e)=> setComposeCfg(c => ({...c, layout: {...c.layout, opacity: Math.max(0, Math.min(1, parseFloat(e.target.value)||1))}}))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div>
+                        <label className="block text-xs text-gray-600">PhotoRect X</label>
+                        <input type="number" className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.x}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, x: parseInt(e.target.value||'0',10)||0}}))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">PhotoRect Y</label>
+                        <input type="number" className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.y}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, y: parseInt(e.target.value||'0',10)||0}}))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">PhotoRect W</label>
+                        <input type="number" className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.width}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, width: parseInt(e.target.value||'1080',10)||1080}}))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">PhotoRect H</label>
+                        <input type="number" className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.height}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, height: parseInt(e.target.value||'1350',10)||1350}}))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">Corner Radius</label>
+                        <input type="number" className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.cornerRadius}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, cornerRadius: parseInt(e.target.value||'0',10)||0}}))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">Fit</label>
+                        <select className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.fit}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, fit: e.target.value as any}}))}
+                        >
+                          <option value="cover">cover</option>
+                          <option value="contain">contain</option>
+                          <option value="fill">fill</option>
+                          <option value="inside">inside</option>
+                          <option value="outside">outside</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">Gravity</label>
+                        <select className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.gravity}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, gravity: e.target.value as Gravity}}))}
+                        >
+                          {['north','northeast','east','southeast','south','southwest','west','northwest','center'].map(g=>(
+                            <option key={g} value={g}>{g}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">Scale</label>
+                        <input type="number" step={0.05} className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.scale ?? 1}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, scale: parseFloat(e.target.value)||1}}))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">Offset X</label>
+                        <input type="number" className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.offsetX ?? 0}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, offsetX: parseInt(e.target.value||'0',10)||0}}))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600">Offset Y</label>
+                        <input type="number" className="w-full border rounded px-2 py-1"
+                          value={composeCfg.photoRect.offsetY ?? 0}
+                          onChange={(e)=> setComposeCfg(c => ({...c, photoRect: {...c.photoRect, offsetY: parseInt(e.target.value||'0',10)||0}}))}
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
 
+              {frames.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="font-semibold text-gray-900 mb-3">Layouts desta campanha</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {frames.map((f) => (
+                      <div key={f.id} className={`border rounded-xl p-3 bg-white ${selectedFrameId === f.id ? 'ring-2 ring-blue-500' : ''}`}>
+                        <div className="aspect-[4/5] bg-gray-100 rounded-lg overflow-hidden mb-2">
+                          <img src={f.url} alt={f.name || 'Layout'} className="w-full h-full object-contain" />
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <input
+                            className="text-sm font-medium flex-1 mr-2 border border-gray-200 rounded px-2 py-1"
+                            defaultValue={f.name || ''}
+                            onBlur={async (e) => {
+                              const name = e.target.value.trim();
+                              await fetch(`/api/admin/campaign-frames/${f.id}`, {
+                                method: 'PATCH',
+                                headers: { 'content-type': 'application/json' },
+                                body: JSON.stringify({ name }),
+                              });
+                            }}
+                          />
+                          {f.active ? (
+                            <span className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700">Ativo</span>
+                          ) : (
+                            <button
+                              className="text-xs px-2 py-1 rounded bg-blue-600 text-white"
+                              onClick={async () => {
+                                await fetch(`/api/admin/campaign-frames/${f.id}/set-active`, { method: 'POST' });
+                                const r = await fetch(`/api/admin/campaigns/${campaignId}/layouts`, { cache: 'no-store' });
+                                const list = await r.json();
+                                setFrames(list);
+                                setSelectedFrameId(f.id);
+                              }}
+                            >
+                              Tornar ativo
+                            </button>
+                          )}
+                        </div>
+                        <div className="mt-2 flex items-center justify-between">
+                          <button
+                            className="text-xs px-2 py-1 rounded border border-gray-300"
+                            onClick={() => {
+                              setSelectedFrameId(f.id);
+                              if (f.config) setComposeCfg(c => deepMerge(c, f.config));
+                            }}
+                          >
+                            Usar nas prévias
+                          </button>
+                          <button
+                            className="text-xs px-2 py-1 rounded border border-red-300 text-red-700"
+                            onClick={async () => {
+                              if (!confirm('Excluir este layout?')) return;
+                              await fetch(`/api/admin/campaign-frames/${f.id}`, { method: 'DELETE' });
+                              const r = await fetch(`/api/admin/campaigns/${campaignId}/layouts`, { cache: 'no-store' });
+                              const list = await r.json();
+                              setFrames(list);
+                              if (selectedFrameId === f.id) setSelectedFrameId(null);
+                            }}
+                          >
+                            Excluir
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end">
+                <button
+                  disabled={!layoutSrc}
+                  onClick={() => setShowEditor(true)}
+                  className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-50"
+                >
+                  Personalizar texto e posicionamento
+                </button>
+              </div>
               <div className="flex items-center justify-between">
                 <button
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-700"
@@ -900,8 +1375,7 @@ export default function BulkChildrenWizardPage() {
                 <div className="flex items-center gap-3">
                   <input type="file" multiple accept="image/*" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
                   <p className="text-xs text-gray-500">
-                    Dica: nomeie os arquivos como <strong>123_foto.jpg</strong> (onde 123 é o <em>publicId</em>) ou exatamente o nome
-                    da criança.
+                    Dica: nomeie os arquivos como <strong>123_foto.jpg</strong> (onde 123 é o <em>publicId</em>) ou exatamente o nome da criança.
                   </p>
                 </div>
 
@@ -940,9 +1414,7 @@ export default function BulkChildrenWizardPage() {
                                   >
                                     <option value="">(sem foto)</option>
                                     {files.map((f) => (
-                                      <option key={f.name} value={f.name}>
-                                        {f.name}
-                                      </option>
+                                      <option key={f.name} value={f.name}>{f.name}</option>
                                     ))}
                                   </select>
                                 </div>
@@ -996,7 +1468,9 @@ export default function BulkChildrenWizardPage() {
                 </h3>
 
                 {!layoutSrc && (
-                  <div className="p-3 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 mb-4">Para ver a prévia composta, envie um layout (Passo 3).</div>
+                  <div className="p-3 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 mb-4">
+                    Para ver a prévia composta, selecione/enviar um layout (Passo 3).
+                  </div>
                 )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -1020,8 +1494,7 @@ export default function BulkChildrenWizardPage() {
                           {d.category && <div className="text-xs text-gray-500">Categoria: {d.category}</div>}
                           {d.wantedGift && <div className="text-xs text-gray-500">Desejo: {d.wantedGift}</div>}
                           <div className="text-xs text-gray-500">
-                            Cidade/UF: {d.cityName || '—'}
-                            {d.state ? `/${d.state}` : ''}
+                            Cidade/UF: {d.cityName || '—'}{d.state ? `/${d.state}` : ''}
                           </div>
 
                           {img && (
@@ -1069,14 +1542,22 @@ export default function BulkChildrenWizardPage() {
             </div>
           )}
         </div>
+        {showEditor && layoutSrc && (
+        <LayoutComposerModal
+          layoutUrl={layoutSrc}
+          value={composeCfg}
+          onChange={setComposeCfg}
+          onClose={() => setShowEditor(false)}
+        />
+      )}
       </div>
     </div>
   );
 }
 
-// =====================
-// Utils UI
-// =====================
+/* =====================
+   Utils UI
+===================== */
 
 function downloadDataUrl(dataUrl: string, filename: string) {
   const a = document.createElement('a');
@@ -1084,6 +1565,481 @@ function downloadDataUrl(dataUrl: string, filename: string) {
   a.download = filename;
   a.click();
 }
+
+export function LayoutComposerModal({
+  layoutUrl, value, onChange, onClose,
+}: {
+  layoutUrl: string;
+  value: ComposeConfig;
+  onChange: (v: ComposeConfig) => void;
+  onClose: () => void;
+}) {
+  const [local, setLocal] = useState<ComposeConfig>(value);
+  const W = local.canvas?.width ?? 1080;
+  const H = local.canvas?.height ?? 1350;
+  const pr = local.photoRect;
+
+  const update = (patch: Partial<ComposeConfig>) =>
+    setLocal(prev => ({ ...prev, ...patch }));
+
+  const updatePhoto = (p: Partial<PhotoRect>) =>
+    setLocal(prev => ({ ...prev, photoRect: { ...prev.photoRect, ...p } }));
+
+  const updateText = (id: string, p: Partial<TextSpec>) =>
+    setLocal(prev => ({
+      ...prev,
+      texts: prev.texts.map(t => (t.id === id ? { ...t, ...p } : t)),
+    }));
+
+  const addText = () => {
+    setLocal(prev => ({
+      ...prev,
+      texts: [
+        ...prev.texts,
+        {
+          id: 't' + Math.random().toString(36).slice(2, 7),
+          template: '{name}',
+          x: 48,
+          y: 48,
+          maxWidth: 600,
+          align: 'left',
+          font: { family: 'Inter, system-ui, sans-serif', size: 36, weight: 700 },
+          fill: '#ffffff',
+          letterSpacing: 0,
+          lineHeight: 1.1,
+        },
+      ],
+    }));
+  };
+
+  const removeText = (id: string) =>
+    setLocal(prev => ({ ...prev, texts: prev.texts.filter(t => t.id !== id) }));
+
+  // ======== SCALE (zoom automático) ========
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+
+    const recompute = () => {
+      const pad = 16;
+      const availW = el.clientWidth - pad;
+      const availH = el.clientHeight - pad;
+      const s = Math.min(availW / W, availH / H, 1);
+      setScale(isFinite(s) && s > 0 ? s : 1);
+    };
+
+    recompute();
+
+    let ro: ResizeObserver | null = null;
+    if (typeof window !== 'undefined' && 'ResizeObserver' in window) {
+      ro = new ResizeObserver(() => recompute());
+      ro.observe(el);
+    }
+
+    window.addEventListener('resize', recompute);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', recompute);
+    };
+  }, [W, H]);
+
+  // ======== Drag e Resize compensando o scale ========
+  const startDrag = (e: React.MouseEvent, kind: 'photo' | 'text', id?: string) => {
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    const base =
+      kind === 'photo'
+        ? { x: pr.x, y: pr.y }
+        : (() => {
+            const t = local.texts.find(t => t.id === id)!;
+            return { x: t.x, y: t.y };
+          })();
+
+    const onMove = (ev: MouseEvent) => {
+      const dx = (ev.clientX - sx) / scale;
+      const dy = (ev.clientY - sy) / scale;
+
+      if (kind === 'photo') {
+        updatePhoto({
+          x: Math.max(0, Math.min(W - pr.width, base.x + dx)),
+          y: Math.max(0, Math.min(H - pr.height, base.y + dy)),
+        });
+      } else if (id) {
+        updateText(id, {
+          x: Math.max(0, Math.min(W, base.x + dx)),
+          y: Math.max(0, Math.min(H, base.y + dy)),
+        });
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const startResizePhoto = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    const base = { w: pr.width, h: pr.height };
+    const onMove = (ev: MouseEvent) => {
+      const dx = (ev.clientX - sx) / scale;
+      const dy = (ev.clientY - sy) / scale;
+      updatePhoto({
+        width: Math.max(50, Math.min(W - pr.x, base.w + dx)),
+        height: Math.max(50, Math.min(H - pr.y, base.h + dy)),
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const startResizeText = (e: React.MouseEvent, id: string) => {
+    e.preventDefault();
+    const sx = e.clientX;
+    const t0 = local.texts.find(t => t.id === id)!;
+    const baseW = t0.maxWidth;
+    const onMove = (ev: MouseEvent) => {
+      const dx = (ev.clientX - sx) / scale;
+      updateText(id, { maxWidth: Math.max(60, Math.min(W - t0.x, baseW + dx)) });
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div className="bg-white w-full max-w-6xl rounded-2xl overflow-hidden shadow-2xl">
+        <div className="p-4 border-b flex items-center justify-between">
+          <h3 className="font-semibold text-lg">Editor de Composição</h3>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                onChange(local);
+                onClose();
+              }}
+              className="px-3 py-1.5 rounded-lg bg-blue-600 text-white"
+            >
+              Salvar
+            </button>
+            <button onClick={onClose} className="px-3 py-1.5 rounded-lg border">
+              Fechar
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3">
+          {/* CANVAS */}
+          <div className="lg:col-span-2 p-4">
+            <div
+              ref={hostRef}
+              className="relative mx-auto border rounded-xl bg-gray-100"
+              style={{ maxHeight: '75vh', overflow: 'auto', padding: 8 }}
+            >
+              <div
+                className="relative mx-auto overflow-hidden rounded-xl shadow"
+                style={{ width: W * scale, height: H * scale }}
+              >
+                <div
+                  className="absolute top-0 left-0"
+                  style={{
+                    width: W,
+                    height: H,
+                    transform: `scale(${scale})`,
+                    transformOrigin: 'top left',
+                    backgroundImage: `url(${layoutUrl})`,
+                    backgroundRepeat: 'no-repeat',
+                    backgroundPosition: 'center',
+                    backgroundSize: local.layout?.resizeToCanvas ? '100% 100%' : 'contain',
+                    opacity: local.layout?.opacity ?? 1,
+                  }}
+                >
+                  {/* PHOTO RECT */}
+                  <div
+                    className="absolute border-2 border-blue-500/80 bg-blue-300/10 cursor-move"
+                    style={{ left: pr.x, top: pr.y, width: pr.width, height: pr.height }}
+                    onMouseDown={(e) => startDrag(e, 'photo')}
+                    title="Área da foto"
+                  >
+                    <div
+                      className="absolute w-3 h-3 bg-blue-600 right-[-6px] bottom-[-6px] cursor-se-resize"
+                      onMouseDown={startResizePhoto}
+                    />
+                  </div>
+
+                  {/* TEXTOS (caixas guia) */}
+                  {local.texts.map(t => (
+                    <div
+                      key={t.id}
+                      className="absolute border border-emerald-500/80 bg-emerald-200/10 cursor-move"
+                      style={{ left: t.x, top: t.y, width: t.maxWidth }}
+                      onMouseDown={(e) => startDrag(e, 'text', t.id)}
+                      title="Texto"
+                    >
+                      <div className="px-1 text-[10px] text-emerald-700/80">#{t.id}</div>
+                      <div
+                        className="absolute w-3 h-3 bg-emerald-600 right-[-6px] bottom-[-6px] cursor-e-resize"
+                        onMouseDown={(e) => startResizeText(e, t.id)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* PAINEL DE PROPRIEDADES */}
+          <div className="p-4 border-l bg-gray-50 space-y-6 max-h-[80vh] overflow-auto">
+            {/* Canvas / Layout */}
+            <div className="space-y-2">
+              <div className="font-semibold">Canvas / Layout</div>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberInput
+                  label="Largura"
+                  value={W}
+                  onChange={(v) => update({ canvas: { ...local.canvas, width: v } })}
+                />
+                <NumberInput
+                  label="Altura"
+                  value={H}
+                  onChange={(v) => update({ canvas: { ...local.canvas, height: v } })}
+                />
+              </div>
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={!!local.layout?.resizeToCanvas}
+                  onChange={(e) =>
+                    update({ layout: { ...local.layout, resizeToCanvas: e.target.checked } })
+                  }
+                />
+                Redimensionar layout para o canvas
+              </label>
+              <label className="text-sm block">
+                Opacidade do layout
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={local.layout?.opacity ?? 1}
+                  onChange={(e) =>
+                    update({ layout: { ...local.layout, opacity: parseFloat(e.target.value) } })
+                  }
+                />
+              </label>
+            </div>
+
+            {/* Foto (photoRect) */}
+            <div className="space-y-2">
+              <div className="font-semibold">Foto (photoRect)</div>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberInput label="X" value={pr.x} onChange={(v) => updatePhoto({ x: v })} />
+                <NumberInput label="Y" value={pr.y} onChange={(v) => updatePhoto({ y: v })} />
+                <NumberInput
+                  label="Largura"
+                  value={pr.width}
+                  onChange={(v) => updatePhoto({ width: v })}
+                />
+                <NumberInput
+                  label="Altura"
+                  value={pr.height}
+                  onChange={(v) => updatePhoto({ height: v })}
+                />
+                <NumberInput
+                  label="Scale"
+                  step={0.05}
+                  value={pr.scale ?? 1}
+                  onChange={(v) => updatePhoto({ scale: v })}
+                />
+                <NumberInput
+                  label="Cantos"
+                  value={pr.cornerRadius ?? 0}
+                  onChange={(v) => updatePhoto({ cornerRadius: v })}
+                />
+                <NumberInput
+                  label="offX"
+                  value={pr.offsetX ?? 0}
+                  onChange={(v) => updatePhoto({ offsetX: v })}
+                />
+                <NumberInput
+                  label="offY"
+                  value={pr.offsetY ?? 0}
+                  onChange={(v) => updatePhoto({ offsetY: v })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs">
+                  Fit
+                  <select
+                    className="w-full border rounded px-2 py-1 text-sm"
+                    value={pr.fit}
+                    onChange={(e) => updatePhoto({ fit: e.target.value as PhotoRect['fit'] })}
+                  >
+                    {['cover', 'contain', 'fill', 'inside', 'outside'].map(x => (
+                      <option key={x} value={x}>{x}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs">
+                  Gravity
+                  <select
+                    className="w-full border rounded px-2 py-1 text-sm"
+                    value={pr.gravity}
+                    onChange={(e) => updatePhoto({ gravity: e.target.value as Gravity })}
+                  >
+                    {[
+                      'north','northeast','east','southeast','south',
+                      'southwest','west','northwest','center',
+                    ].map(g => (
+                      <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            {/* Textos */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold">Textos</div>
+                <button onClick={addText} className="text-sm px-2 py-1 rounded bg-emerald-600 text-white">
+                  Adicionar texto
+                </button>
+              </div>
+
+              {local.texts.map(t => (
+                <div key={t.id} className="p-2 rounded border bg-white space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs text-gray-500">#{t.id}</div>
+                    <button onClick={() => removeText(t.id)} className="text-xs text-red-600">
+                      Remover
+                    </button>
+                  </div>
+
+                  <label className="text-xs block">
+                    Template
+                    <input
+                      className="w-full border rounded px-2 py-1 text-sm"
+                      value={t.template}
+                      onChange={(e) => updateText(t.id, { template: e.target.value })}
+                    />
+                    <span className="text-[11px] text-gray-500">
+                      Use {'{name} {publicId} {age} {wantedGift} {cityName} {communityName}'}
+                    </span>
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberInput label="X" value={t.x} onChange={(v) => updateText(t.id, { x: v })} />
+                    <NumberInput label="Y" value={t.y} onChange={(v) => updateText(t.id, { y: v })} />
+                    <NumberInput label="Largura máx." value={t.maxWidth} onChange={(v) => updateText(t.id, { maxWidth: v })} />
+                  </div>
+
+                  {/* tamanho/peso/cor/alinhamento */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberInput label="Tamanho da Fonte" value={t.font.size} onChange={(v) => updateText(t.id, { font: { ...t.font, size: v } })} />
+                    <NumberInput label="Peso (font-weight)" value={t.font.weight} onChange={(v) => updateText(t.id, { font: { ...t.font, weight: v } })} />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs">
+                      Alinhamento
+                      <select
+                        className="w-full border rounded px-2 py-1 text-sm"
+                        value={t.align}
+                        onChange={(e) => updateText(t.id, { align: e.target.value as TextSpec['align'] })}
+                      >
+                        <option value="left">Esquerda</option>
+                        <option value="center">Centro</option>
+                        <option value="right">Direita</option>
+                      </select>
+                    </label>
+                    <label className="text-xs">
+                      Cor
+                      <input
+                        type="color"
+                        className="w-full h-9 border rounded"
+                        value={t.fill}
+                        onChange={(e) => updateText(t.id, { fill: e.target.value })}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={!!t.uppercase}
+                        onChange={(e) => updateText(t.id, { uppercase: e.target.checked })}
+                      />
+                      MAIÚSCULAS
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-xs">
+                      Espaçamento letras
+                      <input
+                        type="number"
+                        className="w-20 border rounded px-2 py-0.5 text-sm"
+                        value={t.letterSpacing ?? 0}
+                        onChange={(e) => updateText(t.id, { letterSpacing: Number(e.target.value) })}
+                      />
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-xs">
+                      LineHeight
+                      <input
+                        type="number"
+                        step="0.1"
+                        className="w-20 border rounded px-2 py-0.5 text-sm"
+                        value={t.lineHeight ?? 1.1}
+                        onChange={(e) => updateText(t.id, { lineHeight: Number(e.target.value) })}
+                      />
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-2 border-t">
+              <button onClick={() => onChange(local)} className="px-3 py-1.5 rounded-lg border">
+                Aplicar no preview
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function NumberInput({ label, value, onChange, step=1 }:{
+  label:string; value:number; onChange:(v:number)=>void; step?:number;
+}) {
+  return (
+    <label className="text-sm text-gray-600 block">
+      {label}
+      <input
+        type="number"
+        step={step}
+        value={Number.isFinite(value) ? value : 0}
+        onChange={e=>onChange(parseFloat(e.target.value))}
+        className="w-full border rounded px-2 py-1"
+      />
+    </label>
+  );
+}
+
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
@@ -1101,4 +2057,22 @@ function StatSmall({ label, value }: { label: string; value: number }) {
       <div className="text-2xl font-bold text-gray-900 mt-1">{value}</div>
     </div>
   );
+}
+
+/* =====================
+   Helpers gerais
+===================== */
+
+function deepMerge<T>(a: T, b: any): T {
+  const isObj = (v: any) => v && typeof v === 'object' && !Array.isArray(v);
+  if (!isObj(a)) return (b ?? a) as T;
+  if (!isObj(b)) return a;
+  const out: any = Array.isArray(a) ? [...(a as any)] : { ...(a as any) };
+  for (const k of Object.keys(b)) {
+    const av = (a as any)[k], bv = b[k];
+    if (Array.isArray(bv)) out[k] = bv;
+    else if (isObj(bv)) out[k] = deepMerge(av ?? {}, bv);
+    else out[k] = bv;
+  }
+  return out;
 }
