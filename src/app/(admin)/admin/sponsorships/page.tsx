@@ -1,9 +1,28 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Filter, Heart, Users, Clock, UserCheck, Calendar, Trash2, ChevronLeft, ChevronRight, ExternalLink, User } from 'lucide-react';
+import {
+  Search,
+  Filter,
+  Heart,
+  Users,
+  Clock,
+  UserCheck,
+  Calendar,
+  Trash2,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  User,
+  Eye,
+  X,
+  Mail,
+  Phone,
+  MapPin,
+  Hash,
+} from 'lucide-react';
 
-type SponsorshipStatus = 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
+type SponsorshipStatus = 'PENDING' | 'COMPLETED' | 'IN_PROGRESS' | 'ENDED' | 'CANCELLED';
 
 type ChildLite = { id: string; publicId?: number | null; name: string };
 type SponsorLite = { id: string; name: string; email?: string | null };
@@ -31,8 +50,66 @@ type PageResp<T> = {
 };
 
 const PAGE_SIZE = 20;
-const STATUS_OPTS: SponsorshipStatus[] = ['PENDING', 'ACTIVE', 'ENDED', 'CANCELLED'];
+const STATUS_OPTS: SponsorshipStatus[] = ['PENDING', 'COMPLETED', 'IN_PROGRESS', 'ENDED', 'CANCELLED'];
 
+/* ===================== */
+/* Util */
+/* ===================== */
+function fmtDateBR(s?: string | null) {
+  if (!s) return '—';
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR');
+}
+
+function labelOrDash(v?: string | number | null) {
+  if (v === null || v === undefined || v === '') return '—';
+  return String(v);
+}
+
+/* ===================== */
+/* Modal reutilizável */
+/* ===================== */
+function Modal({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      {/* backdrop */}
+      <div
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      {/* dialog */}
+      <div className="relative z-[61] w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-gray-100 transition"
+            aria-label="Fechar"
+          >
+            <X className="w-5 h-5 text-gray-500" />
+          </button>
+        </div>
+        <div className="p-6">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== */
+/* Página principal */
+/* ===================== */
 export default function AdminSponsorshipsPage() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<'' | SponsorshipStatus>('');
@@ -42,6 +119,13 @@ export default function AdminSponsorshipsPage() {
   const [dataState, setDataState] = useState<PageResp<Sponsorship> | null>(null);
   const [loading, setLoading] = useState(false);
   const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
+
+  // Estados dos modais e detalhes
+  const [childModalId, setChildModalId] = useState<string | null>(null);
+  const [sponsorModalId, setSponsorModalId] = useState<string | null>(null);
+  const [childDetail, setChildDetail] = useState<any | null>(null);
+  const [sponsorDetail, setSponsorDetail] = useState<any | null>(null);
+  const [modalLoading, setModalLoading] = useState<boolean>(false);
 
   // Carrega campanhas para o filtro (via Next API)
   useEffect(() => {
@@ -113,22 +197,19 @@ export default function AdminSponsorshipsPage() {
   const headerStats = useMemo(() => {
     const total = typeof dataState?.total === 'number' ? dataState.total : rows.length;
     const pending = rows.filter(r => r.status === 'PENDING').length;
-    const active = rows.filter(r => r.status === 'ACTIVE').length;
+    const active = rows.filter(r => r.status === 'COMPLETED').length;
+    const in_progress = rows.filter(r => r.status === 'IN_PROGRESS').length;
     const ended = rows.filter(r => r.status === 'ENDED').length;
     const cancelled = rows.filter(r => r.status === 'CANCELLED').length;
     return { total, pending, active, ended, cancelled };
   }, [dataState?.total, rows]);
 
-  const fmtDate = (s?: string | null) => {
-    if (!s) return '—';
-    const d = new Date(s);
-    return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR');
-  };
-
   const getStatusConfig = (s: SponsorshipStatus) => {
     switch (s) {
-      case 'ACTIVE':
-        return { label: 'Ativo', className: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' };
+      case 'COMPLETED':
+        return { label: 'Concluido', className: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' };
+      case 'IN_PROGRESS':
+        return { label: 'Em Progresso', className: 'bg-cyan-50 text-cyan-700 border-cyan-200', dot: 'bg-cyan-500' };
       case 'PENDING':
         return { label: 'Pendente', className: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' };
       case 'ENDED':
@@ -166,6 +247,47 @@ export default function AdminSponsorshipsPage() {
     const r = await fetch(`/api/admin/sponsorships/${id}`, { method: 'DELETE', credentials: 'include' });
     if (!r.ok) return alert('Falha ao excluir.');
     load();
+  }
+
+  /* ===================== */
+  /* Abertura dos modais   */
+  /* ===================== */
+
+  async function openChild(id: string) {
+    setChildModalId(id);
+    setChildDetail(null);
+    setModalLoading(true);
+    try {
+      const r = await fetch(`/api/admin/children/${id}`, { credentials: 'include', cache: 'no-store' });
+      if (!r.ok) throw new Error('Erro ao carregar criança');
+      const json = await r.json();
+      setChildDetail(json);
+    } catch (e) {
+      setChildDetail({ __error: 'Não foi possível carregar os dados da criança.' });
+    } finally {
+      setModalLoading(false);
+    }
+  }
+
+  async function openSponsor(id: string) {
+    setSponsorModalId(id);
+    setSponsorDetail(null);
+    setModalLoading(true);
+    try {
+      // tenta sponsors/:id
+      let r = await fetch(`/api/admin/sponsors/${id}`, { credentials: 'include', cache: 'no-store' });
+      if (r.status === 404) {
+        // fallback para users/:id
+        r = await fetch(`/api/admin/users/${id}`, { credentials: 'include', cache: 'no-store' });
+      }
+      if (!r.ok) throw new Error('Erro ao carregar padrinho');
+      const json = await r.json();
+      setSponsorDetail(json);
+    } catch (e) {
+      setSponsorDetail({ __error: 'Não foi possível carregar os dados do padrinho.' });
+    } finally {
+      setModalLoading(false);
+    }
   }
 
   return (
@@ -261,7 +383,8 @@ export default function AdminSponsorshipsPage() {
                 onChange={(e) => { setPage(1); setStatus(e.target.value as SponsorshipStatus | ''); }}
               >
                 <option value="">Todos os status</option>
-                <option value="ACTIVE">Ativo</option>
+                <option value="COMPLETED">Comcluido</option>
+                <option value="IN_PROGRESS">Em Atendimento</option>
                 <option value="PENDING">Pendente</option>
                 <option value="ENDED">Encerrado</option>
                 <option value="CANCELLED">Cancelado</option>
@@ -328,51 +451,74 @@ export default function AdminSponsorshipsPage() {
                 
                 {rows.map((sponsorship) => (
                   <tr key={sponsorship.id} className="hover:bg-blue-50/50 transition-colors duration-150">
+                    {/* Criança */}
                     <td className="px-6 py-4">
                       {sponsorship.child ? (
-                        <a 
-                          href={`/admin/children/${sponsorship.child.id}`} 
-                          className="flex items-center gap-2 hover:text-blue-600 transition-colors"
-                        >
-                          <div className="p-2 bg-pink-100 rounded-lg">
-                            <User className="w-4 h-4 text-pink-600" />
-                          </div>
-                          <div>
-                            <span className="text-sm font-semibold text-gray-900">
-                              {sponsorship.child.name}
-                            </span>
-                            <div className="text-xs text-gray-500">
-                              ID: #{sponsorship.child.publicId ?? '—'}
+                        <div className="flex items-center justify-between gap-2">
+                          <a
+                            href={`/admin/children/${sponsorship.child.id}`}
+                            className="flex items-center gap-2 hover:text-blue-600 transition-colors"
+                          >
+                            <div className="p-2 bg-pink-100 rounded-lg">
+                              <User className="w-4 h-4 text-pink-600" />
                             </div>
-                          </div>
-                        </a>
+                            <div>
+                              <span className="text-sm font-semibold text-gray-900">
+                                {sponsorship.child.name}
+                              </span>
+                              <div className="text-xs text-gray-500">
+                                ID: #{sponsorship.child.publicId ?? '—'}
+                              </div>
+                            </div>
+                          </a>
+                          <button
+                            onClick={() => openChild(sponsorship.child!.id)}
+                            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
+                            title="Ver detalhes da criança"
+                          >
+                            <Eye className="w-4 h-4" />
+                            Detalhes
+                          </button>
+                        </div>
                       ) : (
                         <span className="text-sm text-gray-400">—</span>
                       )}
                     </td>
-                    
+
+                    {/* Padrinho */}
                     <td className="px-6 py-4">
                       {sponsorship.sponsor ? (
-                        <div className="flex items-center gap-2">
-                          <div className="p-2 bg-blue-100 rounded-lg">
-                            <UserCheck className="w-4 h-4 text-blue-600" />
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <div className="p-2 bg-blue-100 rounded-lg">
+                              <UserCheck className="w-4 h-4 text-blue-600" />
+                            </div>
+                            <div>
+                              <span className="text-sm font-semibold text-gray-900">
+                                {sponsorship.sponsor.name}
+                              </span>
+                              {sponsorship.sponsor.email && (
+                                <div className="text-xs text-gray-500">
+                                  {sponsorship.sponsor.email}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <div>
-                            <span className="text-sm font-semibold text-gray-900">
-                              {sponsorship.sponsor.name}
-                            </span>
-                            {sponsorship.sponsor.email && (
-                              <div className="text-xs text-gray-500">
-                                {sponsorship.sponsor.email}
-                              </div>
-                            )}
-                          </div>
+                          <button
+                            onClick={() => openSponsor(sponsorship.sponsor!.id)}
+                            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
+                            title="Ver detalhes do padrinho"
+                          >
+                            <Eye className="w-4 h-4" />
+                            Detalhes
+                          </button>
                         </div>
                       ) : (
                         <span className="text-sm text-gray-400">—</span>
                       )}
                     </td>
                     
+                    {/* Campanha */}
                     <td className="px-6 py-4">
                       {sponsorship.campaign ? (
                         <a 
@@ -396,22 +542,25 @@ export default function AdminSponsorshipsPage() {
                       )}
                     </td>
                     
+                    {/* Status */}
                     <td className="px-6 py-4">
                       <StatusBadge status={sponsorship.status} />
                     </td>
                     
+                    {/* Datas */}
                     <td className="px-6 py-4">
                       <span className="text-sm text-gray-600">
-                        {fmtDate(sponsorship.startDate)}
+                        {fmtDateBR(sponsorship.startDate)}
                       </span>
                     </td>
                     
                     <td className="px-6 py-4">
                       <span className="text-sm text-gray-600">
-                        {fmtDate(sponsorship.endDate)}
+                        {fmtDateBR(sponsorship.endDate)}
                       </span>
                     </td>
                     
+                    {/* Ações */}
                     <td className="px-6 py-4">
                       <div className="flex items-center justify-end gap-2">
                         <select
@@ -421,7 +570,8 @@ export default function AdminSponsorshipsPage() {
                           title="Alterar status"
                         >
                           <option value="PENDING">Pendente</option>
-                          <option value="ACTIVE">Ativo</option>
+                          <option value="COMPLETED">Concluido</option>
+                          <option value="IN_PROGRESS">Em Progresso</option>
                           <option value="ENDED">Encerrado</option>
                           <option value="CANCELLED">Cancelado</option>
                         </select>
@@ -447,6 +597,124 @@ export default function AdminSponsorshipsPage() {
             <Pagination page={dataState.page} pages={dataState.pages} onChange={setPage} />
           </div>
         )}
+      </div>
+
+      {/* Modal CRIANÇA */}
+      <Modal
+        open={!!childModalId}
+        title="Detalhes da Criança"
+        onClose={() => { setChildModalId(null); setChildDetail(null); }}
+      >
+        {modalLoading && (
+          <div className="flex items-center gap-3 text-gray-600">
+            <div className="w-5 h-5 border-2 border-gray-200 border-t-blue-600 rounded-full animate-spin" />
+            Carregando...
+          </div>
+        )}
+        {!modalLoading && childDetail && (
+          <div className="space-y-4">
+            {childDetail.__error ? (
+              <p className="text-red-600">{childDetail.__error}</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <InfoRow icon={<User className="w-4 h-4" />} label="Nome" value={labelOrDash(childDetail.name)} />
+                  <InfoRow icon={<Hash className="w-4 h-4" />} label="ID Público" value={labelOrDash(childDetail.publicId)} />
+                  <InfoRow icon={<Calendar className="w-4 h-4" />} label="Nascimento" value={fmtDateBR(childDetail.birthDate)} />
+                  <InfoRow icon={<MapPin className="w-4 h-4" />} label="Cidade" value={labelOrDash(childDetail.city?.name ?? childDetail.cityName)} />
+                  <InfoRow icon={<Hash className="w-4 h-4" />} label="Categoria" value={labelOrDash(childDetail.category)} />
+                  <InfoRow icon={<Heart className="w-4 h-4" />} label="Presente desejado" value={labelOrDash(childDetail.wantedGift)} />
+                  <InfoRow icon={<Users className="w-4 h-4" />} label="Escola" value={labelOrDash(childDetail.school?.name ?? childDetail.school)} />
+                  <InfoRow icon={<Clock className="w-4 h-4" />} label="Criado em" value={fmtDateBR(childDetail.createdAt)} />
+                </div>
+
+                {Array.isArray(childDetail.sponsorships) && childDetail.sponsorships.length > 0 && (
+                  <div className="mt-4">
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2">Apadrinhamentos</h4>
+                    <div className="space-y-2">
+                      {childDetail.sponsorships.map((s: any) => (
+                        <div key={s.id} className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1">
+                            <span><b>Status:</b> {s.status}</span>
+                            <span><b>Início:</b> {fmtDateBR(s.startDate)}</span>
+                            <span><b>Fim:</b> {fmtDateBR(s.endDate)}</span>
+                            {s.sponsor?.name && <span><b>Padrinho:</b> {s.sponsor.name}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal PADRINHO */}
+      <Modal
+        open={!!sponsorModalId}
+        title="Detalhes do Padrinho"
+        onClose={() => { setSponsorModalId(null); setSponsorDetail(null); }}
+      >
+        {modalLoading && (
+          <div className="flex items-center gap-3 text-gray-600">
+            <div className="w-5 h-5 border-2 border-gray-200 border-t-blue-600 rounded-full animate-spin" />
+            Carregando...
+          </div>
+        )}
+        {!modalLoading && sponsorDetail && (
+          <div className="space-y-4">
+            {sponsorDetail.__error ? (
+              <p className="text-red-600">{sponsorDetail.__error}</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <InfoRow icon={<User className="w-4 h-4" />} label="Nome" value={labelOrDash(sponsorDetail.name)} />
+                  <InfoRow icon={<Mail className="w-4 h-4" />} label="E-mail" value={labelOrDash(sponsorDetail.email)} />
+                  <InfoRow icon={<Phone className="w-4 h-4" />} label="Telefone" value={labelOrDash(sponsorDetail.phone ?? sponsorDetail.mobile)} />
+                  <InfoRow icon={<Hash className="w-4 h-4" />} label="Documento" value={labelOrDash(sponsorDetail.document ?? sponsorDetail.cpfCnpj)} />
+                  <InfoRow icon={<MapPin className="w-4 h-4" />} label="Endereço" value={labelOrDash(
+                    sponsorDetail.address
+                      ? `${sponsorDetail.address.street ?? ''} ${sponsorDetail.address.number ?? ''} ${sponsorDetail.address.city ?? ''}`.trim()
+                      : sponsorDetail.city ? `${sponsorDetail.city} - ${sponsorDetail.state ?? ''}` : undefined
+                  )} />
+                  <InfoRow icon={<Clock className="w-4 h-4" />} label="Criado em" value={fmtDateBR(sponsorDetail.createdAt)} />
+                </div>
+
+                {Array.isArray(sponsorDetail.sponsorships) && sponsorDetail.sponsorships.length > 0 && (
+                  <div className="mt-4">
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2">Apadrinhamentos</h4>
+                    <div className="space-y-2">
+                      {sponsorDetail.sponsorships.map((s: any) => (
+                        <div key={s.id} className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1">
+                            <span><b>Status:</b> {s.status}</span>
+                            <span><b>Início:</b> {fmtDateBR(s.startDate)}</span>
+                            <span><b>Fim:</b> {fmtDateBR(s.endDate)}</span>
+                            {s.child?.name && <span><b>Criança:</b> {s.child.name}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string; value?: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="p-2 bg-gray-100 rounded-lg">{icon}</div>
+      <div className="min-w-0">
+        <div className="text-xs text-gray-500">{label}</div>
+        <div className="text-sm font-medium text-gray-900 truncate">{value ?? '—'}</div>
       </div>
     </div>
   );
