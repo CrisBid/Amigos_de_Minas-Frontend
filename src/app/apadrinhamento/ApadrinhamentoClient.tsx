@@ -124,7 +124,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             campaignId
           )}&format=webp&q=82`;
 
-          console.log(data);
+          //console.log(data);
           
 
           return {
