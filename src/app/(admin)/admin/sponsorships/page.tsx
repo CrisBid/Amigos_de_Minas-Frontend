@@ -853,11 +853,8 @@ export default function AdminSponsorshipsPage() {
                   <InfoRow icon={<Phone className="w-4 h-4" />} label="Telefone" value={labelOrDash(sponsorDetail.profile.phone ?? sponsorDetail.mobile)} />
                   <InfoRow icon={<Hash className="w-4 h-4" />} label="Documento" value={labelOrDash(sponsorDetail.profile.document ?? sponsorDetail.cpfCnpj)} />
                   */}
-                  <InfoRow icon={<MapPin className="w-4 h-4" />} label="Endereço" value={labelOrDash(
-                    sponsorDetail.address
-                      ? `${sponsorDetail.address ?? ''} ${sponsorDetail.city ?? ''}`.trim()
-                      : sponsorDetail.city ? `${sponsorDetail.city} - ${sponsorDetail.state ?? ''}` : undefined
-                  )} />
+                  <InfoRow icon={<MapPin className="w-4 h-4" />} label="Endereço" value={labelOrDash(sponsorDetail.profile.address)} />
+                  <InfoRow icon={<MapPin className="w-4 h-4" />} label="Cidade" value={labelOrDash(sponsorDetail.profile.city)} />
                   <InfoRow icon={<Clock className="w-4 h-4" />} label="Criado em" value={fmtDateBR(sponsorDetail.createdAt)} />
                 </div>
 

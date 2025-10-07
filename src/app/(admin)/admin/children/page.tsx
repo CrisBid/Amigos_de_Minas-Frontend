@@ -181,7 +181,7 @@ export default function AdminChildrenPage() {
                 Cadastro Guiado (colar tabela)
               </Link>
               <Link
-                href="/admin/children/new"
+                href="/admin/children/bulk"
                 className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105"
               >
                 <Plus className="w-5 h-5" />

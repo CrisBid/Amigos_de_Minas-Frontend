@@ -15,36 +15,22 @@ export const ADMIN_ROUTES: AdminRoute[] = [
   {
     label: "Crianças",
     href: "/admin/children",
-    children: [
-      { label: "Listagem", href: "/admin/children" },
-      { label: "Cadastrar", href: "/admin/children/new" },
-    ],
+    children: [],
   },
   {
     label: "Campanhas",
     href: "/admin/campaigns",
-    children: [
-      { label: "Todas", href: "/admin/campaigns" },
-      { label: "Nova", href: "/admin/campaigns/new" },
-      { label: "Molduras", href: "/admin/campaigns/frames" },
-    ],
+    children: [],
   },
   {
     label: "Apadrinhamentos",
     href: "/admin/sponsorships",
-    children: [
-      { label: "Pendentes", href: "/admin/sponsorships?status=PENDING" },
-      { label: "Ativos", href: "/admin/sponsorships?status=ACTIVE" },
-      { label: "Encerrados", href: "/admin/sponsorships?status=ENDED" },
-    ],
+    children: [],
   },
   {
     label: "Cidades",
     href: "/admin/cities",
-    children: [
-      { label: "Listagem", href: "/admin/cities" },
-      { label: "Nova", href: "/admin/cities/new" },
-    ],
+    children: [],
   },
 ];
 

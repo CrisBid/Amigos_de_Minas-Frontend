@@ -8,25 +8,111 @@ import { Filter, Search, Loader2, AlertCircle } from 'lucide-react';
 import Stats from '@/components/Apadrinhamento/Stats';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
 
-type SponsorshipStatus = 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED' | 'NONE';
+type SponsorshipStatus = 'PENDING' | 'COMPLETED' | 'IN_PROGRESS' | 'ENDED' | 'CANCELLED' | 'NONE';
 
-type City = { id: string; publicId?: number | null; name: string; state?: string | null };
+type City = {
+  id: string;
+  publicId?: number | null;
+  name: string;
+  state?: string | null;
+};
 
+type Community = {
+  id: string;
+  publicId?: number | null;
+  cityId?: string | null;
+  name: string;
+  slug?: string | null;
+  description?: string | null;
+};
+
+type SchoolObj = {
+  id: string;
+  publicId?: number | null;
+  name: string;
+  slug?: string | null;
+  address?: string | null;
+};
+
+type ImageConfig = {
+  version: number;
+  canvas: { width: number; height: number; background: string | null };
+  layout: { onTop?: boolean; opacity?: number; resizeToCanvas?: boolean };
+  photoRect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    fit: 'cover' | 'contain';
+    scale: number;
+    gravity:
+      | 'north' | 'northeast' | 'east' | 'southeast'
+      | 'south' | 'southwest' | 'west' | 'northwest' | 'center';
+    offsetX: number;
+    offsetY: number;
+    cornerRadius: number;
+  };
+  texts: any[]; // ajuste se tiver o shape específico dos textos
+};
+
+type ChildImage = {
+  id: string;
+  childId: string;
+  campaignId: string;
+
+  originalKey: string | null;
+  originalUrl: string | null;
+  processedKey: string | null;
+  processedUrl: string | null;
+  framedKey: string | null;
+  framedUrl: string | null;
+  layoutKey: string | null;
+  layoutUrl: string | null;
+
+  Config: ImageConfig;
+
+  width: number | null;
+  height: number | null;
+  status: 'UPLOADED' | 'PROCESSED' | 'COMPOSED' | string;
+  notes: string | null;
+  version: number;
+
+  createdAt: string; // ISO
+  updatedAt: string; // ISO
+};
+// ------------------------------------------------------------
+
+// Seu tipo Child, apenas com a adição de `images?: ChildImage[]`
 type Child = {
   id: string;
+  publicId?: number | null;
   name: string;
-  age?: number;
-  birthDate?: Date;
-  cityName?: string;
+  birthDate?: string | Date | null;       // <- agora aceita ISO string
+  age?: number | null;
+
+  // legado (mantém como opcional p/ não quebrar)
+  cityName?: string | null;
+  schoolLegacy?: string | null;
+
+  // novos objetos
   city?: City | null;
-  school?: string;
-  category?: string;
-  wantedGift?: string;
-  description?: string;
-  photoUrl?: string;
+  community?: Community | null;
+  school?: SchoolObj | null;
+
+  category?: string | null;
+  wantedGift?: string | null;
+  description?: string | null;
+  photoUrl?: string | null;
+  photoKey?: string | null;
+
+  sponsorships?: Array<{ id: string; status: SponsorshipStatus; campaignId: string }>;
+  sponsorshipStatus: SponsorshipStatus;   // derivado
   media?: Array<{ framedUrl?: string; processedUrl?: string }>;
-  sponsorshipStatus: SponsorshipStatus;
+
+  // ---------- NOVO ----------
+  images?: ChildImage[];
 };
+
 
 type Campaign = {
   id: string;
@@ -62,11 +148,13 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
   const [searchTerm, setSearchTerm] = useState('');
   const [filtros, setFiltros] = useState({
     cidade: '',
+    comunidade: '',     // novo
     escola: '',
     categoria: '',
     idade: '',
     status: 'disponivel' as StatusFiltro,
   });
+
 
   // 1) carregar campanhas (sem exigir login)
   useEffect(() => {
@@ -119,34 +207,40 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             )
           : null;
 
-          const status: SponsorshipStatus = rel?.status ?? 'NONE';
-          const previewUrl = `/api/admin/children/${encodeURIComponent(c.id)}/preview?campaignId=${encodeURIComponent(
-            campaignId
-          )}&format=webp&q=82`;
+        const status: SponsorshipStatus = rel?.status ?? 'NONE';
 
-          //console.log(data);
-          
+        return {
+          id: c.id,
+          publicId: c.publicId ?? null,
+          name: c.name,
+          birthDate: c.birthDate ?? null,
+          age: c.age ?? null,
 
-          return {
-            id: c.id,
-            name: c.name,
-            age: c.age ?? c.idade,
-            birthDate: c.birthDate,
-            cityName: c.city?.name ?? c.cityName,
-            city: c.city ?? null,
-            school: c.school ?? c.escola,
-            category: c.category ?? c.categoria,
-            wantedGift: c.wantedGift,
-            description: c.description,
-            // 🔸 prioriza preview dinâmico; se falhar, backend/edge responde erro e a imagem não carrega,
-            // mas mantemos também o legado como fallback (se quiser trocar ordem, fique à vontade)
-            //photoUrl: previewUrl || c.media?.[0]?.framedUrl || c.media?.[0]?.processedUrl || c.photoUrl || undefined,
-            photoUrl: c.photoUrl,
-            media: c.media,
+          // mantém compatibilidade com filtros/labels já existentes
+          cityName: c.city?.name ?? c.cityName ?? null,
+          schoolLegacy: c.schoolLegacy ?? null,
 
-            sponsorshipStatus: status,
-          };
-        });
+          // objetos novos
+          city: c.city ?? null,
+          community: c.community ?? null,
+          school: c.school ?? null,
+
+          category: c.category ?? null,
+          wantedGift: c.wantedGift ?? null,
+          description: c.description ?? null,
+
+          photoUrl: c.photoUrl ?? null,
+          photoKey: c.photoKey ?? null,
+
+          sponsorships: Array.isArray(c.sponsorships) ? c.sponsorships : [],
+          sponsorshipStatus: status,
+
+          // se existir no payload (não obrigatório)
+          media: Array.isArray(c.media) ? c.media : undefined,
+          images: c.images,
+        };
+      });
+
         setChildren(mapped);
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Falha ao carregar crianças.';
@@ -196,69 +290,81 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     () => uniq(children.map((c) => c.city?.name ?? c.cityName).filter(Boolean) as string[]),
     [children]
   );
-  const escolas = useMemo(() => uniq(children.map((c) => c.school).filter(Boolean) as string[]), [children]);
+
+  const comunidades = useMemo(
+    () => uniq(children.map((c) => c.community?.name).filter(Boolean) as string[]),
+    [children]
+  );
+
+  const escolas = useMemo(
+    () => uniq(children.map((c) => c.school?.name ?? c.schoolLegacy).filter(Boolean) as string[]),
+    [children]
+  );
+
   const categorias = useMemo(
     () => uniq(children.map((c) => c.category).filter(Boolean) as string[]),
     [children]
   );
 
+
   // 6) aplicar filtros
   const childrenFiltradas = useMemo(() => {
     return children.filter((child) => {
       const nomeCidade = child.city?.name ?? child.cityName ?? '';
+      const nomeComunidade = child.community?.name ?? '';
+      const nomeEscola = child.school?.name ?? child.schoolLegacy ?? '';
+
       const matchesSearch = child.name?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesCidade = !filtros.cidade || nomeCidade === filtros.cidade;
-      const matchesEscola = !filtros.escola || child.school === filtros.escola;
+      const matchesComunidade = !filtros.comunidade || nomeComunidade === filtros.comunidade; // novo
+      const matchesEscola = !filtros.escola || nomeEscola === filtros.escola;
       const matchesCategoria = !filtros.categoria || child.category === filtros.categoria;
+
       const isIndisp = ['COMPLETED', 'PENDING'].includes(child.sponsorshipStatus);
       const matchesStatus =
         !filtros.status ||
         (filtros.status === 'disponivel' && !isIndisp) ||
         (filtros.status === 'apadrinhado' && isIndisp);
+
       let matchesIdade = true;
-      const idade = Number(child.age ?? 0);
+      const idadeBase = (child.age ?? calcularIdade(child.birthDate)) || 0;
       switch (filtros.idade) {
-        case '0-3 anos':
-          matchesIdade = idade <= 3;
-          break;
-        case '4-6 anos':
-          matchesIdade = idade >= 4 && idade <= 6;
-          break;
-        case '7-9 anos':
-          matchesIdade = idade >= 7 && idade <= 9;
-          break;
-        case '10-12 anos':
-          matchesIdade = idade >= 10 && idade <= 12;
-          break;
-        case '13+ anos':
-          matchesIdade = idade >= 13;
-          break;
+        case '0-3 anos':   matchesIdade = idadeBase <= 3; break;
+        case '4-6 anos':   matchesIdade = idadeBase >= 4 && idadeBase <= 6; break;
+        case '7-9 anos':   matchesIdade = idadeBase >= 7 && idadeBase <= 9; break;
+        case '10-12 anos': matchesIdade = idadeBase >= 10 && idadeBase <= 12; break;
+        case '13+ anos':   matchesIdade = idadeBase >= 13; break;
       }
-      return matchesSearch && matchesCidade && matchesEscola && matchesCategoria && matchesStatus && matchesIdade;
+
+      return (
+        matchesSearch &&
+        matchesCidade &&
+        matchesComunidade &&
+        matchesEscola &&
+        matchesCategoria &&
+        matchesStatus &&
+        matchesIdade
+      );
     });
   }, [children, searchTerm, filtros]);
 
+
   // === Calcula idade com base na birthDate ===
-  const calcularIdade = (birthDate?: string | Date | null) => {
+  function calcularIdade(birthDate?: string | Date | null): number {
     if (!birthDate) return 0;
-    const nascimento = new Date(birthDate);
-    if (isNaN(nascimento.getTime())) return 0;
+    const d = new Date(birthDate);
+    if (isNaN(d.getTime())) return 0;
 
     const hoje = new Date();
-    let idade = hoje.getFullYear() - nascimento.getFullYear();
-    const mesAtual = hoje.getMonth();
-    const diaAtual = hoje.getDate();
+    let idade = hoje.getFullYear() - d.getFullYear();
 
-    // Ajuste se ainda não fez aniversário neste ano
-    if (
-      mesAtual < nascimento.getMonth() ||
-      (mesAtual === nascimento.getMonth() && diaAtual < nascimento.getDate())
-    ) {
+    const m = hoje.getMonth();
+    const dia = hoje.getDate();
+    if (m < d.getMonth() || (m === d.getMonth() && dia < d.getDate())) {
       idade--;
     }
-
     return idade;
-  };
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-6">
@@ -401,30 +507,33 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {childrenFiltradas.map((child) => {
           const nomeCidade = child.city?.name ?? child.cityName ?? '';
-          const idadeCalculada = child.age ?? calcularIdade(child.birthDate);
-          //console.log(idadeCalculada);
-          
+          const idadeCalculada = (child.age ?? calcularIdade(child.birthDate)) || 0;
+
           return (
             <ChildCard
-              key={child.id}
+              key={String(child.id)}
               child={{
                 id: child.id,
                 nome: child.name,
-                idade: idadeCalculada ?? 0,
+                idade: idadeCalculada,
                 cidade: nomeCidade,
-                escola: child.school ?? '',
+                escola: child.school?.name ?? child.schoolLegacy ?? '',
                 categoria: child.category ?? '',
                 presente: child.wantedGift ?? '',
                 descricao: child.description ?? '',
                 apadrinhado: ['COMPLETED', 'PENDING'].includes(child.sponsorshipStatus),
                 foto: child.photoUrl ?? '',
+                images: child.images,  // passa as images[]
                 status: child.sponsorshipStatus,
+                // se o Card exibir comunidade e quiser passar:
+                comunidade: child.community?.name ?? '',
               }}
               onSponsor={() => handleSponsor(child.id)}
               sponsoring={sponsoringId === child.id}
             />
           );
         })}
+
       </div>
 
       {loading && (
@@ -458,7 +567,7 @@ function uniqBy<T extends Record<string, unknown>>(arr: T[], key: keyof T) {
   return out;
 }
 function normalizeStatus(s?: string): SponsorshipStatus {
-  return s === 'ACTIVE' || s === 'PENDING' || s === 'ENDED' || s === 'CANCELLED' ? s : 'NONE';
+  return s === 'COMPLETED' || s === 'PENDING' || s === 'ENDED' || s === 'CANCELLED' ? s : 'NONE';
 }
 async function safeErrMsg(res: Response) {
   try {
