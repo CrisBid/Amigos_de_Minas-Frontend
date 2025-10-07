@@ -31,20 +31,29 @@ type DraftChild = {
   category?: string | null;
   wantedGift?: string | null;
   description?: string | null;
+
+  // NOVOS CAMPOS
+  motherName?: string | null;
+  age?: number | null; // anos (0 quando vier "xM" na planilha)
 };
 
 type ColumnMap = {
   publicId?: string;
   name?: string;
-  birthDate?: string; // virá como DD/MM/YYYY na pasta, convertemos para ISO
+  birthDate?: string; // virá como DD/MM/YYYY na planilha, convertemos para ISO
   category?: string;
   wantedGift?: string;
   description?: string;
+
+  // NOVOS CAMPOS
+  motherName?: string;
+  age?: string; // coluna de idade (valores como "7" ou "8M")
 };
 
 type Option = { id: string; name: string; state?: string | null };
 
-type Step = 1 | 2 | 3 | 4 | 5;
+// ADAPTADO: adiciona Step 6 (Confirmação)
+type Step = 1 | 2 | 3 | 4 | 5 | 6;
 
 type CampaignFrame = {
   id: string;
@@ -181,9 +190,42 @@ export default function BulkChildrenWizardPage() {
   const [composed, setComposed] = useState<Record<string, string>>({}); // pid -> dataURL
   const [composing, setComposing] = useState(false);
 
-  // Commit
+  // Commit (progress + resumo final como passo 6)
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<any>(null);
+
+  type ProgressPhase = 'salvando' | 'enviando-fotos' | 'finalizando' | null;
+  type ProgressState = {
+    visible: boolean;
+    phase: ProgressPhase;
+    total: number;
+    current: number;
+    created: number;
+    updated: number;
+    uploaded: number;
+    failed: number;
+    errors: string[];
+  };
+
+  const [progress, setProgress] = useState<ProgressState>({
+    visible: false,
+    phase: null,
+    total: 0,
+    current: 0,
+    created: 0,
+    updated: 0,
+    uploaded: 0,
+    failed: 0,
+    errors: [],
+  });
+
+  const [finalSummary, setFinalSummary] = useState<{
+    created: number;
+    updated: number;
+    uploaded: number;
+    failed: number;
+    errors: string[];
+  } | null>(null);
 
   /* =====================
      Helpers
@@ -221,6 +263,25 @@ export default function BulkChildrenWizardPage() {
     return { headers: hdr, rows: data };
   };
 
+  // NOVO: parser para idade da planilha
+  const parseAgeFromSheet = (raw?: string): number | undefined => {
+    if (!raw) return undefined;
+    const s = raw.trim();
+
+    // "8M" / "8m" / " 8 m " => meses -> retorna 0
+    if (/^\d+\s*[mM]$/.test(s)) return 0;
+
+    // Apenas números: "7", "12", " 9 "
+    const m = s.match(/^(\d{1,3})$/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+
+    // casos não reconhecidos => undefined (ou você pode optar por 0)
+    return undefined;
+  };
+
   const tryAutoMap = (hdrs: string[]): ColumnMap => {
     const key = (h: string) => normalizeName(h);
     const find = (alts: string[]) => hdrs.find((h) => alts.includes(key(h)));
@@ -232,6 +293,11 @@ export default function BulkChildrenWizardPage() {
     m.category = find(['categoria', 'category', 'grupo']);
     m.wantedGift = find(['presente', 'presentedesejado', 'wantedgift', 'pedido', 'desejo']);
     m.description = find(['descricao', 'description', 'obs', 'observacao']);
+
+    // NOVOS MAPEAMENTOS
+    m.motherName = find(['nomedamae', 'mae', 'mãe', 'mother', 'mothername', 'nome da mae', 'nome da mãe']);
+    m.age = find(['idade', 'age', 'anos']);
+
     return m;
   };
 
@@ -549,6 +615,13 @@ export default function BulkChildrenWizardPage() {
       const wantedGift = get(r, map.wantedGift);
       const description = get(r, map.description);
 
+      // NOVOS CAMPOS
+      const motherName = get(r, map.motherName) || undefined;
+
+      const ageRaw = get(r, map.age);
+      const parsedAge = parseAgeFromSheet(ageRaw);
+      const age = typeof parsedAge === 'number' ? parsedAge : undefined;
+
       const d: DraftChild = {
         publicId: publicIdRaw ?? '',
         name,
@@ -558,6 +631,10 @@ export default function BulkChildrenWizardPage() {
         category: category || undefined,
         wantedGift: wantedGift || undefined,
         description: description || undefined,
+
+        // setando novos campos
+        motherName: motherName || undefined,
+        age: age ?? undefined,
       };
 
       if (!d.publicId || String(d.publicId).trim() === '') {
@@ -569,6 +646,8 @@ export default function BulkChildrenWizardPage() {
       if (birthDateRaw && !birthDate) {
         errs.push(`Linha ${i + 2}: data de nascimento inválida (${birthDateRaw}).`);
       }
+
+      // age não é obrigatório; se vier "XYZ" não reconhecido, apenas ignoramos
 
       return d;
     });
@@ -585,10 +664,9 @@ export default function BulkChildrenWizardPage() {
 
   /* =====================
      Composição de imagem client-side (prévias)
-     Agora: LAYOUT como base + foto dentro do photoRect
   ===================== */
 
-  // helper: idade simples
+  // helper: idade humanizada (para o texto da imagem). Mantém como estava (derivada da data)
   function calcAgeFromISO(iso?: string | null) {
     if (!iso) return '';
     const [y, m, d] = iso.split('-').map(n => parseInt(n,10));
@@ -605,7 +683,7 @@ export default function BulkChildrenWizardPage() {
     childFile: File,
     layoutSrc: string,
     cfg: ComposeConfig,
-    sample: { // <<< agora passamos os dados da criança
+    sample: {
       name: string;
       publicId: string;
       age: string;
@@ -643,7 +721,7 @@ export default function BulkChildrenWizardPage() {
         ctx.fillRect(0,0,W,H);
       }
 
-      // 1) foto dentro de photoRect
+      // 1) foto
       const pr = cfg.photoRect;
       const dw = pr.width, dh = pr.height;
       const sw = photoImg.width, sh = photoImg.height;
@@ -673,14 +751,14 @@ export default function BulkChildrenWizardPage() {
         ctx.drawImage(photoImg, dx, dy, nw, nh);
       }
 
-      // 2) layout por cima (com opacidade e resize)
+      // 2) layout
       const layoutOpacity = Math.max(0, Math.min(1, cfg.layout?.opacity ?? 1));
       if (layoutOpacity < 1) { ctx.save(); ctx.globalAlpha = layoutOpacity; }
       if (cfg.layout?.resizeToCanvas) ctx.drawImage(layoutImg, 0, 0, W, H);
       else ctx.drawImage(layoutImg, 0, 0);
       if (layoutOpacity < 1) ctx.restore();
 
-      // 3) textos por cima, com substituição + wrap
+      // 3) textos
       const drawWrappedText = (t: TextSpec) => {
         let raw = t.template ?? '';
         raw = raw
@@ -693,7 +771,6 @@ export default function BulkChildrenWizardPage() {
         if (t.uppercase) raw = raw.toUpperCase();
 
         ctx.save();
-        // letterSpacing manual simples: desenhar char a char quando informado
         const fontSize = t.font?.size ?? 42;
         const lineH = (t.lineHeight ?? 1.1) * fontSize;
         ctx.font = `${t.font?.weight ?? 700} ${fontSize}px ${t.font?.family ?? 'Inter, system-ui, sans-serif'}`;
@@ -701,14 +778,13 @@ export default function BulkChildrenWizardPage() {
         ctx.textAlign = (t.align as CanvasTextAlign) ?? 'left';
         ctx.textBaseline = 'top';
 
-        const maxW = t.maxWidth ?? W;
+        const Wmax = t.maxWidth ?? W;
         const words = raw.split(/\s+/);
         let line = '';
         let y = t.y;
 
         const measure = (s: string) => {
           if ((t.letterSpacing ?? 0) === 0) return ctx.measureText(s).width;
-          // aproximação: soma width + spacing*(len-1)
           const base = ctx.measureText(s).width;
           const extra = (s.length - 1) * (t.letterSpacing ?? 0);
           return base + extra;
@@ -716,12 +792,11 @@ export default function BulkChildrenWizardPage() {
 
         const drawLine = (s: string) => {
           let x = t.x;
-          if (t.align === 'center') x = t.x + maxW / 2;
-          if (t.align === 'right') x = t.x + maxW;
+          if (t.align === 'center') x = t.x + Wmax / 2;
+          if (t.align === 'right') x = t.x + Wmax;
           if ((t.letterSpacing ?? 0) === 0) {
-            ctx.fillText(s, x, y, maxW);
+            ctx.fillText(s, x, y, Wmax);
           } else {
-            // desenha com espaçamento de letras
             let cx = x;
             if (t.align === 'center') cx = x - measure(s) / 2;
             if (t.align === 'right') cx = x - measure(s);
@@ -735,7 +810,7 @@ export default function BulkChildrenWizardPage() {
 
         for (const w of words) {
           const test = line ? `${line} ${w}` : w;
-          if (measure(test) <= maxW) line = test;
+          if (measure(test) <= Wmax) line = test;
           else {
             if (line) drawLine(line);
             y += lineH;
@@ -757,7 +832,6 @@ export default function BulkChildrenWizardPage() {
     }
   };
 
-
   function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
     const radius = Math.min(r, Math.min(w, h) / 2);
     ctx.beginPath();
@@ -770,43 +844,61 @@ export default function BulkChildrenWizardPage() {
   }
 
   useEffect(() => {
-  let cancelled = false;
-  (async () => {
-    if (!layoutSrc) { setComposed({}); return; }
-    setComposing(true);
-    const out: Record<string, string> = {};
-    const entries = Object.entries(photoMap).filter(([, f]) => !!f) as [string, File][];
+    let cancelled = false;
+    (async () => {
+      if (!layoutSrc) { setComposed({}); return; }
+      setComposing(true);
+      const out: Record<string, string> = {};
+      const entries = Object.entries(photoMap).filter(([, f]) => !!f) as [string, File][];
 
-    for (const [pid, file] of entries) {
-      try {
-        const d = drafts.find(x => String(x.publicId) === pid)!;
-        const sample = {
-          name: d.name ?? '',
-          publicId: String(d.publicId ?? ''),
-          age: calcAgeFromISO(d.birthDate),
-          wantedGift: d.wantedGift ?? '',
-          cityName: d.cityName ?? '',
-          communityName: '',
-        };
-        const img = await composePreviewBrowser(file, layoutSrc, composeCfg, sample);
-        if (!cancelled) out[pid] = img;
-      } catch {}
-    }
-    if (!cancelled) setComposed(out);
-    setComposing(false);
-  })();
-  return () => { cancelled = true; };
-}, [photoMap, layoutSrc, composeCfg, drafts]);
-
+      for (const [pid, file] of entries) {
+        try {
+          const d = drafts.find(x => String(x.publicId) === pid)!;
+          const sample = {
+            name: d.name ?? '',
+            publicId: String(d.publicId ?? ''),
+            age: calcAgeFromISO(d.birthDate), // preview continua derivando da data
+            wantedGift: d.wantedGift ?? '',
+            cityName: d.cityName ?? '',
+            communityName: '',
+          };
+          const img = await composePreviewBrowser(file, layoutSrc, composeCfg, sample);
+          if (!cancelled) out[pid] = img;
+        } catch {}
+      }
+      if (!cancelled) setComposed(out);
+      setComposing(false);
+    })();
+    return () => { cancelled = true; };
+  }, [photoMap, layoutSrc, composeCfg, drafts]);
 
   /* =====================
-     Commit (via rotas Next)
+     Commit (via rotas Next) — COM PROGRESSO + PASSO 6
   ===================== */
 
   const doCommit = async () => {
     setCommitting(true);
     setCommitResult(null);
+
+    // total: 1 (salvar crianças) + quantidade de fotos a enviar
+    const filesToUpload = Object.values(photoMap).filter(Boolean).length;
+    const totalSteps = 1 + filesToUpload;
+
+    setProgress({
+      visible: true,
+      phase: 'salvando',
+      total: totalSteps,
+      current: 0,
+      created: 0,
+      updated: 0,
+      uploaded: 0,
+      failed: 0,
+      errors: [],
+    });
+
     try {
+      // 1) salvar/atualizar crianças
+      // OBS: enviamos motherName e age junto (rest)
       const childrenForApi = drafts.map(({ cityName, state, ...rest }) => rest);
       const res = await fetch('/api/admin/children/bulk/commit', {
         method: 'POST',
@@ -825,7 +917,15 @@ export default function BulkChildrenWizardPage() {
       const result = await res.json().catch(() => ({}));
       setCommitResult(result);
 
-      // Upload das fotos por publicId (com Config)
+      setProgress((p) => ({
+        ...p,
+        current: 1, // concluído o passo "salvando"
+        created: Number(result?.created?.length || 0),
+        updated: Number(result?.updated?.length || 0),
+        phase: filesToUpload > 0 ? 'enviando-fotos' : 'finalizando',
+      }));
+
+      // 2) upload das fotos (com Config)
       const uploadOne = async (pid: string, file: File) => {
         const fd = new FormData();
         fd.append('file', file);
@@ -841,21 +941,54 @@ export default function BulkChildrenWizardPage() {
           credentials: 'include',
           cache: 'no-store',
         });
+
         if (!r.ok) {
           const t = await r.text().catch(() => '');
           throw new Error(`Foto de ${pid} falhou: ${t}`);
         }
       };
 
-      for (const [pid, file] of Object.entries(photoMap)) {
-        if (file) await uploadOne(pid, file);
+      const entries = Object.entries(photoMap).filter(([, f]) => !!f) as [string, File][];
+      for (const [idx, [pid, file]] of entries.entries()) {
+        try {
+          await uploadOne(pid, file);
+          setProgress((p) => ({
+            ...p,
+            uploaded: p.uploaded + 1,
+            current: 1 + (idx + 1), // já contamos o “salvando”
+          }));
+        } catch (e: any) {
+          setProgress((p) => ({
+            ...p,
+            failed: p.failed + 1,
+            errors: [...p.errors, e?.message || `Falha ao enviar foto de ${pid}`],
+            current: 1 + (idx + 1),
+          }));
+        }
       }
 
-      alert('Cadastro em lote concluído com sucesso!');
+      // 3) finalizando → preparar dados e ir para o Passo 6
+      setProgress((p) => ({ ...p, phase: 'finalizando', current: p.total }));
+      setFinalSummary((p) => ({
+        created: Number(result?.created?.length || 0),
+        updated: Number(result?.updated?.length || 0),
+        uploaded: progress.uploaded,
+        failed: progress.failed,
+        errors: progress.errors,
+      }));
+      setStep(6);
     } catch (e: any) {
-      alert(e?.message || 'Erro ao concluir o cadastro');
+      setFinalSummary((p) => ({
+        created: p?.created ?? progress.created,
+        updated: p?.updated ?? progress.updated,
+        uploaded: p?.uploaded ?? progress.uploaded,
+        failed: (p?.failed ?? progress.failed) + 1,
+        errors: [...(p?.errors ?? progress.errors), e?.message || 'Erro ao concluir o cadastro'],
+      }));
+      setStep(6);
     } finally {
       setCommitting(false);
+      setProgress((p) => ({ ...p, visible: false, phase: null }));
     }
   };
 
@@ -871,7 +1004,8 @@ export default function BulkChildrenWizardPage() {
         { n: 3, label: 'Layout & Config' },
         { n: 4, label: 'Fotos' },
         { n: 5, label: 'Conferência' },
-      ].map((s) => (
+        { n: 6, label: 'Confirmação' },
+      ].map((s, idx, arr) => (
         <div key={s.n} className="flex items-center gap-2">
           <div
             className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border ${
@@ -881,7 +1015,7 @@ export default function BulkChildrenWizardPage() {
             {s.n}
           </div>
           <span className={`text-sm ${step >= (s.n as Step) ? 'text-gray-900' : 'text-gray-500'}`}>{s.label}</span>
-          {s.n !== 5 && <div className="w-10 border-t border-gray-300 mx-2" />}
+          {s.n !== arr[arr.length - 1].n && <div className="w-10 border-t border-gray-300 mx-2" />}
         </div>
       ))}
     </div>
@@ -1029,6 +1163,10 @@ export default function BulkChildrenWizardPage() {
                       { key: 'category', label: 'Categoria' },
                       { key: 'wantedGift', label: 'Presente desejado' },
                       { key: 'description', label: 'Descrição/Obs' },
+
+                      // NOVOS CAMPOS NO MAPA
+                      { key: 'motherName', label: 'Nome da mãe' },
+                      { key: 'age', label: 'Idade (anos ou ex.: 8M)' },
                     ] as const).map((f) => (
                       <div key={f.key} className="flex items-center gap-3">
                         <label className="w-56 text-sm text-gray-700">{f.label}</label>
@@ -1491,6 +1629,8 @@ export default function BulkChildrenWizardPage() {
                           <div className="text-sm font-semibold text-gray-900 truncate">{d.name}</div>
                           <div className="text-xs text-gray-500">ID: {pid}</div>
                           <div className="text-xs text-gray-500">Nasc.: {formatBrazilianDate(d.birthDate)}</div>
+                          {typeof d.age === 'number' && <div className="text-xs text-gray-500">Idade (planilha): {d.age}</div>}
+                          {d.motherName && <div className="text-xs text-gray-500">Mãe: {d.motherName}</div>}
                           {d.category && <div className="text-xs text-gray-500">Categoria: {d.category}</div>}
                           {d.wantedGift && <div className="text-xs text-gray-500">Desejo: {d.wantedGift}</div>}
                           <div className="text-xs text-gray-500">
@@ -1535,22 +1675,97 @@ export default function BulkChildrenWizardPage() {
 
                 {commitResult && (
                   <div className="mt-6 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-emerald-800">
-                    Importação concluída. {commitResult?.created?.length || 0} criadas, {commitResult?.updated?.length || 0} atualizadas.
+                    Importação iniciada. Acompanhe o progresso acima.
                   </div>
                 )}
               </div>
             </div>
           )}
+
+          {/* STEP 6: CONFIRMAÇÃO */}
+          {step === 6 && (
+            <div className="space-y-6">
+              <div className="rounded-2xl border border-gray-200 p-6 bg-white">
+                <h3 className="font-semibold text-gray-900 mb-4">✅ Processo concluído</h3>
+
+                {!finalSummary ? (
+                  <div className="text-sm text-gray-600">Resumo indisponível.</div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <StatSmall label="Criadas" value={finalSummary.created} />
+                      <StatSmall label="Atualizadas" value={finalSummary.updated} />
+                      <StatSmall label="Uploads OK" value={finalSummary.uploaded} />
+                      <StatSmall label="Falhas" value={finalSummary.failed} />
+                    </div>
+
+                    {finalSummary.errors.length > 0 && (
+                      <div className="mt-6 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900">
+                        <div className="font-semibold mb-2">Ocorreram erros:</div>
+                        <ul className="list-disc ml-5 text-sm">
+                          {finalSummary.errors.map((e, i) => (
+                            <li key={i} className="mb-1">{e}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    <div className="mt-6 flex items-center gap-3">
+                      <button
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white"
+                        onClick={() => {
+                          // voltar para a conferência (passo 5), caso queira rever
+                          setStep(5);
+                        }}
+                      >
+                        Voltar à conferência
+                      </button>
+
+                      <button
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-700"
+                        onClick={() => {
+                          // reset básico do wizard
+                          setRawText('');
+                          setHeaders([]);
+                          setRows([]);
+                          setColMap({});
+                          setDrafts([]);
+                          setLocalErrors([]);
+                          setFiles([]);
+                          setPhotoMap({});
+                          setPhotoIssues([]);
+                          setComposed({});
+                          setFinalSummary(null);
+                          setCommitResult(null);
+                          setProgress({
+                            visible: false, phase: null, total: 0, current: 0,
+                            created: 0, updated: 0, uploaded: 0, failed: 0, errors: [],
+                          });
+                          setStep(1);
+                        }}
+                      >
+                        Novo cadastro
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
+
         {showEditor && layoutSrc && (
-        <LayoutComposerModal
-          layoutUrl={layoutSrc}
-          value={composeCfg}
-          onChange={setComposeCfg}
-          onClose={() => setShowEditor(false)}
-        />
-      )}
+          <LayoutComposerModal
+            layoutUrl={layoutSrc}
+            value={composeCfg}
+            onChange={setComposeCfg}
+            onClose={() => setShowEditor(false)}
+          />
+        )}
       </div>
+
+      {/* Overlay de Progresso (aparece enquanto processa) */}
+      <ProgressOverlay progress={progress} />
     </div>
   );
 }
@@ -1779,7 +1994,7 @@ function LayoutComposerModal({
                     />
                   </div>
 
-                  {/* TEXTOS (caixas guia) */}
+                  {/* TEXTOS (guias) */}
                   {local.texts.map(t => (
                     <div
                       key={t.id}
@@ -1800,7 +2015,7 @@ function LayoutComposerModal({
             </div>
           </div>
 
-          {/* PAINEL DE PROPRIEDADES */}
+          {/* PAINEL PROPRIEDADES */}
           <div className="p-4 border-l bg-gray-50 space-y-6 max-h-[80vh] overflow-auto">
             {/* Canvas / Layout */}
             <div className="space-y-2">
@@ -1947,7 +2162,6 @@ function LayoutComposerModal({
                     <NumberInput label="Largura máx." value={t.maxWidth} onChange={(v) => updateText(t.id, { maxWidth: v })} />
                   </div>
 
-                  {/* tamanho/peso/cor/alinhamento */}
                   <div className="grid grid-cols-2 gap-2">
                     <NumberInput label="Tamanho da Fonte" value={t.font.size} onChange={(v) => updateText(t.id, { font: { ...t.font, size: v } })} />
                     <NumberInput label="Peso (font-weight)" value={t.font.weight} onChange={(v) => updateText(t.id, { font: { ...t.font, weight: v } })} />
@@ -2022,7 +2236,6 @@ function LayoutComposerModal({
   );
 }
 
-
 function NumberInput({ label, value, onChange, step=1 }:{
   label:string; value:number; onChange:(v:number)=>void; step?:number;
 }) {
@@ -2039,7 +2252,6 @@ function NumberInput({ label, value, onChange, step=1 }:{
     </label>
   );
 }
-
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
@@ -2060,8 +2272,79 @@ function StatSmall({ label, value }: { label: string; value: number }) {
 }
 
 /* =====================
+   Overlay de Progresso
+===================== */
+
+function ProgressOverlay({ progress }: { progress: {
+  visible: boolean; phase: 'salvando'|'enviando-fotos'|'finalizando'|null;
+  total: number; current: number; created: number; updated: number;
+  uploaded: number; failed: number; errors: string[];
+} }) {
+  if (!progress.visible) return null;
+  const percent = pct(progress.current, progress.total);
+  const phaseLabel =
+    progress.phase === 'salvando' ? 'Salvando dados...' :
+    progress.phase === 'enviando-fotos' ? 'Enviando fotos...' :
+    progress.phase === 'finalizando' ? 'Finalizando...' : '';
+
+  return (
+    <div className="fixed inset-0 z-[80] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl border p-5">
+        <div className="font-semibold text-gray-900">{phaseLabel}</div>
+        <div className="mt-3">
+          <div className="w-full h-3 rounded-full bg-gray-200 overflow-hidden">
+            <div
+              className="h-3 bg-blue-600 transition-all"
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+          <div className="mt-2 text-xs text-gray-600">
+            {progress.current} / {progress.total} • {percent}%
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+          <div className="rounded-lg border p-2">
+            <div className="text-gray-500">Criadas</div>
+            <div className="font-semibold text-gray-900">{progress.created}</div>
+          </div>
+          <div className="rounded-lg border p-2">
+            <div className="text-gray-500">Atualizadas</div>
+            <div className="font-semibold text-gray-900">{progress.updated}</div>
+          </div>
+          <div className="rounded-lg border p-2">
+            <div className="text-gray-500">Uploads OK</div>
+            <div className="font-semibold text-emerald-700">{progress.uploaded}</div>
+          </div>
+          <div className="rounded-lg border p-2">
+            <div className="text-gray-500">Falhas</div>
+            <div className="font-semibold text-red-600">{progress.failed}</div>
+          </div>
+        </div>
+
+        {progress.errors.length > 0 && (
+          <div className="mt-3 max-h-28 overflow-auto rounded-lg bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
+            {progress.errors.slice(-3).map((e: string, i: number) => (
+              <div key={i} className="truncate">• {e}</div>
+            ))}
+            {progress.errors.length > 3 && (
+              <div className="text-[11px] mt-1">… e mais {progress.errors.length - 3}</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* =====================
    Helpers gerais
 ===================== */
+
+function pct(current: number, total: number) {
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((current / total) * 100)));
+}
 
 function deepMerge<T>(a: T, b: any): T {
   const isObj = (v: any) => v && typeof v === 'object' && !Array.isArray(v);
