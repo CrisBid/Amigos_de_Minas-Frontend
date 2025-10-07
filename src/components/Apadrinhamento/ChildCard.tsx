@@ -57,7 +57,7 @@ export default function ChildCard({
 
     return (
     <div className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition bg-white">
-      <div className="aspect-[4/5] bg-gray-100 relative">
+      <div className="aspect-[9/16] bg-gray-100 relative">
         {composeInputs ? (
           <ComposedImage
             photoUrl={composeInputs.photoUrl}
