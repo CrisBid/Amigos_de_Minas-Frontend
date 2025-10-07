@@ -14,6 +14,7 @@ export default function ChildCard({
     cidade: string;
     escola?: string;
     categoria?: string;
+    presente?: string;
     descricao?: string;
     foto?: string;
     apadrinhado: boolean;
@@ -26,7 +27,7 @@ export default function ChildCard({
 
   return (
     <div className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition bg-white">
-      <div className="aspect-[1/1] bg-gray-100 relative">
+      <div className="aspect-[4/6] bg-gray-100 relative">
         {child.foto ? (
           <Image
             unoptimized
@@ -42,7 +43,7 @@ export default function ChildCard({
       </div>
       <div className="p-4 space-y-2">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-[#253243]">{child.nome}</h3>
+          <h3 className="font-semibold text-[#253243]">{child.nome} - {child.idade} anos</h3>
           {indisponivel ? (
             <span className="text-xs border px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border-amber-100">
               {child.status === 'PENDING' ? 'Pendente' : 'Apadrinhado'}
@@ -55,8 +56,10 @@ export default function ChildCard({
         </div>
 
         <p className="text-sm text-gray-600">{child.cidade}{child.escola ? ` • ${child.escola}` : ''}</p>
-        {child.categoria && <p className="text-sm text-gray-600">Categoria: {child.categoria}</p>}
-        {child.descricao && <p className="text-sm text-gray-500 line-clamp-2">{child.descricao}</p>}
+        {child.categoria && <p className="text-sm text-gray-600">Presente: {child.presente}</p>}
+        {
+        //child.descricao && <p className="text-sm text-gray-500 line-clamp-2">{child.descricao}</p>
+        }
 
         <div className="pt-2 flex gap-2">
           {!indisponivel ? (

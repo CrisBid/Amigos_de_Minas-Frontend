@@ -16,6 +16,7 @@ type Child = {
   id: string;
   name: string;
   age?: number;
+  birthDate?: Date;
   cityName?: string;
   city?: City | null;
   school?: string;
@@ -123,10 +124,14 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             campaignId
           )}&format=webp&q=82`;
 
+          console.log(data);
+          
+
           return {
             id: c.id,
             name: c.name,
             age: c.age ?? c.idade,
+            birthDate: c.birthDate,
             cityName: c.city?.name ?? c.cityName,
             city: c.city ?? null,
             school: c.school ?? c.escola,
@@ -138,6 +143,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             //photoUrl: previewUrl || c.media?.[0]?.framedUrl || c.media?.[0]?.processedUrl || c.photoUrl || undefined,
             photoUrl: c.photoUrl,
             media: c.media,
+
             sponsorshipStatus: status,
           };
         });
@@ -231,6 +237,28 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       return matchesSearch && matchesCidade && matchesEscola && matchesCategoria && matchesStatus && matchesIdade;
     });
   }, [children, searchTerm, filtros]);
+
+  // === Calcula idade com base na birthDate ===
+  const calcularIdade = (birthDate?: string | Date | null) => {
+    if (!birthDate) return 0;
+    const nascimento = new Date(birthDate);
+    if (isNaN(nascimento.getTime())) return 0;
+
+    const hoje = new Date();
+    let idade = hoje.getFullYear() - nascimento.getFullYear();
+    const mesAtual = hoje.getMonth();
+    const diaAtual = hoje.getDate();
+
+    // Ajuste se ainda não fez aniversário neste ano
+    if (
+      mesAtual < nascimento.getMonth() ||
+      (mesAtual === nascimento.getMonth() && diaAtual < nascimento.getDate())
+    ) {
+      idade--;
+    }
+
+    return idade;
+  };
 
   return (
     <div className="max-w-6xl mx-auto px-6">
@@ -373,16 +401,20 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {childrenFiltradas.map((child) => {
           const nomeCidade = child.city?.name ?? child.cityName ?? '';
+          const idadeCalculada = child.age ?? calcularIdade(child.birthDate);
+          //console.log(idadeCalculada);
+          
           return (
             <ChildCard
               key={child.id}
               child={{
                 id: child.id,
                 nome: child.name,
-                idade: child.age ?? 0,
+                idade: idadeCalculada ?? 0,
                 cidade: nomeCidade,
                 escola: child.school ?? '',
                 categoria: child.category ?? '',
+                presente: child.wantedGift ?? '',
                 descricao: child.description ?? '',
                 apadrinhado: ['COMPLETED', 'PENDING'].includes(child.sponsorshipStatus),
                 foto: child.photoUrl ?? '',
