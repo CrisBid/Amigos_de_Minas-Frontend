@@ -3,8 +3,10 @@ import { Users, Heart, Star } from 'lucide-react';
 interface StatsProps {
   stats: {
     total: number;
-    apadrinhadas: number;
-    disponiveis: number;
+    active: number;
+    pending: number,
+    available: number,
+    sponsorshipRate: number
   };
 }
 
@@ -27,7 +29,7 @@ export default function Stats({ stats }: StatsProps) {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-green-600 text-xs sm:text-sm font-medium">Apadrinhadas</p>
-            <p className="text-2xl sm:text-3xl font-bold text-gray-800">{stats.apadrinhadas}</p>
+            <p className="text-2xl sm:text-3xl font-bold text-gray-800">{stats.active}</p>
           </div>
           <Heart className="h-8 w-8 sm:h-12 sm:w-12 text-green-500" />
         </div>
@@ -38,7 +40,7 @@ export default function Stats({ stats }: StatsProps) {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-yellow-600 text-xs sm:text-sm font-medium">Disponíveis</p>
-            <p className="text-2xl sm:text-3xl font-bold text-gray-800">{stats.disponiveis}</p>
+            <p className="text-2xl sm:text-3xl font-bold text-gray-800">{stats.available}</p>
           </div>
           <Star className="h-8 w-8 sm:h-12 sm:w-12 text-yellow-500" />
         </div>

@@ -43,6 +43,10 @@ export default function AdminChildrenPage() {
   const [page, setPage] = useState(1);
   const [data, setData] = useState<PageResp | null>(null);
   const [loading, setLoading] = useState(false);
+  const [stats, setStats] = useState<{ total: number; active: number; pending: number; available: number; sponsorshipRate: number }>({
+    total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0,
+  });
+
 
   function normalize(raw: any): PageResp {
     const items: ChildListItem[] = Array.isArray(raw?.items)
@@ -85,8 +89,34 @@ export default function AdminChildrenPage() {
     }
   };
 
+  const loadStats = async () => {
+    try {
+      const res = await fetch('/api/admin/children/stats', {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: { accept: 'application/json' },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setStats({
+          total: json.total ?? 0,
+          active: json.active ?? 0,
+          pending: json.pending ?? 0,
+          available: json.available ?? Math.max(0, (json.total ?? 0) - ((json.active ?? 0) + (json.pending ?? 0))),
+          sponsorshipRate: json.sponsorshipRate ?? (json.total ? Math.round(((json.active ?? 0) / json.total) * 100) : 0),
+        });
+      } else {
+        setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
+      }
+    } catch {
+      setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
+    }
+  };
+
+
   useEffect(() => {
     load();
+    loadStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, page]);
 
@@ -152,14 +182,7 @@ export default function AdminChildrenPage() {
   const rows: ChildListItem[] = Array.isArray(data?.items) ? (data!.items as ChildListItem[]) : [];
   const noRows = !loading && rows.length === 0;
 
-  const headerStats = useMemo(() => {
-    const total = typeof data?.total === 'number' ? data.total : rows.length;
-    const active = rows.filter(i => latestStatus(i.sponsorships) === 'ACTIVE').length;
-    const pending = rows.filter(i => latestStatus(i.sponsorships) === 'PENDING').length;
-    const available = rows.filter(i => !latestStatus(i.sponsorships) || latestStatus(i.sponsorships) === 'CANCELLED' || latestStatus(i.sponsorships) === 'ENDED').length;
-    const sponsorshipRate = total > 0 ? Math.round((active / total) * 100) : 0;
-    return { total, active, pending, available, sponsorshipRate };
-  }, [data?.total, rows]);
+  const headerStats = stats;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">

@@ -1,7 +1,7 @@
 // app/apadrinhamento/ApadrinhamentoClient.tsx
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Filter, Search, Loader2, AlertCircle } from 'lucide-react';
@@ -39,62 +39,42 @@ type ImageConfig = {
   canvas: { width: number; height: number; background: string | null };
   layout: { onTop?: boolean; opacity?: number; resizeToCanvas?: boolean };
   photoRect: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
+    x: number; y: number; width: number; height: number;
     fit: 'cover' | 'contain';
     scale: number;
     gravity:
       | 'north' | 'northeast' | 'east' | 'southeast'
       | 'south' | 'southwest' | 'west' | 'northwest' | 'center';
-    offsetX: number;
-    offsetY: number;
-    cornerRadius: number;
+    offsetX: number; offsetY: number; cornerRadius: number;
   };
-  texts: any[]; // ajuste se tiver o shape específico dos textos
+  texts: any[];
 };
 
 type ChildImage = {
   id: string;
   childId: string;
   campaignId: string;
-
-  originalKey: string | null;
-  originalUrl: string | null;
-  processedKey: string | null;
-  processedUrl: string | null;
-  framedKey: string | null;
-  framedUrl: string | null;
-  layoutKey: string | null;
-  layoutUrl: string | null;
-
+  originalKey: string | null; originalUrl: string | null;
+  processedKey: string | null; processedUrl: string | null;
+  framedKey: string | null; framedUrl: string | null;
+  layoutKey: string | null; layoutUrl: string | null;
   Config: ImageConfig;
-
-  width: number | null;
-  height: number | null;
+  width: number | null; height: number | null;
   status: 'UPLOADED' | 'PROCESSED' | 'COMPOSED' | string;
-  notes: string | null;
-  version: number;
-
-  createdAt: string; // ISO
-  updatedAt: string; // ISO
+  notes: string | null; version: number;
+  createdAt: string; updatedAt: string;
 };
-// ------------------------------------------------------------
 
-// Seu tipo Child, apenas com a adição de `images?: ChildImage[]`
 type Child = {
   id: string;
   publicId?: number | null;
   name: string;
-  birthDate?: string | Date | null;       // <- agora aceita ISO string
+  birthDate?: string | Date | null;
   age?: number | null;
 
-  // legado (mantém como opcional p/ não quebrar)
   cityName?: string | null;
   schoolLegacy?: string | null;
 
-  // novos objetos
   city?: City | null;
   community?: Community | null;
   school?: SchoolObj | null;
@@ -106,57 +86,98 @@ type Child = {
   photoKey?: string | null;
 
   sponsorships?: Array<{ id: string; status: SponsorshipStatus; campaignId: string }>;
-  sponsorshipStatus: SponsorshipStatus;   // derivado
+  sponsorshipStatus: SponsorshipStatus;
   media?: Array<{ framedUrl?: string; processedUrl?: string }>;
-
-  // ---------- NOVO ----------
   images?: ChildImage[];
 };
 
-
 type Campaign = {
-  id: string;
-  name: string;
-  slug: string;
-  year?: number;
+  id: string; name: string; slug: string; year?: number;
   status: 'DRAFT' | 'ACTIVE' | 'FINISHED' | 'ARCHIVED';
 };
 
-type Props = {
-  initialScanFs: boolean;
-};
+type Props = { initialScanFs: boolean };
 
 type StatusFiltro = '' | 'disponivel' | 'apadrinhado';
 
 const FAIXAS_ETARIAS = ['0-3 anos', '4-6 anos', '7-9 anos', '10-12 anos', '13+ anos'];
 
+// ===== Helpers gerais =====
+function uniq(arr: (string | undefined | null)[]) {
+  return Array.from(new Set(arr.filter(Boolean) as string[]));
+}
+function uniqBy<T extends Record<string, unknown>>(arr: T[], key: keyof T) {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const it of arr) {
+    const k = String(it[key]);
+    if (!seen.has(k)) { seen.add(k); out.push(it); }
+  }
+  return out;
+}
+function normalizeStatus(s?: string): SponsorshipStatus {
+  return s === 'COMPLETED' || s === 'PENDING' || s === 'ENDED' || s === 'CANCELLED' ? s : 'NONE';
+}
+async function safeErrMsg(res: Response) {
+  try {
+    const d = await res.json();
+    return (d as { message?: string; error?: string })?.message || (d as any)?.error || res.statusText;
+  } catch { return res.statusText; }
+}
+// calcula idade por birthDate
+function calcularIdade(birthDate?: string | Date | null): number {
+  if (!birthDate) return 0;
+  const d = new Date(birthDate);
+  if (isNaN(d.getTime())) return 0;
+  const hoje = new Date();
+  let idade = hoje.getFullYear() - d.getFullYear();
+  const m = hoje.getMonth();
+  const dia = hoje.getDate();
+  if (m < d.getMonth() || (m === d.getMonth() && dia < d.getDate())) idade--;
+  return idade;
+}
+
+// ===== Componente =====
 export default function ApadrinhamentoClient({ initialScanFs }: Props) {
-  const { data: session, status } = useSession(); // agora não redirecionamos se não logado
+  const { data: session, status } = useSession();
   const router = useRouter();
   const api = process.env.NEXT_PUBLIC_NEST_API_URL;
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignId, setCampaignId] = useState<string>('');
 
+  // paginação incremental
+  const PAGE_SIZE = 24; // ajuste fino aqui
   const [children, setChildren] = useState<Child[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [nextSkip, setNextSkip] = useState(0);
+  const nextSkipRef = useRef(0);      
+
   const [sponsoringId, setSponsoringId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
   const [scanFs, setScanFs] = useState<boolean>(initialScanFs);
+
+  const [stats, setStats] = useState<{ total: number; active: number; pending: number; available: number; sponsorshipRate: number }>({
+    total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0,
+  });
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filtros, setFiltros] = useState({
     cidade: '',
-    comunidade: '',     // novo
+    comunidade: '',
     escola: '',
     categoria: '',
     idade: '',
     status: 'disponivel' as StatusFiltro,
   });
 
+  // sentinel para infinite scroll
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
 
-  // 1) carregar campanhas (sem exigir login)
+  // ===== 1) Carregar campanhas =====
   useEffect(() => {
     if (!api) {
       setError('Defina NEXT_PUBLIC_NEST_API_URL.');
@@ -187,127 +208,204 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     })();
   }, [api]);
 
-  // 2) carregar crianças da campanha
+  const loadStats = async () => {
+    try {
+      const res = await fetch('/api/admin/children/stats', {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: { accept: 'application/json' },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setStats({
+          total: json.total ?? 0,
+          active: json.active ?? 0,
+          pending: json.pending ?? 0,
+          available: json.available ?? Math.max(0, (json.total ?? 0) - ((json.active ?? 0) + (json.pending ?? 0))),
+          sponsorshipRate: json.sponsorshipRate ?? (json.total ? Math.round(((json.active ?? 0) / json.total) * 100) : 0),
+        });
+      } else {
+        setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
+      }
+    } catch {
+      setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
+    }
+  };
+
   useEffect(() => {
-    if (!campaignId || !api) return;
-    (async () => {
+    loadStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ===== Mapper do backend -> Child =====
+  const mapChildren = useCallback((data: any[], selectedCampaignId: string): Child[] => {
+    return (data ?? []).map((c: any) => {
+      const rel = Array.isArray(c.sponsorships)
+        ? c.sponsorships.find(
+            (s: any) =>
+              s.campaignId === selectedCampaignId &&
+              (s.status === 'ACTIVE' || s.status === 'PENDING' || s.status === 'COMPLETED')
+          )
+        : null;
+      const status: SponsorshipStatus = normalizeStatus(rel?.status) || 'NONE';
+      return {
+        id: c.id,
+        publicId: c.publicId ?? null,
+        name: c.name,
+        birthDate: c.birthDate ?? null,
+        age: c.age ?? null,
+        cityName: c.city?.name ?? c.cityName ?? null,
+        schoolLegacy: c.schoolLegacy ?? null,
+        city: c.city ?? null,
+        community: c.community ?? null,
+        school: c.school ?? null,
+        category: c.category ?? null,
+        wantedGift: c.wantedGift ?? null,
+        description: c.description ?? null,
+        photoUrl: c.photoUrl ?? null,
+        photoKey: c.photoKey ?? null,
+        sponsorships: Array.isArray(c.sponsorships) ? c.sponsorships : [],
+        sponsorshipStatus: status,
+        media: Array.isArray(c.media) ? c.media : undefined,
+        images: c.images,
+      } as Child;
+    });
+  }, []);
+
+  // ===== 2) Função para buscar uma página =====
+  const fetchPage = useCallback(
+    async (opts?: { reset?: boolean; skip?: number }) => {
+      if (!campaignId || !api) return;
+
+      const reset = !!opts?.reset;
+      const take = PAGE_SIZE;
+
+      // usa o ref como fonte da verdade, a não ser que passe skip explícito
+      const skip = typeof opts?.skip === 'number' ? opts.skip : nextSkipRef.current;
+
+      const url = new URL(`${api}/children`);
+      url.searchParams.set('campaignId', campaignId);
+      url.searchParams.set('skip', String(skip));
+      url.searchParams.set('take', String(take));
+      if (scanFs) url.searchParams.set('scan', '1');
+
       try {
-        setLoading(true);
-        setError(null);
-        const url = new URL(`${api}/children`);
-        url.searchParams.set('campaignId', campaignId);
-        if (scanFs) url.searchParams.set('scan', '1');
+        if (reset) { setLoading(true); setError(null); } else { setLoadingMore(true); }
+
         const res = await fetch(url.toString(), { cache: 'no-store' });
         if (!res.ok) throw new Error(await safeErrMsg(res));
-        const data = await res.json();
-        const mapped: Child[] = (data ?? []).map((c: any) => {
-        const rel = Array.isArray(c.sponsorships)
-          ? c.sponsorships.find(
-              (s: any) => s.campaignId === campaignId && (s.status === 'ACTIVE' || s.status === 'PENDING')
-            )
-          : null;
+        const json = await res.json();
 
-        const status: SponsorshipStatus = rel?.status ?? 'NONE';
+        // aceita envelope {items,total,hasMore,...} ou array puro (fallback)
+        const itemsRaw: any[] = Array.isArray(json) ? json : (json?.items ?? []);
+        const mapped = mapChildren(itemsRaw, campaignId);
 
-        return {
-          id: c.id,
-          publicId: c.publicId ?? null,
-          name: c.name,
-          birthDate: c.birthDate ?? null,
-          age: c.age ?? null,
+        if (reset) {
+          setChildren(mapped);
+          nextSkipRef.current = mapped.length;
+          setNextSkip(nextSkipRef.current);
+        } else {
+          setChildren(prev => [...prev, ...mapped]);
+          nextSkipRef.current = skip + mapped.length;
+          setNextSkip(nextSkipRef.current);
+        }
 
-          // mantém compatibilidade com filtros/labels já existentes
-          cityName: c.city?.name ?? c.cityName ?? null,
-          schoolLegacy: c.schoolLegacy ?? null,
+        // prioridade: hasMore do servidor; senão, heurística local
+        const serverHasMore =
+          !Array.isArray(json) && typeof json?.hasMore === 'boolean'
+            ? Boolean(json.hasMore)
+            : mapped.length === take; // se veio menos que take, acabou
 
-          // objetos novos
-          city: c.city ?? null,
-          community: c.community ?? null,
-          school: c.school ?? null,
-
-          category: c.category ?? null,
-          wantedGift: c.wantedGift ?? null,
-          description: c.description ?? null,
-
-          photoUrl: c.photoUrl ?? null,
-          photoKey: c.photoKey ?? null,
-
-          sponsorships: Array.isArray(c.sponsorships) ? c.sponsorships : [],
-          sponsorshipStatus: status,
-
-          // se existir no payload (não obrigatório)
-          media: Array.isArray(c.media) ? c.media : undefined,
-          images: c.images,
-        };
-      });
-
-        setChildren(mapped);
+        setHasMore(serverHasMore);
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Falha ao carregar crianças.';
         setError(msg);
       } finally {
-        setLoading(false);
+        if (reset) setLoading(false); else setLoadingMore(false);
       }
-    })();
-  }, [campaignId, api, scanFs]);
+    },
+    // ⚠️ Importante: não coloque nextSkip aqui!
+    [api, campaignId, scanFs, mapChildren, PAGE_SIZE]
+  );
 
-  // 3) clique em "Apadrinhar"
-  async function handleSponsor(childId: string) {
-    if (!campaignId) {
-      setError('Selecione uma campanha.');
-      return;
+
+  // ===== 3) Reset ao trocar campanha/scan ou filtros de busca =====
+  // Obs: filtros e busca afetam apenas a renderização; para aliviar ainda mais,
+  // você pode enviar filtros ao backend se suportar.
+  useEffect(() => {
+    if (!campaignId) return;
+    // reinicia a lista
+    setChildren([]);
+    setHasMore(true);
+    setNextSkip(0);
+    fetchPage({ reset: true, skip: 0 });
+  }, [campaignId, scanFs, fetchPage]);
+
+  // ===== 4) Infinite scroll (IntersectionObserver) =====
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
     }
+
+    observerRef.current = new IntersectionObserver(
+      entries => {
+        const first = entries[0];
+        if (!first?.isIntersecting) return;
+        if (!hasMore || loading || loadingMore) return; // guardas fortes
+        fetchPage(); // próxima página usando o ref
+      },
+      { root: null, rootMargin: '600px 0px', threshold: 0 }
+    );
+
+    observerRef.current.observe(sentinelRef.current);
+
+    return () => {
+      observerRef.current?.disconnect();
+      observerRef.current = null;
+    };
+  }, [hasMore, loading, loadingMore, fetchPage]);
+
+
+  // ===== 5) Ação “Apadrinhar” =====
+  async function handleSponsor(childId: string) {
+    if (!campaignId) { setError('Selecione uma campanha.'); return; }
     setSponsoringId(childId);
     try {
       if (status === 'authenticated') {
-        router.push(
-          `/apadrinhamento/concluir?childId=${encodeURIComponent(childId)}&campaignId=${encodeURIComponent(
-            campaignId
-          )}`
-        );
+        router.push(`/apadrinhamento/concluir?childId=${encodeURIComponent(childId)}&campaignId=${encodeURIComponent(campaignId)}`);
       } else {
-        router.push(
-          `/apadrinhamento/registro?childId=${encodeURIComponent(childId)}&campaignId=${encodeURIComponent(
-            campaignId
-          )}`
-        );
+        router.push(`/apadrinhamento/registro?childId=${encodeURIComponent(childId)}&campaignId=${encodeURIComponent(campaignId)}`);
       }
     } finally {
       setSponsoringId(null);
     }
   }
 
-  // 4) stats
-  const stats = useMemo(() => {
-    const total = children.length;
-    const indisponiveis = children.filter((c) => ['ACTIVE', 'PENDING'].includes(c.sponsorshipStatus)).length;
-    const disponiveis = total - indisponiveis;
-    return { total, apadrinhadas: indisponiveis, disponiveis };
-  }, [children]);
+  // ===== 6) Stats (sobre o conjunto carregado até agora) =====
+  const headerStats = stats;
 
-  // 5) filtros (derivados)
+  // ===== 7) Opções para filtros =====
   const cidades = useMemo(
     () => uniq(children.map((c) => c.city?.name ?? c.cityName).filter(Boolean) as string[]),
     [children]
   );
-
   const comunidades = useMemo(
     () => uniq(children.map((c) => c.community?.name).filter(Boolean) as string[]),
     [children]
   );
-
   const escolas = useMemo(
     () => uniq(children.map((c) => c.school?.name ?? c.schoolLegacy).filter(Boolean) as string[]),
     [children]
   );
-
   const categorias = useMemo(
     () => uniq(children.map((c) => c.category).filter(Boolean) as string[]),
     [children]
   );
 
-
-  // 6) aplicar filtros
+  // ===== 8) Aplicar filtros localmente =====
   const childrenFiltradas = useMemo(() => {
     return children.filter((child) => {
       const nomeCidade = child.city?.name ?? child.cityName ?? '';
@@ -316,7 +414,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
 
       const matchesSearch = child.name?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesCidade = !filtros.cidade || nomeCidade === filtros.cidade;
-      const matchesComunidade = !filtros.comunidade || nomeComunidade === filtros.comunidade; // novo
+      const matchesComunidade = !filtros.comunidade || nomeComunidade === filtros.comunidade;
       const matchesEscola = !filtros.escola || nomeEscola === filtros.escola;
       const matchesCategoria = !filtros.categoria || child.category === filtros.categoria;
 
@@ -348,24 +446,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     });
   }, [children, searchTerm, filtros]);
 
-
-  // === Calcula idade com base na birthDate ===
-  function calcularIdade(birthDate?: string | Date | null): number {
-    if (!birthDate) return 0;
-    const d = new Date(birthDate);
-    if (isNaN(d.getTime())) return 0;
-
-    const hoje = new Date();
-    let idade = hoje.getFullYear() - d.getFullYear();
-
-    const m = hoje.getMonth();
-    const dia = hoje.getDate();
-    if (m < d.getMonth() || (m === d.getMonth() && dia < d.getDate())) {
-      idade--;
-    }
-    return idade;
-  }
-
   return (
     <div className="max-w-6xl mx-auto px-6">
       {/* Header */}
@@ -382,34 +462,22 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             >
               {campaigns.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name}
-                  {c.year ? ` (${c.year})` : ''}
+                  {c.name}{c.year ? ` (${c.year})` : ''}
                 </option>
               ))}
             </select>
           </div>
-
-          {/* scan opcional */}
-          <label className="flex items-center gap-2 text-sm text-gray-600">
-            <input
-              type="checkbox"
-              checked={scanFs}
-              onChange={(e) => setScanFs(e.target.checked)}
-              className="rounded border-gray-300"
-            />
-            Ler imagens do disco (scan)
-          </label>
         </div>
       </div>
 
-      {/* banner opcional para convidados */}
+      {/* banner opcional */}
       {status !== 'authenticated' && (
         <div className="mb-4 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded-xl p-3">
           Você pode navegar livremente. Para concluir o apadrinhamento, faremos um cadastro rápido no próximo passo. 💚
         </div>
       )}
 
-      <Stats stats={stats} />
+      <Stats stats={headerStats} />
 
       {error && (
         <div className="mt-4 mb-2 flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3">
@@ -433,7 +501,9 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
                 type="text"
                 placeholder="Buscar por nome..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                }}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
               />
             </div>
@@ -446,9 +516,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
           >
             <option value="">Todas as cidades</option>
             {cidades.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
+              <option key={c} value={c}>{c}</option>
             ))}
           </select>
 
@@ -459,9 +527,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
           >
             <option value="">Todas as escolas</option>
             {escolas.map((e) => (
-              <option key={e} value={e}>
-                {e}
-              </option>
+              <option key={e} value={e}>{e}</option>
             ))}
           </select>
 
@@ -472,9 +538,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
           >
             <option value="">Todas as categorias</option>
             {categorias.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
+              <option key={cat} value={cat}>{cat}</option>
             ))}
           </select>
 
@@ -495,9 +559,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
           >
             <option value="">Todas as idades</option>
             {FAIXAS_ETARIAS.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
+              <option key={f} value={f}>{f}</option>
             ))}
           </select>
         </div>
@@ -523,9 +585,8 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
                 descricao: child.description ?? '',
                 apadrinhado: ['COMPLETED', 'PENDING'].includes(child.sponsorshipStatus),
                 foto: child.photoUrl ?? '',
-                images: child.images,  // passa as images[]
+                images: child.images,
                 status: child.sponsorshipStatus,
-                // se o Card exibir comunidade e quiser passar:
                 comunidade: child.community?.name ?? '',
               }}
               onSponsor={() => handleSponsor(child.id)}
@@ -533,9 +594,9 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             />
           );
         })}
-
       </div>
 
+      {/* Loader principal */}
       {loading && (
         <div className="flex items-center gap-2 text-gray-600 py-8">
           <Loader2 className="w-4 h-4 animate-spin" />
@@ -543,37 +604,35 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         </div>
       )}
 
+      {/* Sentinela para infinite scroll */}
+      <div ref={sentinelRef} className="h-1"></div>
+
+      {/* Loader incremental / botão fallback */}
+      {!loading && hasMore && (
+        <div className="flex flex-col items-center py-6">
+          {loadingMore ? (
+            <div className="flex items-center gap-2 text-gray-600">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Carregando mais…
+            </div>
+          ) : (
+            <button
+              className="px-4 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+              onClick={() => fetchPage()}
+            >
+              Carregar mais
+            </button>
+          )}
+        </div>
+      )}
+
+      {!loading && !loadingMore && !hasMore && childrenFiltradas.length > 0 && (
+        <div className="text-center text-gray-500 py-6">Você chegou ao fim da lista. 🎉</div>
+      )}
+
       {!loading && childrenFiltradas.length === 0 && (
         <div className="text-center text-gray-500 py-10">Nenhuma criança encontrada com os filtros aplicados.</div>
       )}
     </div>
   );
-}
-
-/* helpers */
-function uniq(arr: (string | undefined | null)[]) {
-  return Array.from(new Set(arr.filter(Boolean) as string[]));
-}
-function uniqBy<T extends Record<string, unknown>>(arr: T[], key: keyof T) {
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const it of arr) {
-    const k = String(it[key]);
-    if (!seen.has(k)) {
-      seen.add(k);
-      out.push(it);
-    }
-  }
-  return out;
-}
-function normalizeStatus(s?: string): SponsorshipStatus {
-  return s === 'COMPLETED' || s === 'PENDING' || s === 'ENDED' || s === 'CANCELLED' ? s : 'NONE';
-}
-async function safeErrMsg(res: Response) {
-  try {
-    const d = await res.json();
-    return (d as { message?: string; error?: string })?.message || (d as any)?.error || res.statusText;
-  } catch {
-    return res.statusText;
-  }
 }
