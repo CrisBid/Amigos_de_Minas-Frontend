@@ -576,6 +576,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
               key={String(child.id)}
               child={{
                 id: child.id,
+                publicId: child.publicId ?? 0,
                 nome: child.name,
                 idade: idadeCalculada,
                 cidade: nomeCidade,

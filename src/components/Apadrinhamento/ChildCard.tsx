@@ -14,6 +14,7 @@ export default function ChildCard({
 }: {
   child: {
     id: string;
+    publicId: number;   // opcional, se quiser usar no ComposedImage
     nome: string;
     idade: number;            // já calculada ou fornecida
     cidade: string;
@@ -90,7 +91,7 @@ export default function ChildCard({
       <div className="p-4 space-y-2">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-[#253243]">
-            {child.nome} - {child.idade} anos
+            {child.nome} - {child.publicId}
           </h3>
           {indisponivel ? (
             <span className="text-xs border px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border-amber-100">
@@ -102,6 +103,11 @@ export default function ChildCard({
             </span>
           )}
         </div>
+        {(child.idade) && (
+          <p className="text-sm text-gray-600">
+            Idade: {child.idade} anos
+          </p>
+        )}
 
         {metaLine && <p className="text-sm text-gray-600">{metaLine}</p>}
 
