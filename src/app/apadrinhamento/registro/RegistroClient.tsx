@@ -4,17 +4,35 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession, signIn, getSession } from 'next-auth/react';
 import {
-  AlertCircle,
-  ArrowLeft,
-  ArrowRight,
-  CheckCircle,
-  Loader2,
-  Shield,
-  Copy,
-  Check
+  AlertCircle, ArrowLeft, ArrowRight, CheckCircle, Loader2,
+  Shield, Copy, Check, Info, MessageSquare
 } from 'lucide-react';
 
-type MainStep = 1 | 2 | 3 | 4;
+/* ----------------- Helpers ----------------- */
+function normalizePhone(v: string) {
+  return v.replace(/\D/g, '');
+}
+
+function normalizeCep(v: string) {
+  return v.replace(/\D/g, '').slice(0, 8); // só dígitos (até 8)
+}
+
+function formatCep(v: string) {
+  const d = normalizeCep(v);
+  return d.length > 5 ? `${d.slice(0,5)}-${d.slice(5)}` : d;
+}
+
+function looksLikeEmail(v: string) {
+  return /\S+@\S+\.\S+/.test(v);
+}
+
+function toIdentifier(input: string) {
+  // se for e-mail, retorna como está; se não, normaliza como telefone
+  return looksLikeEmail(input) ? input.trim() : normalizePhone(input);
+}
+/* ------------------------------------------- */
+
+type MainStep = 1 | 2 | 3 | 4 | 5;
 type RegSubStep = 'credentials' | 'profile';
 type DonationMethod = 'ponto' | 'dinheiro' | '';
 
@@ -43,11 +61,12 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
   const [hasAccount, setHasAccount] = useState<boolean | null>(null);
   const [regStep, setRegStep] = useState<RegSubStep>('credentials');
   const [donationMethod, setDonationMethod] = useState<DonationMethod>('');
+  const [guidelinesAccepted, setGuidelinesAccepted] = useState(false);
 
   // Forms
-  const [login, setLogin] = useState({ email: '', password: '' });
+  const [login, setLogin] = useState({ identifier: '', password: '' }); // <— mudou
   const [signup, setSignup] = useState({ name: '', email: '', phone: '', password: '', confirm: '' });
-  const [profile, setProfile] = useState({ address: '', city: '', profession: '' });
+  const [profile, setProfile] = useState({ address: '', city: '', profession: '', cep: '' });
 
   // UI
   const [loading, setLoading] = useState(false);
@@ -64,6 +83,11 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
   // UX copiar
   const [copied, setCopied] = useState(false);
 
+  // Nomes (novo)
+  const [childName, setChildName] = useState<string | null>(null);
+  const [campaignName, setCampaignName] = useState<string | null>(null);
+  const [loadingNames, setLoadingNames] = useState<boolean>(true);
+
   // token pós-login
   useEffect(() => {
     (async () => {
@@ -73,20 +97,50 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     })();
   }, [status]);
 
+  // Buscar nomes da criança e da campanha
+  useEffect(() => {
+    if (!api || !childId || !campaignId) return;
+    let mounted = true;
+    (async () => {
+      setLoadingNames(true);
+      try {
+        const [cr, ca] = await Promise.all([
+          fetch(`${api}/children/${childId}`),
+          fetch(`${api}/campaigns/${campaignId}`)
+        ]);
+        const cd = cr.ok ? await cr.json() : null;
+        const cad = ca.ok ? await ca.json() : null;
+        if (!mounted) return;
+        setChildName(cd?.name ?? null);
+        setCampaignName(cad?.name ?? null);
+      } catch {
+        if (!mounted) return;
+        setChildName(null);
+        setCampaignName(null);
+      } finally {
+        if (mounted) setLoadingNames(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [api, childId, campaignId]);
+
   /* ----------------- Ações ----------------- */
 
   async function doLogin() {
     setErr(null);
     try {
       setLoading(true);
+      const id = toIdentifier(login.identifier);
+      if (!id || !login.password) throw new Error('Informe e-mail/telefone e senha.');
       const res = await signIn('credentials', {
-        email: login.email,
+        identifier: id,        // <— aqui!
         password: login.password,
         redirect: false,
       });
-      if (res?.error) throw new Error(res.error);
+      if (res?.error) throw new Error(res.error === 'CredentialsSignin' ? 'Credenciais inválidas.' : res.error);
       const s = await getSession();
       setAuthToken((s as unknown as { accessToken?: string } | null)?.accessToken);
+      // Agora vamos para a ETAPA 3 (Orientações)
       setMainStep(3);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Falha no login.';
@@ -114,19 +168,20 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
         body: JSON.stringify({
           name: signup.name || undefined,
           email: signup.email,
-          phone: signup.phone,
+          phone: normalizePhone(signup.phone) || undefined,
           password: signup.password,
         }),
       });
       if (!r.ok) throw new Error(await safeErrMsg(r));
 
-      // 2) login automático (sem redirecionar)
+      // 2) login automático (sem redirecionar) — tenta telefone, senão e-mail
+      const preferredIdentifier = normalizePhone(signup.phone) || signup.email;
       const s = await signIn('credentials', {
-        email: signup.email,
+        identifier: preferredIdentifier, // <— aqui!
         password: signup.password,
         redirect: false,
       });
-      if (s?.error) throw new Error(s.error);
+      if (s?.error) throw new Error(s.error === 'CredentialsSignin' ? 'Credenciais inválidas.' : s.error);
 
       // 3) atualizar token e seguir para os dados pessoais
       const sess = await getSession();
@@ -154,9 +209,11 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
           address: profile.address,
           city: profile.city,
           profession: profile.profession,
+          cep: normalizeCep(profile.cep),
         }),
       });
       if (!r.ok) throw new Error(await safeErrMsg(r));
+      // Após salvar perfil → ETAPA 3 (Orientações)
       setMainStep(3);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Não foi possível salvar seus dados.';
@@ -175,10 +232,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     setErr(null);
     try {
       setLoading(true);
-
-      // Mapeia para o que o backend espera (igual ConcluirClient)
       const deliveryMethod = donationMethod === 'ponto' ? 'DROP_OFF' : 'PIX';
-
       const r = await fetch(`${api}/sponsorships`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -186,7 +240,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
       });
       if (!r.ok) throw new Error(await safeErrMsg(r));
       setDone(true);
-      setMainStep(4);
+      setMainStep(5);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Não foi possível concluir o apadrinhamento.';
       setErr(msg);
@@ -212,23 +266,21 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
   }
 
   function PixInstructions() {
+    const camp = campaignName || campaignId;
+    const child = childName || childId;
     return (
       <div className="space-y-3">
         <p className="text-emerald-800">
           Obrigado por apadrinhar! 💚 Para realizar a contribuição via <b>PIX</b>, use os dados abaixo:
         </p>
-
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
           <div className="text-sm text-gray-700 space-y-2">
             <div><b>Chave PIX:</b> <span className="select-all">{PIX_KEY || '—'}</span></div>
             <div><b>Favorecido:</b> {PIX_FAV}</div>
             {PIX_CNPJ && <div><b>CNPJ:</b> {PIX_CNPJ}</div>}
             {PIX_OBS && <div><b>Observação:</b> {PIX_OBS}</div>}
-            <div className="text-xs text-gray-500">
-              Informe no comprovante: “Campanha {campaignId} — Criança {childId}”.
-            </div>
+            <div className="text-xs text-gray-500">Informe no comprovante: “Campanha {camp} — Criança {child}”.</div>
           </div>
-
           <div className="mt-3">
             <button
               onClick={async () => {
@@ -247,7 +299,6 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
             </button>
           </div>
         </div>
-
         <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
           <li>Guarde o comprovante. Se necessário, nossa equipe poderá solicitar.</li>
           <li>O presente será providenciado pela ONG conforme a campanha.</li>
@@ -257,33 +308,66 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
   }
 
   function DropOffInstructions() {
+    const camp = campaignName || campaignId;
+    const child = childName || childId;
     return (
       <div className="space-y-3">
         <p className="text-emerald-800">
           Obrigado por apadrinhar! 💚 Você escolheu <b>entregar o presente em um ponto de coleta</b>.
         </p>
-
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
           <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
             <li>Embale o presente com cuidado.</li>
-            <li>
-              Identifique o pacote com: <b>Campanha {campaignId}</b> e <b>Criança {childId}</b>.
-            </li>
+            <li>Identifique o pacote com: <b>Campanha {camp}</b> e <b>Criança {child}</b>.</li>
             <li>Entregue em um dos pontos de coleta abaixo.</li>
           </ul>
-
           <div className="mt-4">
-            <img
-              src={DROP_IMG}
-              alt="Pontos de coleta"
-              className="w-full rounded-lg border border-emerald-100"
-            />
+            <img src={DROP_IMG} alt="Pontos de coleta" className="w-full rounded-lg border border-emerald-100" />
           </div>
         </div>
+        <p className="text-sm text-gray-600">Dúvidas? Fale com a equipe pelo WhatsApp da ONG. ✨</p>
+      </div>
+    );
+  }
 
-        <p className="text-sm text-gray-600">
-          Dúvidas? Fale com a equipe pelo WhatsApp da ONG. ✨
-        </p>
+  function GuidelinesStep() {
+    return (
+      <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-5">
+        <BackButton onClick={() => setMainStep(2)} />
+        <div className="flex items-center gap-2">
+          <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center">
+            <Info className="w-5 h-5" />
+          </div>
+          <h2 className="text-lg font-semibold text-[#253243]">Orientações do presente</h2>
+        </div>
+        <div className="text-sm text-gray-700 space-y-3">
+          <p className="font-medium text-[#253243]">Gentileza respeitar a opção da criança!</p>
+          <p>O presente tem que ser o escolhido pela criança, podendo haver complementos adicionais, mas <b>sem substituições</b>.</p>
+          <p>O objetivo da campanha é <b>doar itens novos</b>. Para itens usados, gentileza destinar à campanha de brinquedos.</p>
+          <p>Quanto à embalagem, utilize <b>material impermeável</b> e <b>identifique</b> Nº, Nome e Cidade da criança.</p>
+        </div>
+        <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg p-3">
+          <Shield className="w-4 h-4 text-blue-700" />
+          <span className="text-sm text-blue-900">Essas orientações garantem segurança e correta entrega. 💙</span>
+        </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={guidelinesAccepted}
+            onChange={(e) => setGuidelinesAccepted(e.target.checked)}
+          />
+          <span>Li e concordo com as orientações do programa de apadrinhamento.</span>
+        </label>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setMainStep(4)}
+            disabled={!guidelinesAccepted}
+            className="px-4 py-2 bg-[#253243] text-white rounded-lg hover:bg-[#375A7F] disabled:opacity-60 inline-flex items-center gap-2"
+          >
+            Prosseguir para escolher a forma de doação <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     );
   }
@@ -303,8 +387,9 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
       <div className="flex flex-wrap gap-2 mb-6">
         <StepBadge n={1} active={mainStep === 1}>Você já tem conta?</StepBadge>
         <StepBadge n={2} active={mainStep === 2}>Acesso / Cadastro</StepBadge>
-        <StepBadge n={3} active={mainStep === 3}>Forma de doação</StepBadge>
-        <StepBadge n={4} active={mainStep === 4}>Confirmação</StepBadge>
+        <StepBadge n={3} active={mainStep === 3}>Orientações</StepBadge>
+        <StepBadge n={4} active={mainStep === 4}>Forma de doação</StepBadge>
+        <StepBadge n={5} active={mainStep === 5}>Confirmação</StepBadge>
       </div>
 
       {err && (
@@ -316,9 +401,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
       {/* Etapa 1 */}
       {mainStep === 1 && (
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-          <p className="text-sm text-gray-700">
-            Para continuar, diga pra gente se você já possui uma conta nos Amigos de Minas.
-          </p>
+          <p className="text-sm text-gray-700">Para continuar, diga se você já possui uma conta.</p>
           <div className="flex flex-col sm:flex-row gap-3">
             <button
               className={`flex-1 px-4 py-3 rounded-lg border ${hasAccount === true ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}
@@ -336,7 +419,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
         </div>
       )}
 
-      {/* Etapa 2: Login OU Sub-wizard de cadastro */}
+      {/* Etapa 2: Login */}
       {mainStep === 2 && hasAccount === true && (
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
           <BackButton onClick={() => setMainStep(1)} />
@@ -344,12 +427,14 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
 
           <div className="grid gap-3">
             <div>
-              <label className="text-sm font-medium text-gray-700">E-mail</label>
+              <label className="text-sm font-medium text-gray-700">E-mail ou telefone</label>
               <input
-                type="email"
+                type="text"
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
-                value={login.email}
-                onChange={e => setLogin({ ...login, email: e.target.value })}
+                value={login.identifier}
+                onChange={e => setLogin({ ...login, identifier: e.target.value })}
+                placeholder="seu@email.com ou (31) 9 9999-9999"
+                autoComplete="username"
               />
             </div>
             <div>
@@ -359,6 +444,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
                 value={login.password}
                 onChange={e => setLogin({ ...login, password: e.target.value })}
+                autoComplete="current-password"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -375,6 +461,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
         </div>
       )}
 
+      {/* Etapa 2: Cadastro (sub-wizard) */}
       {mainStep === 2 && hasAccount === false && (
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-6">
           <BackButton onClick={() => setMainStep(1)} />
@@ -395,6 +482,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                   value={signup.name}
                   onChange={e => setSignup({ ...signup, name: e.target.value })}
                   placeholder="Seu nome"
+                  autoComplete="name"
                 />
               </div>
               <div>
@@ -404,15 +492,17 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
                   value={signup.email}
                   onChange={e => setSignup({ ...signup, email: e.target.value })}
+                  autoComplete="email"
                 />
               </div>
               <div>
-                <label className="text-sm font-medium text-gray-700">Telefone</label>
+                <label className="text-sm font-medium text-gray-700">Telefone (opcional, pode usar para login)</label>
                 <input
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
                   value={signup.phone}
                   onChange={e => setSignup({ ...signup, phone: e.target.value })}
                   placeholder="(31) 9 9999-9999"
+                  autoComplete="tel"
                 />
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
@@ -423,6 +513,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
                     value={signup.password}
                     onChange={e => setSignup({ ...signup, password: e.target.value })}
+                    autoComplete="new-password"
                   />
                 </div>
                 <div>
@@ -432,6 +523,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
                     value={signup.confirm}
                     onChange={e => setSignup({ ...signup, confirm: e.target.value })}
+                    autoComplete="new-password"
                   />
                 </div>
               </div>
@@ -469,7 +561,17 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                   placeholder="Sua cidade"
                 />
               </div>
-
+              <div>
+                <label className="text-sm font-medium text-gray-700">CEP</label>
+                <input
+                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
+                  value={profile.cep}
+                  onChange={e => setProfile({ ...profile, cep: formatCep(e.target.value) })}
+                  placeholder="00000-000"
+                  inputMode="numeric"
+                  autoComplete="postal-code"
+                />
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setRegStep('credentials')}
@@ -492,27 +594,28 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
         </div>
       )}
 
-      {/* Etapa 3: Forma de doação */}
-      {mainStep === 3 && (
-        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-5">
-          <BackButton
-            onClick={() => {
-              if (hasAccount) setMainStep(2);
-              else {
-                setMainStep(2);
-                setRegStep('profile');
-              }
-            }}
-          />
+      {/* Etapa 3: Orientações */}
+      {mainStep === 3 && <GuidelinesStep />}
 
+      {/* Etapa 4: Forma de doação */}
+      {mainStep === 4 && (
+        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-5">
+          <BackButton onClick={() => setMainStep(3)} />
           <h2 className="text-lg font-semibold text-[#253243]">Como você prefere doar?</h2>
 
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-700">
+            {loadingNames ? (
+              <span className="text-gray-500">Carregando dados da campanha/criança…</span>
+            ) : (
+              <>
+                <div><b>Campanha:</b> {campaignName || campaignId}</div>
+                <div><b>Criança:</b> {childName || childId}</div>
+              </>
+            )}
+          </div>
+
           <div className="grid gap-3">
-            <label
-              className={`border rounded-lg p-3 cursor-pointer ${
-                donationMethod === 'ponto' ? 'border-blue-500 bg-blue-50' : 'border-gray-300'
-              }`}
-            >
+            <label className={`border rounded-lg p-3 cursor-pointer ${donationMethod === 'ponto' ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}>
               <input
                 type="radio"
                 className="mr-2"
@@ -520,16 +623,10 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                 onChange={() => setDonationMethod('ponto')}
               />
               Entregar no ponto de coleta
-              <p className="text-xs text-gray-500 mt-1">
-                Você levará o presente até um dos pontos de coleta da campanha.
-              </p>
+              <p className="text-xs text-gray-500 mt-1">Você levará o presente até um dos pontos de coleta da campanha.</p>
             </label>
 
-            <label
-              className={`border rounded-lg p-3 cursor-pointer ${
-                donationMethod === 'dinheiro' ? 'border-blue-500 bg-blue-50' : 'border-gray-300'
-              }`}
-            >
+            <label className={`border rounded-lg p-3 cursor-pointer ${donationMethod === 'dinheiro' ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}>
               <input
                 type="radio"
                 className="mr-2"
@@ -537,9 +634,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                 onChange={() => setDonationMethod('dinheiro')}
               />
               Doar em dinheiro (PIX)
-              <p className="text-xs text-gray-500 mt-1">
-                Você fará uma doação via PIX para que a equipe providencie o presente.
-              </p>
+              <p className="text-xs text-gray-500 mt-1">Você fará uma doação via PIX para que a equipe providencie o presente.</p>
             </label>
           </div>
 
@@ -556,31 +651,30 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
         </div>
       )}
 
-      {/* Etapa 4: Confirmação (com instruções detalhadas) */}
-      {mainStep === 4 && done && (
+      {/* Etapa 5: Confirmação */}
+      {mainStep === 5 && done && (
         <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-5 space-y-4">
           <div className="flex items-center gap-2 text-emerald-700 font-semibold">
             <CheckCircle className="w-5 h-5" /> Apadrinhamento concluído!
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl p-3 text-sm text-gray-700">
-            <div><b>Campanha:</b> {campaignId}</div>
-            <div><b>Criança:</b> {childId}</div>
+            <div><b>Campanha:</b> {campaignName || campaignId}</div>
+            <div><b>Criança:</b> {childName || childId}</div>
           </div>
 
           {donationMethod === 'dinheiro' ? <PixInstructions /> : <DropOffInstructions />}
 
+          <div className="flex items-start gap-2 bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-900">
+            <MessageSquare className="w-4 h-4 mt-0.5 text-yellow-700" />
+            <span>Nossa equipe entrará em contato com você em breve para <b>finalizar o apadrinhamento</b> e confirmar os detalhes. 💛</span>
+          </div>
+
           <div className="flex gap-2 pt-2">
-            <button
-              onClick={() => router.push('/meus-apadrinhamentos')}
-              className="px-3 py-1.5 bg-emerald-600 text-white rounded-md hover:bg-emerald-700"
-            >
+            <button onClick={() => router.push('/meus-apadrinhamentos')} className="px-3 py-1.5 bg-emerald-600 text-white rounded-md hover:bg-emerald-700">
               Ver meus apadrinhamentos
             </button>
-            <button
-              onClick={() => router.push('/apadrinhamento')}
-              className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50"
-            >
+            <button onClick={() => router.push('/apadrinhamento')} className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50">
               Voltar à lista
             </button>
           </div>

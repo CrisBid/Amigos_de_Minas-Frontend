@@ -50,6 +50,12 @@ export default function CadastroApadrinhamento() {
     setFormData(prev => ({ ...prev, [name]: value }));
   }
 
+  // Normaliza para enviar ao backend (apenas dígitos)
+  function normalizePhone(v: string) {
+    const digits = v.replace(/\D/g, '');
+    return digits || '';
+  }
+
   // Máscaras leves de UX (não são validação real)
   function formatPhone(v: string) {
     const digits = v.replace(/\D/g, '').slice(0, 11);
@@ -93,17 +99,24 @@ export default function CadastroApadrinhamento() {
 
     setSubmitting(true);
     try {
-      // 1) REGISTRA no Nest
+      // 1) REGISTRA no Nest (User + Profile)
       const res = await fetch(`${api}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // O backend atual exige apenas name/email/password; os demais campos
-        // podem ser salvos depois em um perfil (ver notas ao final).
         body: JSON.stringify({
+          // User
           name: formData.nome,
           email: formData.email,
           password: formData.password,
-          // opcional: roles: ['SPONSOR']
+          phone: normalizePhone(formData.telefone) || undefined,
+          // Profile
+          cep: formData.cep || undefined,
+          address: formData.endereco || undefined,
+          city: formData.cidade || undefined,
+          profession: formData.profissao || undefined,
+          incomeRange: formData.renda || undefined,
+          maritalStatus: formData.estadoCivil || undefined,
+          // roles: ['SPONSOR'] // opcional
         }),
       });
 
@@ -112,17 +125,19 @@ export default function CadastroApadrinhamento() {
         throw new Error(msg || 'Falha ao registrar. Verifique os dados.');
       }
 
-      // 2) LOGIN automático via NextAuth (credentials)
+      // 2) LOGIN automático via NextAuth (credentials) com identifier
+      const preferredIdentifier =
+        normalizePhone(formData.telefone) || formData.email; // tenta telefone, senão e-mail
+
       const login = await signIn('credentials', {
         redirect: false,
-        email: formData.email,
+        identifier: preferredIdentifier,
         password: formData.password,
         callbackUrl: '/',
       });
 
       if (login?.error) {
-        // Se por algum motivo não logar, mostra tela de sucesso básica
-        // e deixa o usuário fazer login manualmente
+        // Se não logar, mostra sucesso básico e deixa login manual
         setSubmitted(true);
         setSubmitting(false);
         return;
@@ -207,7 +222,7 @@ export default function CadastroApadrinhamento() {
         {/* Card */}
         <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
           <form className="space-y-6" onSubmit={handleSubmit}>
-            <h2 className="text-2xl font-bold text-center bg-gradient-to-r from-blue-600 to.green-500 bg-clip-text text-transparent mb-8">
+            <h2 className="text-2xl font-bold text-center bg-gradient-to-r from-blue-600 to-green-500 bg-clip-text text-transparent mb-8">
               Cadastro para Apadrinhamento
             </h2>
 
@@ -227,6 +242,7 @@ export default function CadastroApadrinhamento() {
                 onChange={handleInputChange}
                 placeholder="Digite seu nome completo"
                 required
+                autoComplete="name"
               />
               <Field
                 type="email"
@@ -237,6 +253,7 @@ export default function CadastroApadrinhamento() {
                 onChange={handleInputChange}
                 placeholder="seu@email.com"
                 required
+                autoComplete="email"
               />
               <Field
                 label="Telefone"
@@ -246,6 +263,7 @@ export default function CadastroApadrinhamento() {
                 onChange={onPhoneChange}
                 placeholder="(31) 99999-9999"
                 required
+                autoComplete="tel"
               />
               <Field
                 label="CEP"
@@ -255,6 +273,7 @@ export default function CadastroApadrinhamento() {
                 onChange={onCepChange}
                 placeholder="00000-000"
                 required
+                autoComplete="postal-code"
               />
               <Field
                 className="md:col-span-2"
@@ -265,6 +284,7 @@ export default function CadastroApadrinhamento() {
                 onChange={handleInputChange}
                 placeholder="Rua, número, bairro"
                 required
+                autoComplete="street-address"
               />
               <Field
                 label="Cidade"
@@ -274,9 +294,10 @@ export default function CadastroApadrinhamento() {
                 onChange={handleInputChange}
                 placeholder="Sua cidade"
                 required
+                autoComplete="address-level2"
               />
 
-              {/* Profissão / Renda / Estado civil */}
+              {/* Profissão / Renda / Estado civil (opcional conforme estratégia) */}
               {/* 
               <Field
                 label="Profissão"
@@ -312,6 +333,7 @@ export default function CadastroApadrinhamento() {
                 onChange={handleInputChange}
                 placeholder="Crie uma senha"
                 required
+                autoComplete="new-password"
               />
               <Field
                 type="password"
@@ -322,6 +344,7 @@ export default function CadastroApadrinhamento() {
                 onChange={handleInputChange}
                 placeholder="Repita a senha"
                 required
+                autoComplete="new-password"
               />
             </div>
 
@@ -354,6 +377,7 @@ function Field(props: {
   type?: string;
   required?: boolean;
   className?: string;
+  autoComplete?: string;
 }) {
   const { label, icon, className, ...rest } = props;
   return (

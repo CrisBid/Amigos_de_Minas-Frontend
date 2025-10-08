@@ -9,7 +9,7 @@ export default function ModernLoginScreen() {
   const router = useRouter();
 
   const [showPassword, setShowPassword] = useState(false);
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState(''); // <- email ou telefone
   const [password, setPassword] = useState('');
   const [isHovered, setIsHovered] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -19,19 +19,19 @@ export default function ModernLoginScreen() {
     e.preventDefault();
     setError(null);
 
-    if (!email || !password) {
-      setError('Informe e-mail e senha.');
+    if (!identifier || !password) {
+      setError('Informe seu e-mail ou telefone e a senha.');
       return;
     }
 
     setSubmitting(true);
     try {
-      // Usa o provider "credentials" definido no NextAuth (que chama seu Nest)
+      // Usa o provider "credentials" do NextAuth (que chama seu Nest)
       const res = await signIn('credentials', {
-        redirect: false,         // controlamos o redirect manualmente
-        email,
+        redirect: false, // controlamos o redirect manualmente
+        identifier,      // <- mudou de email para identifier
         password,
-        callbackUrl: '/',        // para onde ir ao logar
+        callbackUrl: '/', // para onde ir ao logar
       });
 
       if (res?.error) {
@@ -43,7 +43,7 @@ export default function ModernLoginScreen() {
       // sucesso
       router.push(res?.url || '/');
       router.refresh();
-    } catch (err) {
+    } catch {
       setError('Falha ao entrar. Tente novamente.');
       setSubmitting(false);
     }
@@ -52,7 +52,6 @@ export default function ModernLoginScreen() {
   async function handleGoogleLogin() {
     setError(null);
     setSubmitting(true);
-    // Dispara o fluxo OAuth do Google
     await signIn('google', { callbackUrl: '/' });
   }
 
@@ -80,20 +79,20 @@ export default function ModernLoginScreen() {
           {/* Card */}
           <div className="bg-white rounded-3xl shadow-2xl border border-gray-50 p-8 backdrop-blur-sm">
             <form className="space-y-6" onSubmit={handleCredentialsLogin}>
-              {/* Email */}
+              {/* E-mail ou Telefone */}
               <div className="space-y-2">
                 <div className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                   <Mail className="w-4 h-4 text-blue-500" />
-                  Email
+                  E-mail ou Telefone
                 </div>
                 <div className="relative">
                   <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    type="text" // <- aceita e-mail ou telefone
+                    value={identifier}
+                    onChange={(e) => setIdentifier(e.target.value)}
                     className="w-full px-4 py-4 bg-gray-50 border border-gray-200 rounded-2xl focus:outline-none focus:ring-3 focus:ring-blue-100 focus:border-blue-400 transition-all duration-300 text-gray-800"
-                    placeholder="seu@email.com"
-                    autoComplete="email"
+                    placeholder="seu@email.com ou (31) 98888-7777"
+                    autoComplete="username" // melhor para login genérico
                     disabled={submitting}
                     required
                   />
@@ -176,6 +175,7 @@ export default function ModernLoginScreen() {
                 onClick={handleGoogleLogin}
                 disabled
                 className="w-full py-4 px-6 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-2xl transition-all duration-300 flex items-center justify-center gap-3 group disabled:opacity-70"
+                title="Em breve"
               >
                 <div className="w-6 h-6 bg-gradient-to-br from-red-500 to-yellow-500 rounded-lg flex items-center justify-center">
                   <span className="text-white text-xs font-bold">G</span>
