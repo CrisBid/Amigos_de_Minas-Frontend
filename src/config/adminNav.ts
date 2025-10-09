@@ -18,18 +18,18 @@ export const ADMIN_ROUTES: AdminRoute[] = [
     children: [],
   },
   {
-    label: "Campanhas",
-    href: "/admin/campaigns",
-    children: [],
-  },
-  {
     label: "Apadrinhamentos",
     href: "/admin/sponsorships",
     children: [],
   },
   {
-    label: "Cidades",
-    href: "/admin/cities",
+    label: "Campanhas",
+    href: "/admin/campaigns",
+    children: [],
+  },
+  {
+    label: "Geral",
+    href: "/admin/geral",
     children: [],
   },
 ];

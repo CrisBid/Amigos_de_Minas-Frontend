@@ -14,8 +14,8 @@ export async function GET(req: NextRequest) {
     cache: 'no-store',
   });
 
-  console.log(qs);
-  console.log(res);
+  //console.log(qs);
+  //console.log(res);
 
   return new Response(await res.text(), {
     status: res.status,
