@@ -1,38 +1,17 @@
-// app/apadrinhamento/ApadrinhamentoClient.tsx
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { Filter, Search, Loader2, AlertCircle } from 'lucide-react';
+import { Filter, Search, Loader2, AlertCircle, X } from 'lucide-react';
 import Stats from '@/components/Apadrinhamento/Stats';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
 
 type SponsorshipStatus = 'PENDING' | 'COMPLETED' | 'IN_PROGRESS' | 'ENDED' | 'CANCELLED' | 'NONE';
 
-type City = {
-  id: string;
-  publicId?: number | null;
-  name: string;
-  state?: string | null;
-};
-
-type Community = {
-  id: string;
-  publicId?: number | null;
-  cityId?: string | null;
-  name: string;
-  slug?: string | null;
-  description?: string | null;
-};
-
-type SchoolObj = {
-  id: string;
-  publicId?: number | null;
-  name: string;
-  slug?: string | null;
-  address?: string | null;
-};
+type City = { id: string; publicId?: number | null; name: string; state?: string | null; };
+type Community = { id: string; publicId?: number | null; cityId?: string | null; name: string; slug?: string | null; description?: string | null; };
+type SchoolObj = { id: string; publicId?: number | null; name: string; slug?: string | null; address?: string | null; };
 
 type ImageConfig = {
   version: number;
@@ -42,148 +21,122 @@ type ImageConfig = {
     x: number; y: number; width: number; height: number;
     fit: 'cover' | 'contain';
     scale: number;
-    gravity:
-      | 'north' | 'northeast' | 'east' | 'southeast'
-      | 'south' | 'southwest' | 'west' | 'northwest' | 'center';
+    gravity: 'north'|'northeast'|'east'|'southeast'|'south'|'southwest'|'west'|'northwest'|'center';
     offsetX: number; offsetY: number; cornerRadius: number;
   };
   texts: any[];
 };
 
 type ChildImage = {
-  id: string;
-  childId: string;
-  campaignId: string;
+  id: string; childId: string; campaignId: string;
   originalKey: string | null; originalUrl: string | null;
   processedKey: string | null; processedUrl: string | null;
   framedKey: string | null; framedUrl: string | null;
   layoutKey: string | null; layoutUrl: string | null;
-  Config: ImageConfig;
-  width: number | null; height: number | null;
-  status: 'UPLOADED' | 'PROCESSED' | 'COMPOSED' | string;
-  notes: string | null; version: number;
-  createdAt: string; updatedAt: string;
+  Config: ImageConfig; width: number | null; height: number | null;
+  status: 'UPLOADED'|'PROCESSED'|'COMPOSED'|string;
+  notes: string | null; version: number; createdAt: string; updatedAt: string;
 };
 
 type Child = {
-  id: string;
-  publicId?: number | null;
-  name: string;
-  birthDate?: string | Date | null;
-  age?: number | null;
-
-  cityName?: string | null;
-  schoolLegacy?: string | null;
-
-  city?: City | null;
-  community?: Community | null;
-  school?: SchoolObj | null;
-
-  category?: string | null;
-  wantedGift?: string | null;
-  description?: string | null;
-  photoUrl?: string | null;
-  photoKey?: string | null;
-
+  id: string; publicId?: number | null; name: string;
+  birthDate?: string | Date | null; age?: number | null;
+  cityName?: string | null; schoolLegacy?: string | null;
+  city?: City | null; community?: Community | null; school?: SchoolObj | null;
+  category?: string | null; wantedGift?: string | null; description?: string | null;
+  photoUrl?: string | null; photoKey?: string | null;
   sponsorships?: Array<{ id: string; status: SponsorshipStatus; campaignId: string }>;
   sponsorshipStatus: SponsorshipStatus;
   media?: Array<{ framedUrl?: string; processedUrl?: string }>;
   images?: ChildImage[];
 };
 
-type Campaign = {
-  id: string; name: string; slug: string; year?: number;
-  status: 'DRAFT' | 'ACTIVE' | 'FINISHED' | 'ARCHIVED';
-};
-
+type Campaign = { id: string; name: string; slug: string; year?: number; status: 'DRAFT'|'ACTIVE'|'FINISHED'|'ARCHIVED' };
 type Props = { initialScanFs: boolean };
-
 type StatusFiltro = '' | 'disponivel' | 'apadrinhado';
 
-const FAIXAS_ETARIAS = ['0-3 anos', '4-6 anos', '7-9 anos', '10-12 anos', '13+ anos'];
+const FAIXAS_ETARIAS = ['0-3 anos','4-6 anos','7-9 anos','10-12 anos','13+ anos'];
 
-// ===== Helpers gerais =====
-function uniq(arr: (string | undefined | null)[]) {
-  return Array.from(new Set(arr.filter(Boolean) as string[]));
-}
-function uniqBy<T extends Record<string, unknown>>(arr: T[], key: keyof T) {
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const it of arr) {
-    const k = String(it[key]);
-    if (!seen.has(k)) { seen.add(k); out.push(it); }
-  }
-  return out;
-}
+// ===== helpers =====
 function normalizeStatus(s?: string): SponsorshipStatus {
-  return s === 'COMPLETED' || s === 'PENDING' || s === 'ENDED' || s === 'CANCELLED' ? s : 'NONE';
+  return s === 'COMPLETED' || s === 'PENDING' || s === 'IN_PROGRESS' || s === 'ENDED' || s === 'CANCELLED' ? s : 'NONE';
 }
 async function safeErrMsg(res: Response) {
   try {
     const d = await res.json();
-    return (d as { message?: string; error?: string })?.message || (d as any)?.error || res.statusText;
+    return (d as any)?.message || (d as any)?.error || res.statusText;
   } catch { return res.statusText; }
 }
-// calcula idade por birthDate
 function calcularIdade(birthDate?: string | Date | null): number {
   if (!birthDate) return 0;
   const d = new Date(birthDate);
   if (isNaN(d.getTime())) return 0;
   const hoje = new Date();
   let idade = hoje.getFullYear() - d.getFullYear();
-  const m = hoje.getMonth();
-  const dia = hoje.getDate();
-  if (m < d.getMonth() || (m === d.getMonth() && dia < d.getDate())) idade--;
+  if (hoje.getMonth() < d.getMonth() || (hoje.getMonth() === d.getMonth() && hoje.getDate() < d.getDate())) idade--;
   return idade;
 }
+function parseFaixa(fo?: string): { minAge?: number; maxAge?: number } {
+  switch (fo) {
+    case '0-3 anos': return { minAge: 0, maxAge: 3 };
+    case '4-6 anos': return { minAge: 4, maxAge: 6 };
+    case '7-9 anos': return { minAge: 7, maxAge: 9 };
+    case '10-12 anos': return { minAge: 10, maxAge: 12 };
+    case '13+ anos': return { minAge: 13 };
+    default: return {};
+  }
+}
 
-// ===== Componente =====
+type CategoryItem = { category: string; count?: number };
+
 export default function ApadrinhamentoClient({ initialScanFs }: Props) {
   const { data: session, status } = useSession();
   const router = useRouter();
   const api = process.env.NEXT_PUBLIC_NEST_API_URL;
 
+  // campanhas
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignId, setCampaignId] = useState<string>('');
 
-  // paginação incremental
-  const PAGE_SIZE = 24; // ajuste fino aqui
+  // paginação
+  const PAGE_SIZE = 24;
   const [children, setChildren] = useState<Child[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const [nextSkip, setNextSkip] = useState(0);
-  const nextSkipRef = useRef(0);      
+  const nextSkipRef = useRef(0);
 
   const [sponsoringId, setSponsoringId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanFs, setScanFs] = useState<boolean>(initialScanFs);
 
-  const [stats, setStats] = useState<{ total: number; active: number; pending: number; available: number; sponsorshipRate: number }>({
-    total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0,
-  });
+  const [stats, setStats] = useState({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
 
   const [searchTerm, setSearchTerm] = useState('');
+  // filtros por ID
   const [filtros, setFiltros] = useState({
-    cidade: '',
-    comunidade: '',
-    escola: '',
+    cidadeId: '',
+    comunidadeId: '',
+    escolaId: '',
     categoria: '',
     idade: '',
     status: 'disponivel' as StatusFiltro,
   });
 
-  // sentinel para infinite scroll
+  // opções vindas do backend
+  const [citiesOpt, setCitiesOpt] = useState<City[]>([]);
+  const [communitiesOpt, setCommunitiesOpt] = useState<Community[]>([]);
+  const [schoolsOpt, setSchoolsOpt] = useState<SchoolObj[]>([]);
+  const [categoriesOpt, setCategoriesOpt] = useState<CategoryItem[]>([]);
+  const [loadingOptions, setLoadingOptions] = useState({ cities: false, communities: false, schools: false, categories: false });
+
+  // sentinela
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
-  // ===== 1) Carregar campanhas =====
+  // ===== campanhas =====
   useEffect(() => {
-    if (!api) {
-      setError('Defina NEXT_PUBLIC_NEST_API_URL.');
-      setLoading(false);
-      return;
-    }
+    if (!api) { setError('Defina NEXT_PUBLIC_NEST_API_URL.'); setLoading(false); return; }
     (async () => {
       try {
         setLoading(true);
@@ -194,57 +147,161 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         ]);
         const active = cRes.ok ? await cRes.json() : [];
         const all = allRes.ok ? await allRes.json() : [];
-        const unique = uniqBy<Campaign>([...active, ...all], 'id').sort(
-          (a, b) => (b.year ?? 0) - (a.year ?? 0)
-        );
+        const byId = new Map<string, Campaign>();
+        [...active, ...all].forEach((c: Campaign) => byId.set(c.id, c));
+        const unique = Array.from(byId.values()).sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
         setCampaigns(unique);
         setCampaignId(unique[0]?.id || '');
       } catch (e) {
-        const msg = e instanceof Error ? e.message : 'Falha ao carregar campanhas.';
-        setError(msg);
-      } finally {
-        setLoading(false);
-      }
+        setError(e instanceof Error ? e.message : 'Falha ao carregar campanhas.');
+      } finally { setLoading(false); }
     })();
   }, [api]);
 
-  const loadStats = async () => {
-    try {
-      const res = await fetch('/api/admin/children/stats', {
-        cache: 'no-store',
-        credentials: 'include',
-        headers: { accept: 'application/json' },
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setStats({
-          total: json.total ?? 0,
-          active: json.active ?? 0,
-          pending: json.pending ?? 0,
-          available: json.available ?? Math.max(0, (json.total ?? 0) - ((json.active ?? 0) + (json.pending ?? 0))),
-          sponsorshipRate: json.sponsorshipRate ?? (json.total ? Math.round(((json.active ?? 0) / json.total) * 100) : 0),
-        });
-      } else {
+  // ===== stats =====
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/children/stats', { cache: 'no-store', credentials: 'include', headers: { accept: 'application/json' } });
+        if (res.ok) {
+          const j = await res.json();
+          setStats({
+            total: j.total ?? 0,
+            active: j.active ?? 0,
+            pending: j.pending ?? 0,
+            available: j.available ?? Math.max(0, (j.total ?? 0) - ((j.active ?? 0) + (j.pending ?? 0))),
+            sponsorshipRate: j.sponsorshipRate ?? (j.total ? Math.round(((j.active ?? 0) / j.total) * 100) : 0),
+          });
+        } else {
+          setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
+        }
+      } catch {
         setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
       }
-    } catch {
-      setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
-    }
-  };
-
-  useEffect(() => {
-    loadStats();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    })();
   }, []);
 
-  // ===== Mapper do backend -> Child =====
+  // ===== opções (buscam no backend) =====
+  const fetchCities = useCallback(async () => {
+    if (!api) return;
+    setLoadingOptions(prev => ({ ...prev, cities: true }));
+    try {
+      const res = await fetch(`${api}/cities`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(await safeErrMsg(res));
+      const data = await res.json();
+      setCitiesOpt(Array.isArray(data) ? data : (data?.items ?? []));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao carregar cidades.');
+      setCitiesOpt([]);
+    } finally {
+      setLoadingOptions(prev => ({ ...prev, cities: false }));
+    }
+  }, [api]);
+
+  const fetchCommunities = useCallback(async (cityId?: string) => {
+    if (!api) return;
+    setLoadingOptions(prev => ({ ...prev, communities: true }));
+    try {
+      const url = new URL(`${api}/communities`);
+      if (cityId) url.searchParams.set('cityId', cityId);
+      const res = await fetch(url.toString(), { cache: 'no-store' });
+      if (!res.ok) throw new Error(await safeErrMsg(res));
+      const data = await res.json();
+      setCommunitiesOpt(Array.isArray(data) ? data : (data?.items ?? []));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao carregar comunidades.');
+      setCommunitiesOpt([]);
+    } finally {
+      setLoadingOptions(prev => ({ ...prev, communities: false }));
+    }
+  }, [api]);
+
+  const fetchSchools = useCallback(async (cityId?: string, communityId?: string) => {
+    if (!api) return;
+    setLoadingOptions(prev => ({ ...prev, schools: true }));
+    try {
+      const url = new URL(`${api}/schools`);
+      if (cityId) url.searchParams.set('cityId', cityId);
+      if (communityId) url.searchParams.set('communityId', communityId);
+      const res = await fetch(url.toString(), { cache: 'no-store' });
+      if (!res.ok) throw new Error(await safeErrMsg(res));
+      const data = await res.json();
+      setSchoolsOpt(Array.isArray(data) ? data : (data?.items ?? []));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao carregar escolas.');
+      setSchoolsOpt([]);
+    } finally {
+      setLoadingOptions(prev => ({ ...prev, schools: false }));
+    }
+  }, [api]);
+
+  // >>> NOVO: categorias (usando /children/categories)
+  const fetchCategories = useCallback(async () => {
+    if (!api) return;
+    setLoadingOptions(prev => ({ ...prev, categories: true }));
+    try {
+      const url = new URL(`${api}/children/categories`);
+      if (campaignId) url.searchParams.set('campaignId', campaignId);
+
+      // aplicar mesmos filtros pais, mas NÃO enviar 'category'
+      const q = searchTerm.trim();
+      if (q) url.searchParams.set('q', q);
+      if (filtros.cidadeId) url.searchParams.set('cityId', filtros.cidadeId);
+      if (filtros.comunidadeId) url.searchParams.set('communityId', filtros.comunidadeId);
+      if (filtros.escolaId) url.searchParams.set('schoolId', filtros.escolaId);
+      if (filtros.status === 'disponivel') url.searchParams.set('status', 'available');
+      if (filtros.status === 'apadrinhado') url.searchParams.set('status', 'assigned');
+      const { minAge, maxAge } = parseFaixa(filtros.idade);
+      if (typeof minAge === 'number') url.searchParams.set('minAge', String(minAge));
+      if (typeof maxAge === 'number') url.searchParams.set('maxAge', String(maxAge));
+
+      const res = await fetch(url.toString(), { cache: 'no-store' });
+      if (!res.ok) throw new Error(await safeErrMsg(res));
+      const data = await res.json();
+
+      // Aceita tanto {items:[{category,count}], total} quanto array simples
+      const items = Array.isArray(data)
+        ? data.map((c: any) => (typeof c === 'string' ? { category: c } : c))
+        : (data?.items ?? []);
+      setCategoriesOpt(items.filter((it: any) => !!it?.category));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao carregar categorias.');
+      setCategoriesOpt([]);
+    } finally {
+      setLoadingOptions(prev => ({ ...prev, categories: false }));
+    }
+  // deps que determinam o universo possível de categorias
+  }, [api, campaignId, searchTerm, filtros.cidadeId, filtros.comunidadeId, filtros.escolaId, filtros.status, filtros.idade]);
+
+  // carregar cidades ao escolher campanha (ou ao montar a tela)
+  useEffect(() => {
+    if (!campaignId) return;
+    fetchCities();
+  }, [campaignId, fetchCities]);
+
+  // quando muda cidade -> carrega comunidades/escolas dessa cidade e zera dependentes
+  useEffect(() => {
+    const cid = filtros.cidadeId || undefined;
+    setFiltros(prev => ({ ...prev, comunidadeId: '', escolaId: '' }));
+    fetchCommunities(cid);
+    fetchSchools(cid, undefined);
+  }, [filtros.cidadeId, fetchCommunities, fetchSchools]);
+
+  // quando muda comunidade -> refina escolas
+  useEffect(() => {
+    const cid = filtros.cidadeId || undefined;
+    const coid = filtros.comunidadeId || undefined;
+    setFiltros(prev => ({ ...prev, escolaId: '' }));
+    fetchSchools(cid, coid);
+  }, [filtros.comunidadeId, fetchSchools, filtros.cidadeId]);
+
+  // ===== map do backend
   const mapChildren = useCallback((data: any[], selectedCampaignId: string): Child[] => {
     return (data ?? []).map((c: any) => {
       const rel = Array.isArray(c.sponsorships)
         ? c.sponsorships.find(
-            (s: any) =>
-              s.campaignId === selectedCampaignId &&
-              (s.status === 'ACTIVE' || s.status === 'PENDING' || s.status === 'COMPLETED')
+            (s: any) => s.campaignId === selectedCampaignId &&
+              (s.status === 'ACTIVE' || s.status === 'PENDING' || s.status === 'COMPLETED' || s.status === 'IN_PROGRESS')
           )
         : null;
       const status: SponsorshipStatus = normalizeStatus(rel?.status) || 'NONE';
@@ -272,104 +329,126 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     });
   }, []);
 
-  // ===== 2) Função para buscar uma página =====
-  const fetchPage = useCallback(
-    async (opts?: { reset?: boolean; skip?: number }) => {
-      if (!campaignId || !api) return;
+  // ===== build URL com filtros por ID =====
+  const buildUrl = useCallback((skip: number, take: number) => {
+    const url = new URL(`${api}/children`);
+    url.searchParams.set('campaignId', campaignId);
+    url.searchParams.set('skip', String(skip));
+    url.searchParams.set('take', String(take));
+    if (scanFs) url.searchParams.set('scan', '1');
 
-      const reset = !!opts?.reset;
-      const take = PAGE_SIZE;
+    const q = searchTerm.trim();
+    if (q) url.searchParams.set('q', q);
 
-      // usa o ref como fonte da verdade, a não ser que passe skip explícito
-      const skip = typeof opts?.skip === 'number' ? opts.skip : nextSkipRef.current;
+    if (filtros.cidadeId) url.searchParams.set('cityId', filtros.cidadeId);
+    if (filtros.comunidadeId) url.searchParams.set('communityId', filtros.comunidadeId);
+    if (filtros.escolaId) url.searchParams.set('schoolId', filtros.escolaId);
 
-      const url = new URL(`${api}/children`);
-      url.searchParams.set('campaignId', campaignId);
-      url.searchParams.set('skip', String(skip));
-      url.searchParams.set('take', String(take));
-      if (scanFs) url.searchParams.set('scan', '1');
+    // >>> categoria vinda do endpoint de categorias
+    if (filtros.categoria) url.searchParams.set('category', filtros.categoria);
 
-      try {
-        if (reset) { setLoading(true); setError(null); } else { setLoadingMore(true); }
+    if (filtros.status === 'disponivel') url.searchParams.set('status', 'available');
+    if (filtros.status === 'apadrinhado') url.searchParams.set('status', 'assigned');
 
-        const res = await fetch(url.toString(), { cache: 'no-store' });
-        if (!res.ok) throw new Error(await safeErrMsg(res));
-        const json = await res.json();
+    const { minAge, maxAge } = parseFaixa(filtros.idade);
+    if (typeof minAge === 'number') url.searchParams.set('minAge', String(minAge));
+    if (typeof maxAge === 'number') url.searchParams.set('maxAge', String(maxAge));
 
-        // aceita envelope {items,total,hasMore,...} ou array puro (fallback)
-        const itemsRaw: any[] = Array.isArray(json) ? json : (json?.items ?? []);
-        const mapped = mapChildren(itemsRaw, campaignId);
+    return url;
+  }, [api, campaignId, scanFs, filtros, searchTerm]);
 
-        if (reset) {
-          setChildren(mapped);
-          nextSkipRef.current = mapped.length;
-          setNextSkip(nextSkipRef.current);
-        } else {
-          setChildren(prev => [...prev, ...mapped]);
-          nextSkipRef.current = skip + mapped.length;
-          setNextSkip(nextSkipRef.current);
-        }
+  // ===== fetch página =====
+  const fetchPage = useCallback(async (opts?: { reset?: boolean; skip?: number }) => {
+    if (!campaignId || !api) return;
 
-        // prioridade: hasMore do servidor; senão, heurística local
-        const serverHasMore =
-          !Array.isArray(json) && typeof json?.hasMore === 'boolean'
-            ? Boolean(json.hasMore)
-            : mapped.length === take; // se veio menos que take, acabou
+    const reset = !!opts?.reset;
+    const take = PAGE_SIZE;
+    const skip = typeof opts?.skip === 'number' ? opts.skip : nextSkipRef.current;
 
-        setHasMore(serverHasMore);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : 'Falha ao carregar crianças.';
-        setError(msg);
-      } finally {
-        if (reset) setLoading(false); else setLoadingMore(false);
+    const url = buildUrl(skip, take);
+
+    try {
+      if (reset) { setLoading(true); setError(null); } else { setLoadingMore(true); }
+
+      const res = await fetch(url.toString(), { cache: 'no-store' });
+      if (!res.ok) throw new Error(await safeErrMsg(res));
+      const json = await res.json();
+
+      const itemsRaw: any[] = Array.isArray(json) ? json : (json?.items ?? []);
+      const mapped = mapChildren(itemsRaw, campaignId);
+
+      if (reset) {
+        setChildren(mapped);
+        nextSkipRef.current = mapped.length;
+      } else {
+        setChildren(prev => [...prev, ...mapped]);
+        nextSkipRef.current = skip + mapped.length;
       }
-    },
-    // ⚠️ Importante: não coloque nextSkip aqui!
-    [api, campaignId, scanFs, mapChildren, PAGE_SIZE]
-  );
 
+      const serverHasMore =
+        !Array.isArray(json) && typeof json?.hasMore === 'boolean'
+          ? Boolean(json.hasMore)
+          : mapped.length === take;
 
-  // ===== 3) Reset ao trocar campanha/scan ou filtros de busca =====
-  // Obs: filtros e busca afetam apenas a renderização; para aliviar ainda mais,
-  // você pode enviar filtros ao backend se suportar.
+      setHasMore(serverHasMore);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao carregar crianças.');
+    } finally {
+      if (reset) setLoading(false); else setLoadingMore(false);
+    }
+  }, [api, campaignId, buildUrl, mapChildren]);
+
+  // ===== reset ao trocar campanha/scan =====
   useEffect(() => {
     if (!campaignId) return;
-    // reinicia a lista
-    setChildren([]);
-    setHasMore(true);
-    setNextSkip(0);
+    setChildren([]); setHasMore(true); nextSkipRef.current = 0;
     fetchPage({ reset: true, skip: 0 });
   }, [campaignId, scanFs, fetchPage]);
 
-  // ===== 4) Infinite scroll (IntersectionObserver) =====
+  // ===== debounce busca/filtros =====
+  const debounceTimer = useRef<number | null>(null);
+  useEffect(() => {
+    if (!campaignId) return;
+    if (debounceTimer.current) window.clearTimeout(debounceTimer.current);
+    debounceTimer.current = window.setTimeout(() => {
+      setChildren([]); setHasMore(true); nextSkipRef.current = 0;
+      fetchPage({ reset: true, skip: 0 });
+    }, 300);
+    return () => { if (debounceTimer.current) window.clearTimeout(debounceTimer.current); };
+  }, [campaignId, filtros, searchTerm, fetchPage]);
+
+  // >>> debounce separado para categorias (evita flood enquanto digita)
+  const debounceCats = useRef<number | null>(null);
+  useEffect(() => {
+    if (!campaignId) return;
+    if (debounceCats.current) window.clearTimeout(debounceCats.current);
+    debounceCats.current = window.setTimeout(() => {
+      fetchCategories();
+    }, 250);
+    return () => { if (debounceCats.current) window.clearTimeout(debounceCats.current); };
+  // re-carrega categorias quando universo muda (não inclui filtros.categoria)
+  }, [campaignId, searchTerm, filtros.cidadeId, filtros.comunidadeId, filtros.escolaId, filtros.status, filtros.idade, fetchCategories]);
+
+  // ===== infinite scroll =====
   useEffect(() => {
     if (!sentinelRef.current) return;
-
-    if (observerRef.current) {
-      observerRef.current.disconnect();
-      observerRef.current = null;
-    }
+    if (observerRef.current) { observerRef.current.disconnect(); observerRef.current = null; }
 
     observerRef.current = new IntersectionObserver(
       entries => {
         const first = entries[0];
         if (!first?.isIntersecting) return;
-        if (!hasMore || loading || loadingMore) return; // guardas fortes
-        fetchPage(); // próxima página usando o ref
+        if (!hasMore || loading || loadingMore) return;
+        fetchPage();
       },
       { root: null, rootMargin: '600px 0px', threshold: 0 }
     );
 
     observerRef.current.observe(sentinelRef.current);
-
-    return () => {
-      observerRef.current?.disconnect();
-      observerRef.current = null;
-    };
+    return () => { observerRef.current?.disconnect(); observerRef.current = null; };
   }, [hasMore, loading, loadingMore, fetchPage]);
 
-
-  // ===== 5) Ação “Apadrinhar” =====
+  // ===== ação apadrinhar =====
   async function handleSponsor(childId: string) {
     if (!campaignId) { setError('Selecione uma campanha.'); return; }
     setSponsoringId(childId);
@@ -379,46 +458,16 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       } else {
         router.push(`/apadrinhamento/registro?childId=${encodeURIComponent(childId)}&campaignId=${encodeURIComponent(campaignId)}`);
       }
-    } finally {
-      setSponsoringId(null);
-    }
+    } finally { setSponsoringId(null); }
   }
 
-  // ===== 6) Stats (sobre o conjunto carregado até agora) =====
-  const headerStats = stats;
-
-  // ===== 7) Opções para filtros =====
-  const cidades = useMemo(
-    () => uniq(children.map((c) => c.city?.name ?? c.cityName).filter(Boolean) as string[]),
-    [children]
-  );
-  const comunidades = useMemo(
-    () => uniq(children.map((c) => c.community?.name).filter(Boolean) as string[]),
-    [children]
-  );
-  const escolas = useMemo(
-    () => uniq(children.map((c) => c.school?.name ?? c.schoolLegacy).filter(Boolean) as string[]),
-    [children]
-  );
-  const categorias = useMemo(
-    () => uniq(children.map((c) => c.category).filter(Boolean) as string[]),
-    [children]
-  );
-
-  // ===== 8) Aplicar filtros localmente =====
+  // ===== filtros locais (reforço) =====
   const childrenFiltradas = useMemo(() => {
     return children.filter((child) => {
-      const nomeCidade = child.city?.name ?? child.cityName ?? '';
-      const nomeComunidade = child.community?.name ?? '';
-      const nomeEscola = child.school?.name ?? child.schoolLegacy ?? '';
-
       const matchesSearch = child.name?.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesCidade = !filtros.cidade || nomeCidade === filtros.cidade;
-      const matchesComunidade = !filtros.comunidade || nomeComunidade === filtros.comunidade;
-      const matchesEscola = !filtros.escola || nomeEscola === filtros.escola;
       const matchesCategoria = !filtros.categoria || child.category === filtros.categoria;
 
-      const isIndisp = ['COMPLETED', 'PENDING'].includes(child.sponsorshipStatus);
+      const isIndisp = ['COMPLETED', 'IN_PROGRESS', 'PENDING'].includes(child.sponsorshipStatus);
       const matchesStatus =
         !filtros.status ||
         (filtros.status === 'disponivel' && !isIndisp) ||
@@ -434,24 +483,20 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         case '13+ anos':   matchesIdade = idadeBase >= 13; break;
       }
 
-      return (
-        matchesSearch &&
-        matchesCidade &&
-        matchesComunidade &&
-        matchesEscola &&
-        matchesCategoria &&
-        matchesStatus &&
-        matchesIdade
-      );
+      return matchesSearch && matchesCategoria && matchesStatus && matchesIdade;
     });
   }, [children, searchTerm, filtros]);
+
+  function limparFiltros() {
+    setFiltros({ cidadeId: '', comunidadeId: '', escolaId: '', categoria: '', idade: '', status: 'disponivel' });
+    setSearchTerm('');
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Crianças Para Apadrinhamento</h2>
-
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <label className="text-sm text-gray-600">Campanha:</label>
@@ -470,14 +515,13 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         </div>
       </div>
 
-      {/* banner opcional */}
       {status !== 'authenticated' && (
         <div className="mb-4 text-sm text-gray-700 bg-emerald-50 border border-emerald-100 rounded-xl p-3">
           Você pode navegar livremente. Para concluir o apadrinhamento, faremos um cadastro rápido no próximo passo. 💚
         </div>
       )}
 
-      <Stats stats={headerStats} />
+      <Stats stats={stats} />
 
       {error && (
         <div className="mt-4 mb-2 flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3">
@@ -486,11 +530,16 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         </div>
       )}
 
-      {/* Filtros e busca */}
+      {/* Filtros */}
       <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-8">
-        <div className="flex items-center mb-4">
-          <Filter className="h-5 w-5 text-gray-600 mr-2" />
-          <h2 className="text-lg font-bold text-gray-800">Filtros e Busca</h2>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center">
+            <Filter className="h-5 w-5 text-gray-600 mr-2" />
+            <h2 className="text-lg font-bold text-gray-800">Filtros e Busca</h2>
+          </div>
+          <button onClick={limparFiltros} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800" title="Limpar filtros">
+            <X className="w-4 h-4" /> Limpar filtros
+          </button>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
@@ -501,44 +550,63 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
                 type="text"
                 placeholder="Buscar por nome..."
                 value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value);
-                }}
+                onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
               />
             </div>
           </div>
 
+          {/* Cidade (IDs) */}
           <select
-            value={filtros.cidade}
-            onChange={(e) => setFiltros({ ...filtros, cidade: e.target.value })}
+            value={filtros.cidadeId}
+            onChange={(e) => setFiltros({ ...filtros, cidadeId: e.target.value, comunidadeId: '', escolaId: '' })}
             className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
           >
-            <option value="">Todas as cidades</option>
-            {cidades.map((c) => (
-              <option key={c} value={c}>{c}</option>
+            <option value="">{loadingOptions.cities ? 'Carregando…' : 'Todas as cidades'}</option>
+            {citiesOpt.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
 
+          {/* Comunidade (IDs) */}
           <select
-            value={filtros.escola}
-            onChange={(e) => setFiltros({ ...filtros, escola: e.target.value })}
+            value={filtros.comunidadeId}
+            onChange={(e) => setFiltros({ ...filtros, comunidadeId: e.target.value, escolaId: '' })}
             className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
+            disabled={!filtros.cidadeId && communitiesOpt.length === 0}
           >
-            <option value="">Todas as escolas</option>
-            {escolas.map((e) => (
-              <option key={e} value={e}>{e}</option>
+            <option value="">{loadingOptions.communities ? 'Carregando…' : 'Todas as comunidades'}</option>
+            {communitiesOpt.map((co) => (
+              <option key={co.id} value={co.id}>{co.name}</option>
             ))}
           </select>
 
+          {/* Escola (IDs) */}
+          <select
+            value={filtros.escolaId}
+            onChange={(e) => setFiltros({ ...filtros, escolaId: e.target.value })}
+            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
+            disabled={schoolsOpt.length === 0 && !filtros.cidadeId && !filtros.comunidadeId}
+          >
+            <option value="">{loadingOptions.schools ? 'Carregando…' : 'Todas as escolas'}</option>
+            {schoolsOpt.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+
+          {/* >>> Categoria (via /children/categories) */}
           <select
             value={filtros.categoria}
             onChange={(e) => setFiltros({ ...filtros, categoria: e.target.value })}
             className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
           >
-            <option value="">Todas as categorias</option>
-            {categorias.map((cat) => (
-              <option key={cat} value={cat}>{cat}</option>
+            <option value="">
+              {loadingOptions.categories ? 'Carregando…' : 'Todas as categorias'}
+            </option>
+            {categoriesOpt.map((it) => (
+              <option key={it.category} value={it.category}>
+                {it.category}{typeof it.count === 'number' ? ` (${it.count})` : ''}
+              </option>
             ))}
           </select>
 
@@ -558,9 +626,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
           >
             <option value="">Todas as idades</option>
-            {FAIXAS_ETARIAS.map((f) => (
-              <option key={f} value={f}>{f}</option>
-            ))}
+            {FAIXAS_ETARIAS.map((f) => (<option key={f} value={f}>{f}</option>))}
           </select>
         </div>
       </div>
@@ -570,7 +636,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         {childrenFiltradas.map((child) => {
           const nomeCidade = child.city?.name ?? child.cityName ?? '';
           const idadeCalculada = (child.age ?? calcularIdade(child.birthDate)) || 0;
-
           return (
             <ChildCard
               key={String(child.id)}
@@ -584,7 +649,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
                 categoria: child.category ?? '',
                 presente: child.wantedGift ?? '',
                 descricao: child.description ?? '',
-                apadrinhado: ['COMPLETED', 'PENDING'].includes(child.sponsorshipStatus),
+                apadrinhado: ['COMPLETED', 'IN_PROGRESS', 'PENDING'].includes(child.sponsorshipStatus),
                 foto: child.photoUrl ?? '',
                 images: child.images,
                 status: child.sponsorshipStatus,
@@ -597,7 +662,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         })}
       </div>
 
-      {/* Loader principal */}
       {loading && (
         <div className="flex items-center gap-2 text-gray-600 py-8">
           <Loader2 className="w-4 h-4 animate-spin" />
@@ -605,10 +669,8 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         </div>
       )}
 
-      {/* Sentinela para infinite scroll */}
-      <div ref={sentinelRef} className="h-1"></div>
+      <div ref={sentinelRef} className="h-1" />
 
-      {/* Loader incremental / botão fallback */}
       {!loading && hasMore && (
         <div className="flex flex-col items-center py-6">
           {loadingMore ? (
@@ -617,10 +679,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
               Carregando mais…
             </div>
           ) : (
-            <button
-              className="px-4 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
-              onClick={() => fetchPage()}
-            >
+            <button className="px-4 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50" onClick={() => fetchPage()}>
               Carregar mais
             </button>
           )}

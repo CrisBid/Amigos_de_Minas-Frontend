@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle, Loader2, AlertCircle, Copy, Check, Info, Shield, MessageSquare } from 'lucide-react';
+import PixQr from '@/components/Pix/PixQr';
 
 type Props = {
   initialChildId: string;
@@ -119,6 +120,16 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
 
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
           <div className="text-sm text-gray-700 space-y-2">
+            {/* 
+            <PixQr
+              descriptionAppend={`Campanha ${campaignName || campaignId} Criança ${childName || childId}`}
+              // referenceLabelOverride="NATAL-2025" // se quiser forçar um rótulo curto fixo
+              merchantCity="MINAS GERAIS"
+              size={256}
+              className="bg-white border border-emerald-200 rounded-xl p-4"
+              showCopyButtons
+            />
+            */}
             <div>
               <b>Chave PIX:</b> <span className="select-all">{PIX_KEY || '—'}</span>
             </div>

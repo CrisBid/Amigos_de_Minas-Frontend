@@ -7,6 +7,7 @@ import {
   AlertCircle, ArrowLeft, ArrowRight, CheckCircle, Loader2,
   Shield, Copy, Check, Info, MessageSquare
 } from 'lucide-react';
+import PixQr from '@/components/Pix/PixQr';
 
 /* ----------------- Helpers ----------------- */
 function normalizePhone(v: string) {
@@ -274,6 +275,16 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
           Obrigado por apadrinhar! 💚 Para realizar a contribuição via <b>PIX</b>, use os dados abaixo:
         </p>
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
+          {/* 
+          <PixQr
+            descriptionAppend={`Campanha ${campaignName || campaignId} Criança ${childName || childId}`}
+            // referenceLabelOverride="NATAL-2025" // se quiser forçar um rótulo curto fixo
+            merchantCity="MINAS GERAIS"
+            size={256}
+            className="bg-white border border-emerald-200 rounded-xl p-4"
+            showCopyButtons
+          />
+          */}
           <div className="text-sm text-gray-700 space-y-2">
             <div><b>Chave PIX:</b> <span className="select-all">{PIX_KEY || '—'}</span></div>
             <div><b>Favorecido:</b> {PIX_FAV}</div>

@@ -389,7 +389,7 @@ export default function AdminChildrenPage() {
                       </td>
                       <td className="px-6 py-4">
                         {child.wantedGift ? (
-                          <div className="flex items-center gap-1.5 max-w-xs">
+                          <div className="flex items-center gap-1.5 w-32">
                             <Gift className="w-3 h-3 text-gray-400 flex-shrink-0" />
                             <span className="text-sm text-gray-600 truncate">{child.wantedGift}</span>
                           </div>

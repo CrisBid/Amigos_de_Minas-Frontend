@@ -200,6 +200,7 @@ function Card({ sp }: { sp: Sponsorship }) {
             <Gift className="w-4 h-4" /> Desejo: {c.wantedGift}
           </div>
         )}
+        {/* 
         <div className="pt-2 flex gap-2">
           <a
             href={`/criancas/${c.id}`}
@@ -216,6 +217,12 @@ function Card({ sp }: { sp: Sponsorship }) {
             </a>
           )}
         </div>
+        */}
+        {sp.status === 'PENDING' && (
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-[#389745]">Nossa Equipe ira Entrar em Contato Para Concluir o Apadrinhamento</h3>
+          </div>
+          )}
       </div>
     </div>
   );

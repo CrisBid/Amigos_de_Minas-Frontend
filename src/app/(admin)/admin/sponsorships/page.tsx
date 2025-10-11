@@ -303,6 +303,8 @@ export default function AdminSponsorshipsPage() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ status: newStatus }),
     });
+    //console.log(r);
+    
     if (!r.ok) return alert('Falha ao alterar status.');
     load();
   }
@@ -344,7 +346,7 @@ export default function AdminSponsorshipsPage() {
       if (!r.ok) throw new Error('Erro ao carregar padrinho');
       const json = await r.json();
       
-      console.log(json);
+      //console.log(json);
       
       setSponsorDetail(json);
     } catch (e) {
@@ -482,8 +484,10 @@ export default function AdminSponsorshipsPage() {
                   <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Padrinho</th>
                   <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Campanha</th>
                   <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Status</th>
+                  {/* 
                   <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Início</th>
                   <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Fim</th>
+                  */}
                   <th className="text-right px-6 py-4 text-sm font-semibold text-gray-900">Ações</th>
                 </tr>
               </thead>
@@ -612,6 +616,7 @@ export default function AdminSponsorshipsPage() {
                     </td>
                     
                     {/* Datas */}
+                    {/* 
                     <td className="px-6 py-4">
                       <span className="text-sm text-gray-600">
                         {fmtDateBR(sponsorship.startDate)}
@@ -623,7 +628,8 @@ export default function AdminSponsorshipsPage() {
                         {fmtDateBR(sponsorship.endDate)}
                       </span>
                     </td>
-                    
+                    */}
+
                     {/* Ações */}
                     <td className="px-6 py-4">
                       <div className="flex items-center justify-end gap-2">
@@ -849,8 +855,8 @@ export default function AdminSponsorshipsPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <InfoRow icon={<User className="w-4 h-4" />} label="Nome" value={labelOrDash(sponsorDetail.name)} />
                   <InfoRow icon={<Mail className="w-4 h-4" />} label="E-mail" value={labelOrDash(sponsorDetail.email)} />
+                  <InfoRow icon={<Phone className="w-4 h-4" />} label="Telefone" value={labelOrDash(sponsorDetail.phone)} />
                   {/* 
-                  <InfoRow icon={<Phone className="w-4 h-4" />} label="Telefone" value={labelOrDash(sponsorDetail.profile.phone ?? sponsorDetail.mobile)} />
                   <InfoRow icon={<Hash className="w-4 h-4" />} label="Documento" value={labelOrDash(sponsorDetail.profile.document ?? sponsorDetail.cpfCnpj)} />
                   */}
                   <InfoRow icon={<MapPin className="w-4 h-4" />} label="Endereço" value={labelOrDash(sponsorDetail.profile.address)} />
