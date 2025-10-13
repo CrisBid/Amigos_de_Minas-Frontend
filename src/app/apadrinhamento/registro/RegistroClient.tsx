@@ -15,7 +15,7 @@ function normalizePhone(v: string) {
 }
 
 function normalizeCep(v: string) {
-  return v.replace(/\D/g, '').slice(0, 8); // só dígitos (até 8)
+  return v.replace(/\D/g, '').slice(0, 8);
 }
 
 function formatCep(v: string) {
@@ -28,7 +28,6 @@ function looksLikeEmail(v: string) {
 }
 
 function toIdentifier(input: string) {
-  // se for e-mail, retorna como está; se não, normaliza como telefone
   return looksLikeEmail(input) ? input.trim() : normalizePhone(input);
 }
 /* ------------------------------------------- */
@@ -36,6 +35,9 @@ function toIdentifier(input: string) {
 type MainStep = 1 | 2 | 3 | 4 | 5;
 type RegSubStep = 'credentials' | 'profile';
 type DonationMethod = 'ponto' | 'dinheiro' | '';
+
+/** NOVO: espelha o enum do backend */
+type SponsorshipMethod = 'GIFT' | 'PIX';
 
 type Props = {
   initialChildId: string;
@@ -50,7 +52,6 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
   const childId = initialChildId || '';
   const campaignId = initialCampaignId || '';
 
-  // token vindo da sessão + fallback local após o login
   const sessionToken = useMemo(
     () => (session as unknown as { accessToken?: string } | null)?.accessToken,
     [session]
@@ -61,11 +62,11 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
   const [mainStep, setMainStep] = useState<MainStep>(1);
   const [hasAccount, setHasAccount] = useState<boolean | null>(null);
   const [regStep, setRegStep] = useState<RegSubStep>('credentials');
-  const [donationMethod, setDonationMethod] = useState<DonationMethod>('');
+  const [donationMethod, setDonationMethod] = useState<DonationMethod>(''); // 'ponto' | 'dinheiro'
   const [guidelinesAccepted, setGuidelinesAccepted] = useState(false);
 
   // Forms
-  const [login, setLogin] = useState({ identifier: '', password: '' }); // <— mudou
+  const [login, setLogin] = useState({ identifier: '', password: '' });
   const [signup, setSignup] = useState({ name: '', email: '', phone: '', password: '', confirm: '' });
   const [profile, setProfile] = useState({ address: '', city: '', profession: '', cep: '' });
 
@@ -134,14 +135,13 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
       const id = toIdentifier(login.identifier);
       if (!id || !login.password) throw new Error('Informe e-mail/telefone e senha.');
       const res = await signIn('credentials', {
-        identifier: id,        // <— aqui!
+        identifier: id,
         password: login.password,
         redirect: false,
       });
       if (res?.error) throw new Error(res.error === 'CredentialsSignin' ? 'Credenciais inválidas.' : res.error);
       const s = await getSession();
       setAuthToken((s as unknown as { accessToken?: string } | null)?.accessToken);
-      // Agora vamos para a ETAPA 3 (Orientações)
       setMainStep(3);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Falha no login.';
@@ -175,10 +175,10 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
       });
       if (!r.ok) throw new Error(await safeErrMsg(r));
 
-      // 2) login automático (sem redirecionar) — tenta telefone, senão e-mail
+      // 2) login automático — tenta telefone, senão e-mail
       const preferredIdentifier = normalizePhone(signup.phone) || signup.email;
       const s = await signIn('credentials', {
-        identifier: preferredIdentifier, // <— aqui!
+        identifier: preferredIdentifier,
         password: signup.password,
         redirect: false,
       });
@@ -187,7 +187,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
       // 3) atualizar token e seguir para os dados pessoais
       const sess = await getSession();
       setAuthToken((sess as unknown as { accessToken?: string } | null)?.accessToken);
-      setRegStep('profile'); // continua na Etapa 2
+      setRegStep('profile');
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Não foi possível criar sua conta.';
       setErr(msg);
@@ -214,7 +214,6 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
         }),
       });
       if (!r.ok) throw new Error(await safeErrMsg(r));
-      // Após salvar perfil → ETAPA 3 (Orientações)
       setMainStep(3);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Não foi possível salvar seus dados.';
@@ -222,6 +221,11 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     } finally {
       setLoading(false);
     }
+  }
+
+  /** NOVO: mapeia 'ponto' | 'dinheiro' -> 'GIFT' | 'PIX' */
+  function mapDonationToMethod(dm: DonationMethod): SponsorshipMethod {
+    return dm === 'dinheiro' ? 'PIX' : 'GIFT';
   }
 
   async function finishSponsorship() {
@@ -233,11 +237,11 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     setErr(null);
     try {
       setLoading(true);
-      const deliveryMethod = donationMethod === 'ponto' ? 'DROP_OFF' : 'PIX';
+      const method: SponsorshipMethod = mapDonationToMethod(donationMethod); // ✅ ALTERAÇÃO
       const r = await fetch(`${api}/sponsorships`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ childId, campaignId, deliveryMethod }),
+        body: JSON.stringify({ childId, campaignId, method }), // ✅ ALTERAÇÃO (antes: deliveryMethod)
       });
       if (!r.ok) throw new Error(await safeErrMsg(r));
       setDone(true);
@@ -278,7 +282,6 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
           {/* 
           <PixQr
             descriptionAppend={`Campanha ${campaignName || campaignId} Criança ${childName || childId}`}
-            // referenceLabelOverride="NATAL-2025" // se quiser forçar um rótulo curto fixo
             merchantCity="MINAS GERAIS"
             size={256}
             className="bg-white border border-emerald-200 rounded-xl p-4"
@@ -570,6 +573,15 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                   value={profile.city}
                   onChange={e => setProfile({ ...profile, city: e.target.value })}
                   placeholder="Sua cidade"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700">Profissão (opcional)</label>
+                <input
+                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
+                  value={profile.profession}
+                  onChange={e => setProfile({ ...profile, profession: e.target.value })}
+                  placeholder="Sua profissão"
                 />
               </div>
               <div>

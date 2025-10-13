@@ -856,6 +856,7 @@ export default function AdminSponsorshipsPage() {
                   <InfoRow icon={<User className="w-4 h-4" />} label="Nome" value={labelOrDash(sponsorDetail.name)} />
                   <InfoRow icon={<Mail className="w-4 h-4" />} label="E-mail" value={labelOrDash(sponsorDetail.email)} />
                   <InfoRow icon={<Phone className="w-4 h-4" />} label="Telefone" value={labelOrDash(sponsorDetail.phone)} />
+                  <InfoRow icon={<Phone className="w-4 h-4" />} label="Telefone" value={labelOrDash(sponsorDetail.method)} />
                   {/* 
                   <InfoRow icon={<Hash className="w-4 h-4" />} label="Documento" value={labelOrDash(sponsorDetail.profile.document ?? sponsorDetail.cpfCnpj)} />
                   */}

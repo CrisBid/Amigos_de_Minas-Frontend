@@ -12,6 +12,7 @@ type Props = {
 };
 
 type PaymentMethod = 'PIX' | 'DROP_OFF';
+type SponsorshipMethod = 'PIX' | 'GIFT';
 
 export default function ConcluirClient({ initialChildId, initialCampaignId }: Props) {
   const { data: session, status } = useSession();
@@ -80,6 +81,11 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
     }
   }, [status, childId, campaignId, router]);
 
+  /** mapeia 'PIX' | 'DROP_OFF' -> 'PIX' | 'GIFT' (backend) */
+  function mapPaymentToMethod(p: PaymentMethod): SponsorshipMethod {
+    return p === 'PIX' ? 'PIX' : 'GIFT';
+  }
+
   async function confirm() {
     if (!api || !accessToken) {
       setError('Sessão inválida.');
@@ -92,7 +98,8 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
     setSubmitting(true);
     setError(null);
     try {
-      const body = { childId, campaignId, deliveryMethod: paymentMethod };
+      const method: SponsorshipMethod = mapPaymentToMethod(paymentMethod);
+      const body = { childId, campaignId, method }; // ✅ agora usa 'method'
       const res = await fetch(`${api}/sponsorships`, {
         method: 'POST',
         headers: {
@@ -120,10 +127,9 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
 
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
           <div className="text-sm text-gray-700 space-y-2">
-            {/* 
+            {/*
             <PixQr
               descriptionAppend={`Campanha ${campaignName || campaignId} Criança ${childName || childId}`}
-              // referenceLabelOverride="NATAL-2025" // se quiser forçar um rótulo curto fixo
               merchantCity="MINAS GERAIS"
               size={256}
               className="bg-white border border-emerald-200 rounded-xl p-4"
@@ -321,7 +327,7 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
 
           {paymentMethod === 'PIX' ? <PixInstructions /> : <DropOffInstructions />}
 
-          {/* 🔹 Novo recado final */}
+          {/* Recado final */}
           <div className="flex items-start gap-2 bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-900">
             <MessageSquare className="w-4 h-4 mt-0.5 text-yellow-700" />
             <span>
