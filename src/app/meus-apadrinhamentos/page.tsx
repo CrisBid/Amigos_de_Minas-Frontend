@@ -3,10 +3,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import Image from 'next/image';
 import {
-  CalendarDays, ChevronDown, Gift, Loader2, MapPin, ShieldCheck, XCircle
+  CalendarDays, ChevronDown, Loader2
 } from 'lucide-react';
+import ChildCard from '@/components/Apadrinhamento/ChildCard';
+import { exportSponsorshipsPdfGrid  } from '@/lib/pdf/exportSponsorshipsPdf';
+
+/* ---------- Tipos ---------- */
 
 type Campaign = {
   id: string;
@@ -16,6 +19,31 @@ type Campaign = {
   status: 'DRAFT' | 'ACTIVE' | 'FINISHED' | 'ARCHIVED';
   startDate?: string;
   endDate?: string;
+};
+
+type ImageConfig = {
+  version: number;
+  canvas: { width: number; height: number; background: string | null };
+  layout: { onTop?: boolean; opacity?: number; resizeToCanvas?: boolean };
+  photoRect: {
+    x: number; y: number; width: number; height: number;
+    fit: 'cover' | 'contain';
+    scale: number;
+    gravity: 'north'|'northeast'|'east'|'southeast'|'south'|'southwest'|'west'|'northwest'|'center';
+    offsetX: number; offsetY: number; cornerRadius: number;
+  };
+  texts: any[];
+};
+
+type ChildImage = {
+  id: string; childId: string; campaignId: string;
+  originalKey: string | null; originalUrl: string | null;
+  processedKey: string | null; processedUrl: string | null;
+  framedKey: string | null; framedUrl: string | null;
+  layoutKey: string | null; layoutUrl: string | null;
+  Config: ImageConfig; width: number | null; height: number | null;
+  status: 'UPLOADED'|'PROCESSED'|'COMPOSED'|string;
+  notes: string | null; version: number; createdAt: string; updatedAt: string;
 };
 
 type Child = {
@@ -28,6 +56,11 @@ type Child = {
   wantedGift?: string;
   photoUrl?: string;
   description?: string;
+  // extras para manter compatibilidade com ChildCard:
+  publicId?: number | null;
+  communityName?: string | null;
+  images?: ChildImage[];
+  media?: Array<{ framedUrl?: string; processedUrl?: string }>;
 };
 
 type Sponsorship = {
@@ -54,6 +87,9 @@ export default function MeusApadrinhamentosPage() {
   const [campaignFilter, setCampaignFilter] = useState<string>(''); // campaignId
   const [error, setError] = useState<string | null>(null);
 
+  const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState<{ current: number; total: number; phase: 'compose'|'pdf' } | null>(null);
+
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.replace('/auth/login?callbackUrl=/meus-apadrinhamentos');
@@ -76,16 +112,16 @@ export default function MeusApadrinhamentosPage() {
       setLoading(true);
       setError(null);
       try {
-        // campanhas ativas e recentes
+        // campanhas ativas e todas (para filtrar por campanha)
         const cRes = await fetch(`${api}/campaigns?status=ACTIVE`, { cache: 'no-store' });
         const allRes = await fetch(`${api}/campaigns`, { cache: 'no-store' });
         const cJson = cRes.ok ? await cRes.json() : [];
         const allJson = allRes.ok ? await allRes.json() : [];
         const merged = uniqBy([...(cJson ?? []), ...(allJson ?? [])], 'id')
-          .sort((a: any,b: any) => (b.year ?? 0) - (a.year ?? 0));
+          .sort((a: any, b: any) => (b.year ?? 0) - (a.year ?? 0));
         setCampaigns(merged);
 
-        // apadrinhamentos do usuário (opcionalmente com filtro)
+        // apadrinhamentos do usuário (com filtro opcional)
         const url = new URL(`${api}/sponsorships/me`);
         if (campaignFilter) url.searchParams.set('campaignId', campaignFilter);
         const sRes = await fetch(url.toString(), {
@@ -94,7 +130,7 @@ export default function MeusApadrinhamentosPage() {
         });
         if (!sRes.ok) throw new Error(await safeErrMsg(sRes));
         const sJson = await sRes.json();
-        setItems(sJson);
+        setItems(Array.isArray(sJson) ? sJson : []);
       } catch (e: any) {
         setError(e?.message || 'Falha ao carregar apadrinhamentos.');
       } finally {
@@ -102,6 +138,59 @@ export default function MeusApadrinhamentosPage() {
       }
     })();
   }, [status, api, provider, accessToken, campaignFilter, router]);
+
+  const handleExportPdf = async () => {
+    if (loading || items.length === 0) return;
+
+    setExporting(true);
+    setProgress({ current: 0, total: items.length, phase: 'compose' });
+
+    try {
+      const data = items.map(sp => {
+        const ch: any = sp.child || {};
+        const processedUrl =
+          ch?.images?.[0]?.processedUrl ||
+          ch?.media?.find((m: any) => !!m.processedUrl)?.processedUrl ||
+          ch?.photoUrl || null;
+
+        const layoutUrl = ch?.images?.[0]?.layoutUrl || null;
+        const config    = ch?.images?.[0]?.Config || null;
+        const framedUrl =
+          ch?.images?.[0]?.framedUrl ||
+          ch?.media?.find((m: any) => !!m.framedUrl)?.framedUrl ||
+          null;
+
+        return {
+          sponsorshipId: sp.id,
+          status: sp.status,
+          campaign: { id: sp.campaign.id, name: sp.campaign.name, year: sp.campaign.year ?? null },
+          child: {
+            id: ch.id,
+            name: ch.name,
+            publicId: typeof ch.publicId === 'number' ? ch.publicId : null,
+            age: typeof ch.age === 'number' ? ch.age : null,
+            city: ch.city?.name ?? ch.city ?? ch.cityName ?? null,
+            community: ch.community?.name ?? ch.communityName ?? null,
+            school: ch.school?.name ?? ch.school ?? ch.schoolLegacy ?? null,
+            wantedGift: ch.wantedGift ?? null,
+            processedUrl,
+            layoutUrl,
+            config,
+            framedUrl,
+            photoUrl: ch.photoUrl ?? null,
+          }
+        };
+      });
+
+      await exportSponsorshipsPdfGrid(data, {
+        fileName: 'meus-apadrinhamentos-2x2.pdf',
+        onProgress: (p) => setProgress(p),
+      });
+    } finally {
+      setExporting(false);
+      setProgress(null);
+    }
+  };
 
   const grouped = groupByCampaign(items);
 
@@ -116,20 +205,31 @@ export default function MeusApadrinhamentosPage() {
           </div>
 
           {/* Filtro de campanha */}
-          <div className="relative">
-            <select
-              value={campaignFilter}
-              onChange={(e) => setCampaignFilter(e.target.value)}
-              className="appearance-none bg-white border border-gray-200 rounded-lg px-4 py-2 pr-10 text-sm text-[#253243] hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-200"
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <select
+                value={campaignFilter}
+                onChange={(e) => setCampaignFilter(e.target.value)}
+                className="appearance-none bg-white border border-gray-200 rounded-lg px-4 py-2 pr-10 text-sm text-[#253243] hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              >
+                <option value="">Todas as campanhas</option>
+                {campaigns.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{c.year ? ` (${c.year})` : ''}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="w-4 h-4 text-gray-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+            {/* NOVO: botão de exportar */}
+            <button
+              onClick={handleExportPdf}
+              disabled={loading || items.length === 0 || exporting}
+              className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-60 inline-flex items-center gap-2"
             >
-              <option value="">Todas as campanhas</option>
-              {campaigns.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.name}{c.year ? ` (${c.year})` : ''}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="w-4 h-4 text-gray-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              {exporting ? 'Gerando PDF…' : 'Exportar PDF (4 por página)'}
+            </button>
           </div>
         </div>
 
@@ -137,7 +237,11 @@ export default function MeusApadrinhamentosPage() {
         <div className="bg-white border border-gray-100 shadow-xl rounded-2xl p-6">
           {loading ? (
             <div className="flex items-center gap-3 text-[#253243]">
-              <Loader2 className="w-5 h-5 animate-spin" />
+              {/* loader simples para manter o visual atual */}
+              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" fill="none" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 004 12z"></path>
+              </svg>
               <span>Carregando…</span>
             </div>
           ) : error ? (
@@ -161,7 +265,15 @@ export default function MeusApadrinhamentosPage() {
 
                   <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
                     {group.items.map(sp => (
-                      <Card key={sp.id} sp={sp} />
+                      <div key={sp.id} className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition bg-white">
+                        {/* Reuso do mesmo componente de exibição de imagens */}
+                        <ChildCard
+                          child={toChildCardData(sp)}
+                          onSponsor={() => {}}
+                          sponsoring={false}
+                        />
+                        {/* Caso queira manter algum rodapé específico desta página, acrescente aqui */}
+                      </div>
                     ))}
                   </div>
                 </section>
@@ -170,63 +282,39 @@ export default function MeusApadrinhamentosPage() {
           )}
         </div>
       </div>
+      {exporting && progress && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-center gap-3 mb-3">
+              {/* se ainda não importou, importe: import { Loader2 } from 'lucide-react' */}
+              <svg className="w-5 h-5 animate-spin text-emerald-600" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" fill="none" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 004 12z" />
+              </svg>
+              <h3 className="font-semibold text-gray-800">Gerando PDF</h3>
+            </div>
+
+            <p className="text-sm text-gray-600 mb-3">
+              {progress.phase === 'compose' ? 'Compondo imagens' : 'Montando documento'} — {progress.current} de {progress.total}
+            </p>
+
+            <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-600 transition-all"
+                style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
+              />
+            </div>
+
+            <p className="mt-2 text-xs text-gray-500">Não feche esta janela até finalizar o download.</p>
+          </div>
+        </div>
+      )}
+      {/* --- fim do modal --- */}
     </div>
   );
 }
 
-/* ----- UI components ----- */
-
-function Card({ sp }: { sp: Sponsorship }) {
-  const c = sp.child;
-  return (
-    <div className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition bg-white">
-      <div className="aspect-[1/1] bg-gray-100 relative">
-        {c.photoUrl ? (
-          <Image unoptimized src={c.photoUrl} alt={c.name} fill className="object-cover" />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center text-gray-400">Sem foto</div>
-        )}
-      </div>
-      <div className="p-4 space-y-2">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-[#253243]">{c.name}</h3>
-          <StatusBadge status={sp.status} />
-        </div>
-        <div className="text-sm text-gray-600 flex items-center gap-2">
-          <MapPin className="w-4 h-4" /> {c.city}
-        </div>
-        {c.wantedGift && (
-          <div className="text-sm text-gray-600 flex items-center gap-2">
-            <Gift className="w-4 h-4" /> Desejo: {c.wantedGift}
-          </div>
-        )}
-        {/* 
-        <div className="pt-2 flex gap-2">
-          <a
-            href={`/criancas/${c.id}`}
-            className="text-sm px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50"
-          >
-            Ver criança
-          </a>
-          {sp.status === 'PENDING' && (
-            <a
-              href={`/apadrinhamento/${sp.id}`}
-              className="text-sm px-3 py-1.5 bg-[#253243] text-white rounded-lg hover:bg-[#375A7F] inline-flex items-center gap-1"
-            >
-              <ShieldCheck className="w-4 h-4" /> Continuar processo
-            </a>
-          )}
-        </div>
-        */}
-        {sp.status === 'PENDING' && (
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-[#389745]">Nossa Equipe ira Entrar em Contato Para Concluir o Apadrinhamento</h3>
-          </div>
-          )}
-      </div>
-    </div>
-  );
-}
+/* ---------- UI auxiliares (mantidas) ---------- */
 
 function CampaignBadge({ status }: { status: Campaign['status'] }) {
   const map = {
@@ -241,24 +329,8 @@ function CampaignBadge({ status }: { status: Campaign['status'] }) {
   );
 }
 
-function StatusBadge({ status }: { status: Sponsorship['status'] }) {
-  const map = {
-    ACTIVE: 'bg-emerald-50 text-emerald-700 border-emerald-100',
-    PENDING: 'bg-amber-50 text-amber-700 border-amber-100',
-    ENDED: 'bg-blue-50 text-blue-700 border-blue-100',
-    CANCELLED: 'bg-red-50 text-red-700 border-red-100',
-  } as const;
-  const label = {
-    ACTIVE: 'Ativo',
-    PENDING: 'Pendente',
-    ENDED: 'Encerrado',
-    CANCELLED: 'Cancelado',
-  } as const;
-  const cls = (map as any)[status] ?? map.PENDING;
-  return <span className={`text-xs border px-2 py-0.5 rounded-full ${cls}`}>{label[status]}</span>;
-}
+/* ---------- Helpers ---------- */
 
-/* ----- helpers ----- */
 function uniqBy<T extends Record<string, any>>(arr: T[], key: keyof T) {
   const seen = new Set<string>();
   const out: T[] = [];
@@ -282,4 +354,46 @@ function groupByCampaign(items: Sponsorship[]) {
 async function safeErrMsg(res: Response) {
   try { const d = await res.json(); return d?.message || d?.error || res.statusText }
   catch { return res.statusText }
+}
+
+/**
+ * Converte um Sponsorship (com child dentro) no shape esperado por <ChildCard />
+ * Regras:
+ * - Usa as mesmas fontes de imagem da listagem: images/media/photoUrl
+ * - apadrinhado = true se status do sponsorship for ACTIVE ou PENDING (indisponível)
+ * - status reaproveita o status do sponsorship (mapeado para o que o ChildCard entende)
+ */
+function toChildCardData(sp: Sponsorship) {
+  const c = sp.child || ({} as Child);
+
+  const apadrinhado = sp.status === 'ACTIVE' || sp.status === 'PENDING';
+  // Status do ChildCard segue o enum usado na listagem
+  const statusMap = {
+    ACTIVE: 'IN_PROGRESS',
+    PENDING: 'PENDING',
+    ENDED: 'ENDED',
+    CANCELLED: 'CANCELLED',
+  } as const;
+  const status = (statusMap as any)[sp.status] ?? 'NONE';
+
+  // compat de imagens
+  const images = c.images ?? undefined;
+  const foto = c.photoUrl ?? (c.media?.[0]?.framedUrl || c.media?.[0]?.processedUrl || '');
+
+  return {
+    id: c.id,
+    publicId: c.publicId ?? 0,
+    nome: c.name,
+    idade: c.age ?? 0,
+    cidade: c.city ?? '',
+    escola: c.school ?? '',
+    categoria: c.category ?? '',
+    presente: c.wantedGift ?? '',
+    descricao: c.description ?? '',
+    apadrinhado,
+    foto,
+    images,
+    status,
+    comunidade: c.communityName ?? '',
+  };
 }
