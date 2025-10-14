@@ -150,7 +150,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
 
   async function doRegisterCredentials() {
     if (!api) { setErr('NEXT_PUBLIC_NEST_API_URL ausente.'); return; }
-    if (!signup.email || !signup.password || !signup.confirm) { setErr('Preencha e confirme a senha.'); return; }
+    if (!signup.email || !signup.phone || !signup.name || !signup.password || !signup.confirm) { setErr('Preencha e confirme a senha.'); return; }
     if (signup.password !== signup.confirm) { setErr('As senhas não conferem.'); return; }
     setErr(null);
     try {
@@ -477,7 +477,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
           {regStep === 'credentials' && (
             <div className="grid gap-3">
               <div>
-                <label className="text-sm font-medium text-gray-700">Nome (opcional)</label>
+                <label className="text-sm font-medium text-gray-700">Nome</label>
                 <input
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
                   value={signup.name}
@@ -497,7 +497,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
                 />
               </div>
               <div>
-                <label className="text-sm font-medium text-gray-700">Telefone (opcional, pode usar para login)</label>
+                <label className="text-sm font-medium text-gray-700">Telefone</label>
                 <input
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500"
                   value={signup.phone}

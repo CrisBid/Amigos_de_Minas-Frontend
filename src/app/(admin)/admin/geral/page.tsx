@@ -7,6 +7,7 @@ import {
   Landmark,
   GraduationCap,
   ChevronRight,
+  User,
 } from 'lucide-react';
 
 export default function CadastrosGeraisPage() {
@@ -17,6 +18,7 @@ export default function CadastrosGeraisPage() {
       if (e.key === '1') window.location.href = '/admin/cities';
       if (e.key === '2') window.location.href = '/admin/communities';
       if (e.key === '3') window.location.href = '/admin/schools';
+      if (e.key === '4') window.location.href = '/admin/users';
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -60,6 +62,15 @@ export default function CadastrosGeraisPage() {
             title="Escolas"
             desc="Cadastre escolas e relacione com cidades e comunidades."
             kbd="3"
+            accent="from-fuchsia-600 to-rose-600"
+          />
+
+          <NavCard
+            href="/admin/users"
+            icon={<User className="w-6 h-6" />}
+            title="Usuarios"
+            desc="Gerencie usuários do sistema e suas permissões."
+            kbd="4"
             accent="from-fuchsia-600 to-rose-600"
           />
         </div>
