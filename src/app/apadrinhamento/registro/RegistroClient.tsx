@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useSession, signIn, getSession } from 'next-auth/react';
 import {
   AlertCircle, ArrowLeft, ArrowRight, CheckCircle, Loader2,
@@ -10,33 +10,17 @@ import {
 import PixQr from '@/components/Pix/PixQr';
 
 /* ----------------- Helpers ----------------- */
-function normalizePhone(v: string) {
-  return v.replace(/\D/g, '');
-}
-
-function normalizeCep(v: string) {
-  return v.replace(/\D/g, '').slice(0, 8);
-}
-
-function formatCep(v: string) {
-  const d = normalizeCep(v);
-  return d.length > 5 ? `${d.slice(0,5)}-${d.slice(5)}` : d;
-}
-
-function looksLikeEmail(v: string) {
-  return /\S+@\S+\.\S+/.test(v);
-}
-
-function toIdentifier(input: string) {
-  return looksLikeEmail(input) ? input.trim() : normalizePhone(input);
-}
+function normalizePhone(v: string) { return v.replace(/\D/g, ''); }
+function normalizeCep(v: string) { return v.replace(/\D/g, '').slice(0, 8); }
+function formatCep(v: string) { const d = normalizeCep(v); return d.length > 5 ? `${d.slice(0,5)}-${d.slice(5)}` : d; }
+function looksLikeEmail(v: string) { return /\S+@\S+\.\S+/.test(v); }
+function toIdentifier(input: string) { return looksLikeEmail(input) ? input.trim() : normalizePhone(input); }
 /* ------------------------------------------- */
 
 type MainStep = 1 | 2 | 3 | 4 | 5;
 type RegSubStep = 'credentials' | 'profile';
 type DonationMethod = 'ponto' | 'dinheiro' | '';
-
-/** NOVO: espelha o enum do backend */
+/** espelha o enum do backend */
 type SponsorshipMethod = 'GIFT' | 'PIX';
 
 type Props = {
@@ -46,11 +30,26 @@ type Props = {
 
 export default function RegistroClient({ initialChildId, initialCampaignId }: Props) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { data: session, status } = useSession();
 
   const api = process.env.NEXT_PUBLIC_NEST_API_URL;
-  const childId = initialChildId || '';
-  const campaignId = initialCampaignId || '';
+
+  // Campanha
+  const campaignId = (initialCampaignId || '').trim();
+
+  // --- Suporte a múltiplos IDs: query (?childIds=a,b,c) OU único via prop
+  const childIdsFromQuery = useMemo(() => {
+    const qs = searchParams?.get('childIds') || '';
+    if (!qs) return [];
+    return qs.split(',').map(s => s.trim()).filter(Boolean);
+  }, [searchParams]);
+
+  const singleChildId = (initialChildId || '').trim();
+  const childIds: string[] = useMemo(() => {
+    if (childIdsFromQuery.length > 0) return childIdsFromQuery;
+    return singleChildId ? [singleChildId] : [];
+  }, [childIdsFromQuery, singleChildId]);
 
   const sessionToken = useMemo(
     () => (session as unknown as { accessToken?: string } | null)?.accessToken,
@@ -99,21 +98,25 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     })();
   }, [status]);
 
-  // Buscar nomes da criança e da campanha
+  // Buscar nomes: se 1 criança, busca a criança; se múltiplas, só a campanha
   useEffect(() => {
-    if (!api || !childId || !campaignId) return;
+    if (!api || !campaignId) { setLoadingNames(false); return; }
     let mounted = true;
     (async () => {
       setLoadingNames(true);
       try {
-        const [cr, ca] = await Promise.all([
-          fetch(`${api}/children/${childId}`),
-          fetch(`${api}/campaigns/${campaignId}`)
-        ]);
-        const cd = cr.ok ? await cr.json() : null;
+        let fetchedChildName: string | null = null;
+        if (childIds.length === 1) {
+          const cr = await fetch(`${api}/children/${childIds[0]}`);
+          if (cr.ok) {
+            const cd = await cr.json();
+            fetchedChildName = cd?.name ?? null;
+          }
+        }
+        const ca = await fetch(`${api}/campaigns/${campaignId}`);
         const cad = ca.ok ? await ca.json() : null;
         if (!mounted) return;
-        setChildName(cd?.name ?? null);
+        setChildName(fetchedChildName);
         setCampaignName(cad?.name ?? null);
       } catch {
         if (!mounted) return;
@@ -124,7 +127,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
       }
     })();
     return () => { mounted = false; };
-  }, [api, childId, campaignId]);
+  }, [api, campaignId, childIds]);
 
   /* ----------------- Ações ----------------- */
 
@@ -134,11 +137,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
       setLoading(true);
       const id = toIdentifier(login.identifier);
       if (!id || !login.password) throw new Error('Informe e-mail/telefone e senha.');
-      const res = await signIn('credentials', {
-        identifier: id,
-        password: login.password,
-        redirect: false,
-      });
+      const res = await signIn('credentials', { identifier: id, password: login.password, redirect: false });
       if (res?.error) throw new Error(res.error === 'CredentialsSignin' ? 'Credenciais inválidas.' : res.error);
       const s = await getSession();
       setAuthToken((s as unknown as { accessToken?: string } | null)?.accessToken);
@@ -146,19 +145,13 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Falha no login.';
       setErr(msg);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
   async function doRegisterCredentials() {
     if (!api) { setErr('NEXT_PUBLIC_NEST_API_URL ausente.'); return; }
-    if (!signup.email || !signup.password || !signup.confirm) {
-      setErr('Preencha e confirme a senha.'); return;
-    }
-    if (signup.password !== signup.confirm) {
-      setErr('As senhas não conferem.'); return;
-    }
+    if (!signup.email || !signup.password || !signup.confirm) { setErr('Preencha e confirme a senha.'); return; }
+    if (signup.password !== signup.confirm) { setErr('As senhas não conferem.'); return; }
     setErr(null);
     try {
       setLoading(true);
@@ -177,11 +170,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
 
       // 2) login automático — tenta telefone, senão e-mail
       const preferredIdentifier = normalizePhone(signup.phone) || signup.email;
-      const s = await signIn('credentials', {
-        identifier: preferredIdentifier,
-        password: signup.password,
-        redirect: false,
-      });
+      const s = await signIn('credentials', { identifier: preferredIdentifier, password: signup.password, redirect: false });
       if (s?.error) throw new Error(s.error === 'CredentialsSignin' ? 'Credenciais inválidas.' : s.error);
 
       // 3) atualizar token e seguir para os dados pessoais
@@ -191,9 +180,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Não foi possível criar sua conta.';
       setErr(msg);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
   async function saveProfileAndContinue() {
@@ -218,12 +205,10 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Não foi possível salvar seus dados.';
       setErr(msg);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
-  /** NOVO: mapeia 'ponto' | 'dinheiro' -> 'GIFT' | 'PIX' */
+  /** mapeia 'ponto' | 'dinheiro' -> 'GIFT' | 'PIX' */
   function mapDonationToMethod(dm: DonationMethod): SponsorshipMethod {
     return dm === 'dinheiro' ? 'PIX' : 'GIFT';
   }
@@ -233,25 +218,32 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     if (!api) { setErr('NEXT_PUBLIC_NEST_API_URL ausente.'); return; }
     if (!token) { setErr('Faça login para concluir.'); return; }
     if (!donationMethod) { setErr('Escolha a forma de doação.'); return; }
+    if (!campaignId || childIds.length === 0) { setErr('Dados insuficientes para concluir.'); return; }
 
     setErr(null);
     try {
       setLoading(true);
-      const method: SponsorshipMethod = mapDonationToMethod(donationMethod); // ✅ ALTERAÇÃO
+      const method: SponsorshipMethod = mapDonationToMethod(donationMethod);
+
+      // monta body conforme quantidade
+      const body =
+        childIds.length === 1
+          ? { childId: childIds[0], campaignId, method }
+          : { childIds, campaignId, method };
+
       const r = await fetch(`${api}/sponsorships`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ childId, campaignId, method }), // ✅ ALTERAÇÃO (antes: deliveryMethod)
+        body: JSON.stringify(body),
       });
       if (!r.ok) throw new Error(await safeErrMsg(r));
+
       setDone(true);
       setMainStep(5);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Não foi possível concluir o apadrinhamento.';
       setErr(msg);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
   /* ----------------- UI helpers ----------------- */
@@ -270,39 +262,34 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
     );
   }
 
+  // rótulo para criança(s)
+  const childLabel = useMemo(() => {
+    if (childIds.length === 0) return '—';
+    if (childIds.length === 1) return childName || childIds[0];
+    return `${childIds.length} crianças selecionadas`;
+  }, [childIds, childName]);
+
   function PixInstructions() {
     const camp = campaignName || campaignId;
-    const child = childName || childId;
+    const child = childLabel;
     return (
       <div className="space-y-3">
         <p className="text-emerald-800">
           Obrigado por apadrinhar! 💚 Para realizar a contribuição via <b>PIX</b>, use os dados abaixo:
         </p>
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
-          {/* 
-          <PixQr
-            descriptionAppend={`Campanha ${campaignName || campaignId} Criança ${childName || childId}`}
-            merchantCity="MINAS GERAIS"
-            size={256}
-            className="bg-white border border-emerald-200 rounded-xl p-4"
-            showCopyButtons
-          />
-          */}
+          {/* <PixQr ... /> */}
           <div className="text-sm text-gray-700 space-y-2">
             <div><b>Chave PIX:</b> <span className="select-all">{PIX_KEY || '—'}</span></div>
             <div><b>Favorecido:</b> {PIX_FAV}</div>
             {PIX_CNPJ && <div><b>CNPJ:</b> {PIX_CNPJ}</div>}
             {PIX_OBS && <div><b>Observação:</b> {PIX_OBS}</div>}
-            <div className="text-xs text-gray-500">Informe no comprovante: “Campanha {camp} — Criança {child}”.</div>
+            <div className="text-xs text-gray-500">Informe no comprovante: “Campanha {camp} — {child}”.</div>
           </div>
           <div className="mt-3">
             <button
               onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(PIX_KEY);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                } catch {}
+                try { await navigator.clipboard.writeText(PIX_KEY); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
               }}
               className="px-3 py-1.5 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 inline-flex items-center gap-2 disabled:opacity-70"
               disabled={!PIX_KEY}
@@ -323,7 +310,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
 
   function DropOffInstructions() {
     const camp = campaignName || campaignId;
-    const child = childName || childId;
+    const child = childLabel;
     return (
       <div className="space-y-3">
         <p className="text-emerald-800">
@@ -332,7 +319,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
           <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
             <li>Embale o presente com cuidado.</li>
-            <li>Identifique o pacote com: <b>Campanha {camp}</b> e <b>Criança {child}</b>.</li>
+            <li>Identifique o pacote com: <b>Campanha {camp}</b> e <b>{child}</b>.</li>
             <li>Entregue em um dos pontos de coleta abaixo.</li>
           </ul>
           <div className="mt-4">
@@ -631,8 +618,8 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
               <span className="text-gray-500">Carregando dados da campanha/criança…</span>
             ) : (
               <>
-                <div><b>Campanha:</b> {campaignName || campaignId}</div>
-                <div><b>Criança:</b> {childName || childId}</div>
+                <div><b>Campanha:</b> {campaignName || campaignId || '—'}</div>
+                <div><b>{childIds.length > 1 ? 'Crianças:' : 'Criança:'}</b> {childLabel}</div>
               </>
             )}
           </div>
@@ -664,7 +651,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
           <div className="flex items-center gap-2">
             <button
               onClick={finishSponsorship}
-              disabled={loading || !donationMethod}
+              disabled={loading || !donationMethod || childIds.length === 0}
               className="px-4 py-2 bg-[#253243] text-white rounded-lg hover:bg-[#375A7F] inline-flex items-center gap-2 disabled:opacity-70"
             >
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
@@ -683,7 +670,7 @@ export default function RegistroClient({ initialChildId, initialCampaignId }: Pr
 
           <div className="bg-white border border-gray-200 rounded-xl p-3 text-sm text-gray-700">
             <div><b>Campanha:</b> {campaignName || campaignId}</div>
-            <div><b>Criança:</b> {childName || childId}</div>
+            <div><b>{childIds.length > 1 ? 'Crianças:' : 'Criança:'}</b> {childLabel}</div>
           </div>
 
           {donationMethod === 'dinheiro' ? <PixInstructions /> : <DropOffInstructions />}

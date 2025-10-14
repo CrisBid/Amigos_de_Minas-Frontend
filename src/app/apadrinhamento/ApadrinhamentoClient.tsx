@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { Filter, Search, Loader2, AlertCircle, X } from 'lucide-react';
+import { Filter, Search, Loader2, AlertCircle, X, CheckSquare, Square } from 'lucide-react';
 import Stats from '@/components/Apadrinhamento/Stats';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
 
@@ -122,6 +122,9 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     idade: '',
     status: 'disponivel' as StatusFiltro,
   });
+
+  // >>> NOVO: seleção múltipla
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // opções vindas do backend
   const [citiesOpt, setCitiesOpt] = useState<City[]>([]);
@@ -380,6 +383,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       if (reset) {
         setChildren(mapped);
         nextSkipRef.current = mapped.length;
+        setSelectedIds(new Set()); // zera seleção ao refazer a lista
       } else {
         setChildren(prev => [...prev, ...mapped]);
         nextSkipRef.current = skip + mapped.length;
@@ -448,7 +452,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     return () => { observerRef.current?.disconnect(); observerRef.current = null; };
   }, [hasMore, loading, loadingMore, fetchPage]);
 
-  // ===== ação apadrinhar =====
+  // ===== ação apadrinhar (single) =====
   async function handleSponsor(childId: string) {
     if (!campaignId) { setError('Selecione uma campanha.'); return; }
     setSponsoringId(childId);
@@ -461,13 +465,55 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     } finally { setSponsoringId(null); }
   }
 
+  // ===== NOVO: seleção múltipla =====
+  const isUnavailable = (s: SponsorshipStatus) => ['COMPLETED', 'IN_PROGRESS', 'PENDING'].includes(s);
+
+  function toggleSelect(id: string, status: SponsorshipStatus) {
+    if (isUnavailable(status)) return; // não permite selecionar indisponíveis
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  function selectAllPageAvailable() {
+    const next = new Set(selectedIds);
+    childrenFiltradas.forEach(ch => {
+      if (!isUnavailable(ch.sponsorshipStatus)) next.add(ch.id);
+    });
+    setSelectedIds(next);
+  }
+
+  async function handleBulkSponsor() {
+    if (!campaignId) { setError('Selecione uma campanha.'); return; }
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+
+    // Se houver apenas 1, mantém fluxo igual (compatibilidade)
+    if (ids.length === 1) {
+      return handleSponsor(ids[0]);
+    }
+
+    const childIdsParam = encodeURIComponent(ids.join(','));
+    if (status === 'authenticated') {
+      router.push(`/apadrinhamento/concluir?childIds=${childIdsParam}&campaignId=${encodeURIComponent(campaignId)}`);
+    } else {
+      router.push(`/apadrinhamento/registro?childIds=${childIdsParam}&campaignId=${encodeURIComponent(campaignId)}`);
+    }
+  }
+
   // ===== filtros locais (reforço) =====
   const childrenFiltradas = useMemo(() => {
     return children.filter((child) => {
       const matchesSearch = child.name?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesCategoria = !filtros.categoria || child.category === filtros.categoria;
 
-      const isIndisp = ['COMPLETED', 'IN_PROGRESS', 'PENDING'].includes(child.sponsorshipStatus);
+      const isIndisp = isUnavailable(child.sponsorshipStatus);
       const matchesStatus =
         !filtros.status ||
         (filtros.status === 'disponivel' && !isIndisp) ||
@@ -491,6 +537,8 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     setFiltros({ cidadeId: '', comunidadeId: '', escolaId: '', categoria: '', idade: '', status: 'disponivel' });
     setSearchTerm('');
   }
+
+  const selectedCount = selectedIds.size;
 
   return (
     <div className="max-w-6xl mx-auto px-6">
@@ -531,7 +579,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       )}
 
       {/* Filtros */}
-      <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-8">
+      <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-4">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center">
             <Filter className="h-5 w-5 text-gray-600 mr-2" />
@@ -631,33 +679,89 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         </div>
       </div>
 
+      {/* Ações em massa acima da grid */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-sm text-gray-700">
+          {selectedCount > 0 ? (
+            <span>
+              <strong>{selectedCount}</strong> selecionada{selectedCount > 1 ? 's' : ''}.
+            </span>
+          ) : (
+            <span>Selecione múltiplas crianças para apadrinhar em lote.</span>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={selectAllPageAvailable}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
+            title="Seleciona todas desta página que estiverem disponíveis"
+          >
+            <CheckSquare className="w-4 h-4" />
+            Selecionar página (disponíveis)
+          </button>
+          <button
+            onClick={clearSelection}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
+          >
+            <Square className="w-4 h-4" />
+            Limpar seleção
+          </button>
+        </div>
+      </div>
+
       {/* Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {childrenFiltradas.map((child) => {
           const nomeCidade = child.city?.name ?? child.cityName ?? '';
           const idadeCalculada = (child.age ?? calcularIdade(child.birthDate)) || 0;
+          const unavailable = isUnavailable(child.sponsorshipStatus);
+          const checked = selectedIds.has(child.id);
+
           return (
-            <ChildCard
-              key={String(child.id)}
-              child={{
-                id: child.id,
-                publicId: child.publicId ?? 0,
-                nome: child.name,
-                idade: idadeCalculada,
-                cidade: nomeCidade,
-                escola: child.school?.name ?? child.schoolLegacy ?? '',
-                categoria: child.category ?? '',
-                presente: child.wantedGift ?? '',
-                descricao: child.description ?? '',
-                apadrinhado: ['COMPLETED', 'IN_PROGRESS', 'PENDING'].includes(child.sponsorshipStatus),
-                foto: child.photoUrl ?? '',
-                images: child.images,
-                status: child.sponsorshipStatus,
-                comunidade: child.community?.name ?? '',
-              }}
-              onSponsor={() => handleSponsor(child.id)}
-              sponsoring={sponsoringId === child.id}
-            />
+            <div key={String(child.id)} className="relative group">
+              {/* Checkbox/selector sobre o card */}
+              <button
+                type="button"
+                onClick={() => toggleSelect(child.id, child.sponsorshipStatus)}
+                disabled={unavailable}
+                className={[
+                  'absolute z-10 top-2 left-2 inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium shadow',
+                  unavailable
+                    ? 'cursor-not-allowed bg-gray-100 text-gray-400 border border-gray-200'
+                    : checked
+                      ? 'bg-emerald-600 text-white border border-emerald-700'
+                      : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+                ].join(' ')}
+                title={unavailable ? 'Indisponível para seleção' : checked ? 'Remover da seleção' : 'Selecionar'}
+              >
+                {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                {unavailable ? 'Indisp.' : checked ? 'Selecionado' : 'Selecionar'}
+              </button>
+
+              {/* Highlight quando selecionado */}
+              <div className={checked ? 'ring-2 ring-emerald-500 rounded-2xl transition' : ''}>
+                <ChildCard
+                  child={{
+                    id: child.id,
+                    publicId: child.publicId ?? 0,
+                    nome: child.name,
+                    idade: idadeCalculada,
+                    cidade: nomeCidade,
+                    escola: child.school?.name ?? child.schoolLegacy ?? '',
+                    categoria: child.category ?? '',
+                    presente: child.wantedGift ?? '',
+                    descricao: child.description ?? '',
+                    apadrinhado: unavailable,
+                    foto: child.photoUrl ?? '',
+                    images: child.images,
+                    status: child.sponsorshipStatus,
+                    comunidade: child.community?.name ?? '',
+                  }}
+                  onSponsor={() => handleSponsor(child.id)}
+                  sponsoring={sponsoringId === child.id}
+                />
+              </div>
+            </div>
           );
         })}
       </div>
@@ -692,6 +796,29 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
 
       {!loading && childrenFiltradas.length === 0 && (
         <div className="text-center text-gray-500 py-10">Nenhuma criança encontrada com os filtros aplicados.</div>
+      )}
+
+      {/* ===== NOVO: Barra fixa de ação em massa ===== */}
+      {selectedCount > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] sm:w-auto">
+          <div className="mx-auto flex items-center gap-3 bg-white border border-emerald-200 shadow-xl rounded-2xl px-4 py-3">
+            <span className="text-sm text-gray-800">
+              <strong>{selectedCount}</strong> criança{selectedCount > 1 ? 's' : ''} selecionada{selectedCount > 1 ? 's' : ''}.
+            </span>
+            <button
+              onClick={handleBulkSponsor}
+              className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700"
+            >
+              Concluir apadrinhamento em massa
+            </button>
+            <button
+              onClick={clearSelection}
+              className="inline-flex items-center justify-center px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
+            >
+              Limpar
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

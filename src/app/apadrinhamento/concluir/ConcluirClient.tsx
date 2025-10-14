@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle, Loader2, AlertCircle, Copy, Check, Info, Shield, MessageSquare } from 'lucide-react';
@@ -17,22 +17,40 @@ type SponsorshipMethod = 'PIX' | 'GIFT';
 export default function ConcluirClient({ initialChildId, initialCampaignId }: Props) {
   const { data: session, status } = useSession();
   const router = useRouter();
+  const searchParams = useSearchParams();
+
   const api = process.env.NEXT_PUBLIC_NEST_API_URL;
 
-  const childId = initialChildId || '';
-  const campaignId = initialCampaignId || '';
+  // --- Campanha
+  const campaignId = (initialCampaignId || '').trim();
 
+  // --- Suporte a múltiplos IDs vindos por query (?childIds=a,b,c) OU único via prop
+  const childIdsFromQuery = useMemo(() => {
+    const qs = searchParams?.get('childIds') || '';
+    if (!qs) return [];
+    return qs.split(',').map(s => s.trim()).filter(Boolean);
+  }, [searchParams]);
+
+  const singleChildId = (initialChildId || '').trim();
+  const childIds: string[] = useMemo(() => {
+    if (childIdsFromQuery.length > 0) return childIdsFromQuery;
+    return singleChildId ? [singleChildId] : [];
+  }, [childIdsFromQuery, singleChildId]);
+
+  // token
   const accessToken = useMemo(
     () => (session as unknown as { accessToken?: string } | null)?.accessToken,
     [session]
   );
 
+  // PIX/Dropoff config
   const PIX_KEY = process.env.NEXT_PUBLIC_PIX_KEY || '';
   const PIX_FAV = process.env.NEXT_PUBLIC_PIX_FAVORECIDO || 'ONG Amigos de Minas';
   const PIX_CNPJ = process.env.NEXT_PUBLIC_PIX_CNPJ || '';
   const PIX_OBS = process.env.NEXT_PUBLIC_PIX_OBS || 'Apadrinhamento';
   const DROP_IMG = process.env.NEXT_PUBLIC_DROPPOINTS_IMAGE || '/images/pontos-coleta.png';
 
+  // estado UI
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,24 +59,32 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
   const [copied, setCopied] = useState(false);
   const [guidelinesAccepted, setGuidelinesAccepted] = useState(false);
 
-  // Nomes carregados dinamicamente
+  // nomes
   const [childName, setChildName] = useState<string | null>(null);
   const [campaignName, setCampaignName] = useState<string | null>(null);
   const [loadingNames, setLoadingNames] = useState(true);
 
-  // Busca nomes
+  // Busca nomes (se 1 criança, busca nome; se múltiplas, só campanha)
   useEffect(() => {
     async function fetchNames() {
-      if (!api) return;
+      if (!api || !campaignId) {
+        setLoadingNames(false);
+        return;
+      }
       setLoadingNames(true);
       try {
-        const [childRes, campRes] = await Promise.all([
-          fetch(`${api}/children/${childId}`),
-          fetch(`${api}/campaigns/${campaignId}`),
-        ]);
-        const childData = childRes.ok ? await childRes.json() : null;
-        const campData = campRes.ok ? await campRes.json() : null;
-        setChildName(childData?.name ?? null);
+        let fetchedChildName: string | null = null;
+        if (childIds.length === 1) {
+          const resChild = await fetch(`${api}/children/${childIds[0]}`);
+          if (resChild.ok) {
+            const jd = await resChild.json();
+            fetchedChildName = jd?.name ?? null;
+          }
+        }
+        const resCamp = await fetch(`${api}/campaigns/${campaignId}`);
+        const campData = resCamp.ok ? await resCamp.json() : null;
+
+        setChildName(fetchedChildName);
         setCampaignName(campData?.name ?? null);
       } catch {
         setChildName(null);
@@ -68,20 +94,20 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
       }
     }
     fetchNames();
-  }, [api, childId, campaignId]);
+  }, [api, campaignId, childIds]);
 
-  // Redireciona se não logado
+  // Redireciona se não logado (preserva childIds quando múltiplo)
   useEffect(() => {
     if (status === 'unauthenticated') {
-      router.replace(
-        `/apadrinhamento/registro?childId=${encodeURIComponent(childId)}&campaignId=${encodeURIComponent(
-          campaignId
-        )}`
-      );
+      const base = `/apadrinhamento/registro`;
+      const q = new URLSearchParams();
+      if (childIds.length > 1) q.set('childIds', childIds.join(','));
+      if (childIds.length === 1) q.set('childId', childIds[0]);
+      q.set('campaignId', campaignId);
+      router.replace(`${base}?${q.toString()}`);
     }
-  }, [status, childId, campaignId, router]);
+  }, [status, childIds, campaignId, router]);
 
-  /** mapeia 'PIX' | 'DROP_OFF' -> 'PIX' | 'GIFT' (backend) */
   function mapPaymentToMethod(p: PaymentMethod): SponsorshipMethod {
     return p === 'PIX' ? 'PIX' : 'GIFT';
   }
@@ -91,15 +117,30 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
       setError('Sessão inválida.');
       return;
     }
+    if (!campaignId) {
+      setError('Campanha inválida.');
+      return;
+    }
+    if (childIds.length === 0) {
+      setError('Nenhuma criança selecionada.');
+      return;
+    }
     if (!guidelinesAccepted) {
       setError('Você precisa aceitar as orientações antes de confirmar.');
       return;
     }
+
     setSubmitting(true);
     setError(null);
     try {
       const method: SponsorshipMethod = mapPaymentToMethod(paymentMethod);
-      const body = { childId, campaignId, method }; // ✅ agora usa 'method'
+
+      // monta body conforme quantidade
+      const body =
+        childIds.length === 1
+          ? { childId: childIds[0], campaignId, method }
+          : { childIds, campaignId, method };
+
       const res = await fetch(`${api}/sponsorships`, {
         method: 'POST',
         headers: {
@@ -108,7 +149,12 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
         },
         body: JSON.stringify(body),
       });
+
       if (!res.ok) throw new Error(await safeErrMsg(res));
+
+      // opcional: você pode ler o resumo de criação para exibir detalhes
+      // const summary = await res.json();
+
       setDone(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Não foi possível concluir o apadrinhamento.';
@@ -127,15 +173,8 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
 
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
           <div className="text-sm text-gray-700 space-y-2">
-            {/*
-            <PixQr
-              descriptionAppend={`Campanha ${campaignName || campaignId} Criança ${childName || childId}`}
-              merchantCity="MINAS GERAIS"
-              size={256}
-              className="bg-white border border-emerald-200 rounded-xl p-4"
-              showCopyButtons
-            />
-            */}
+            {/* Se você quiser gerar QR dinâmico por criança/campanha, reative o PixQr e adapte a descrição */}
+            {/* <PixQr ... /> */}
             <div>
               <b>Chave PIX:</b> <span className="select-all">{PIX_KEY || '—'}</span>
             </div>
@@ -184,7 +223,7 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
 
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
           <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
-            <li>Embale o presente com material <b>impermeável</b> e identifique com o nome da criança e campanha.</li>
+            <li>Embale o presente com material <b>impermeável</b> e identifique com o nome/numeração e campanha.</li>
             <li>Entregue em um dos pontos de coleta listados na imagem abaixo.</li>
           </ul>
 
@@ -208,22 +247,15 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
 
         <div className="text-sm text-gray-700 space-y-3">
           <p className="font-medium text-[#253243]">Gentileza respeitar a opção da criança!</p>
-          <p>
-            O presente deve ser o escolhido pela criança, podendo haver complementos, mas <b>sem substituições</b>.
-          </p>
-          <p>
-            O objetivo da campanha é <b>doar itens novos</b>. Para usados, gentileza destinar à campanha de brinquedos.
-          </p>
-          <p>
-            Utilize <b>embalagem impermeável</b>, proteja itens frágeis e identifique com <b>Nº, Nome e Cidade</b> da
-            criança.
-          </p>
+          <p>O presente deve ser o escolhido pela criança, podendo haver complementos, mas <b>sem substituições</b>.</p>
+          <p>Somente <b>itens novos</b> (brinquedos usados devem ir à campanha de brinquedos).</p>
+          <p>Use <b>embalagem impermeável</b> e identifique com <b>Nº/Nome/Cidade</b> e campanha.</p>
         </div>
 
         <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg p-3">
           <Shield className="w-4 h-4 text-blue-700" />
           <span className="text-xs sm:text-sm text-blue-900">
-            Essas orientações garantem que o presente chegue corretamente e com segurança à criança apadrinhada. 💙
+            Essas orientações garantem que o presente chegue corretamente e com segurança. 💙
           </span>
         </div>
 
@@ -240,6 +272,13 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
     );
   }
 
+  // helper para título/identificação
+  const childLabel = useMemo(() => {
+    if (childIds.length === 0) return '—';
+    if (childIds.length === 1) return childName || childIds[0];
+    return `${childIds.length} crianças selecionadas`;
+  }, [childIds, childName]);
+
   return (
     <div className="max-w-xl mx-auto px-6 py-10">
       <h1 className="text-2xl font-bold text-[#253243] mb-2">Confirmar Apadrinhamento</h1>
@@ -254,10 +293,10 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
         ) : (
           <div className="text-sm text-gray-700 space-y-1">
             <div>
-              <b>Campanha:</b> {campaignName || '—'}
+              <b>Campanha:</b> {campaignName || campaignId || '—'}
             </div>
             <div>
-              <b>Criança:</b> {childName || '—'}
+              <b>{childIds.length > 1 ? 'Crianças:' : 'Criança:'}</b> {childLabel}
             </div>
           </div>
         )}
@@ -304,7 +343,7 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
       {!done ? (
         <button
           onClick={confirm}
-          disabled={submitting || !guidelinesAccepted}
+          disabled={submitting || !guidelinesAccepted || childIds.length === 0}
           className="px-4 py-2 bg-[#253243] text-white rounded-lg hover:bg-[#375A7F] inline-flex items-center gap-2 disabled:opacity-70"
         >
           {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
@@ -321,18 +360,16 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
               <b>Campanha:</b> {campaignName || campaignId}
             </div>
             <div>
-              <b>Criança:</b> {childName || childId}
+              <b>{childIds.length > 1 ? 'Crianças:' : 'Criança:'}</b> {childLabel}
             </div>
           </div>
 
           {paymentMethod === 'PIX' ? <PixInstructions /> : <DropOffInstructions />}
 
-          {/* Recado final */}
           <div className="flex items-start gap-2 bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-900">
             <MessageSquare className="w-4 h-4 mt-0.5 text-yellow-700" />
             <span>
-              Nossa equipe entrará em contato com você em breve para <b>finalizar o apadrinhamento</b> e confirmar todos
-              os detalhes. 💛
+              Nossa equipe entrará em contato para <b>finalizar</b> e confirmar todos os detalhes. 💛
             </span>
           </div>
 
