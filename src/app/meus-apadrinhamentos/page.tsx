@@ -7,7 +7,7 @@ import {
   CalendarDays, ChevronDown, Loader2
 } from 'lucide-react';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
-import { exportSponsorshipsPdfGrid  } from '@/lib/pdf/exportSponsorshipsPdf';
+import { exportSponsorshipsPdf  } from '@/lib/pdf/exportSponsorshipsPdf';
 
 /* ---------- Tipos ---------- */
 
@@ -89,6 +89,8 @@ export default function MeusApadrinhamentosPage() {
 
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number; phase: 'compose'|'pdf' } | null>(null);
+
+  const [cardsPerPage, setCardsPerPage] = useState<number>(1);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -182,10 +184,12 @@ export default function MeusApadrinhamentosPage() {
         };
       });
 
-      await exportSponsorshipsPdfGrid(data, {
-        fileName: 'meus-apadrinhamentos-2x2.pdf',
-        onProgress: (p) => setProgress(p),
+      await exportSponsorshipsPdf(data, {
+        fileName: `meus-apadrinhamentos-${cardsPerPage}pp.pdf`,
+        perPage: cardsPerPage,
+        onProgress: setProgress, 
       });
+
     } finally {
       setExporting(false);
       setProgress(null);
@@ -222,13 +226,27 @@ export default function MeusApadrinhamentosPage() {
               <ChevronDown className="w-4 h-4 text-gray-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
             {/* NOVO: botão de exportar */}
+            <select
+              value={cardsPerPage}
+              onChange={(e) => setCardsPerPage(Number(e.target.value))}
+              className="appearance-none bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-[#253243] hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              title="Cartões por página"
+            >
+              <option value={1}>1 por página (1×1)</option>
+              <option value={2}>2 por página (2×1)</option>
+              <option value={4}>4 por página (2×2)</option>
+              <option value={6}>6 por página (3×2)</option>
+              <option value={8}>8 por página (4×2)</option>
+              <option value={9}>9 por página (3×3)</option>
+            </select>
+
             <button
               onClick={handleExportPdf}
               disabled={loading || items.length === 0 || exporting}
               className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-60 inline-flex items-center gap-2"
             >
               {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-              {exporting ? 'Gerando PDF…' : 'Exportar PDF (4 por página)'}
+              {exporting ? 'Gerando PDF…' : `Exportar PDF (${cardsPerPage} por página)`}
             </button>
           </div>
         </div>
