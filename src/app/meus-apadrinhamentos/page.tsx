@@ -65,7 +65,7 @@ type Child = {
 
 type Sponsorship = {
   id: string;
-  status: 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
+  status: 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED' | 'IN_PROGRESS';
   startDate?: string;
   endDate?: string;
   note?: string;
@@ -384,11 +384,12 @@ async function safeErrMsg(res: Response) {
 function toChildCardData(sp: Sponsorship) {
   const c = sp.child || ({} as Child);
 
-  const apadrinhado = sp.status === 'ACTIVE' || sp.status === 'PENDING';
+  const apadrinhado = sp.status === 'ACTIVE' || sp.status === 'PENDING' || sp.status === 'IN_PROGRESS';
   // Status do ChildCard segue o enum usado na listagem
   const statusMap = {
     ACTIVE: 'IN_PROGRESS',
     PENDING: 'PENDING',
+    IN_PROGRESS: 'IN_PROGRESS',
     ENDED: 'ENDED',
     CANCELLED: 'CANCELLED',
   } as const;

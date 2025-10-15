@@ -50,6 +50,8 @@ export default function ChildCard({
       ? 'Pendente'
       : child.status === 'COMPLETED'
       ? 'Apadrinhado'
+      : child.status === 'IN_PROGRESS'
+      ? 'Em Processo'
       : child.status === 'ENDED'
       ? 'Encerrado'
       : child.status === 'CANCELLED'

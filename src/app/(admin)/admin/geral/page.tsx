@@ -8,6 +8,7 @@ import {
   GraduationCap,
   ChevronRight,
   User,
+  ListCheck,
 } from 'lucide-react';
 
 export default function CadastrosGeraisPage() {
@@ -19,6 +20,7 @@ export default function CadastrosGeraisPage() {
       if (e.key === '2') window.location.href = '/admin/communities';
       if (e.key === '3') window.location.href = '/admin/schools';
       if (e.key === '4') window.location.href = '/admin/users';
+      if (e.key === '5') window.location.href = '/admin/conferencia';
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -71,6 +73,15 @@ export default function CadastrosGeraisPage() {
             title="Usuarios"
             desc="Gerencie usuários do sistema e suas permissões."
             kbd="4"
+            accent="from-fuchsia-600 to-rose-600"
+          />
+
+          <NavCard
+            href="/admin/conferencia"
+            icon={<ListCheck className="w-6 h-6" />}
+            title="Conferencia"
+            desc="Conferência de dados e estatísticas."
+            kbd="5"
             accent="from-fuchsia-600 to-rose-600"
           />
         </div>
