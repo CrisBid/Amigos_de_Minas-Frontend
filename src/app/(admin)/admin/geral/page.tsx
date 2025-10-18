@@ -9,6 +9,7 @@ import {
   ChevronRight,
   User,
   ListCheck,
+  Home,
 } from 'lucide-react';
 
 export default function CadastrosGeraisPage() {
@@ -19,8 +20,9 @@ export default function CadastrosGeraisPage() {
       if (e.key === '1') window.location.href = '/admin/cities';
       if (e.key === '2') window.location.href = '/admin/communities';
       if (e.key === '3') window.location.href = '/admin/schools';
-      if (e.key === '4') window.location.href = '/admin/users';
-      if (e.key === '5') window.location.href = '/admin/conferencia';
+      if (e.key === '4') window.location.href = '/admin/collection-points';
+      if (e.key === '5') window.location.href = '/admin/users';
+      if (e.key === '6') window.location.href = '/admin/conferencia';
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -68,11 +70,20 @@ export default function CadastrosGeraisPage() {
           />
 
           <NavCard
+            href="/admin/collection-points"
+            icon={<Home className="w-6 h-6" />}
+            title="Pontos de Coleta"
+            desc="Gerencie pontos de coleta de doações."
+            kbd="4"
+            accent="from-fuchsia-600 to-rose-600"
+          />
+
+          <NavCard
             href="/admin/users"
             icon={<User className="w-6 h-6" />}
             title="Usuarios"
             desc="Gerencie usuários do sistema e suas permissões."
-            kbd="4"
+            kbd="5"
             accent="from-fuchsia-600 to-rose-600"
           />
 
@@ -81,7 +92,7 @@ export default function CadastrosGeraisPage() {
             icon={<ListCheck className="w-6 h-6" />}
             title="Conferencia"
             desc="Conferência de dados e estatísticas."
-            kbd="5"
+            kbd="6"
             accent="from-fuchsia-600 to-rose-600"
           />
         </div>

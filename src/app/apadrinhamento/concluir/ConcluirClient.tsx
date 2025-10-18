@@ -3,8 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle, Loader2, AlertCircle, Copy, Check, Info, Shield, MessageSquare } from 'lucide-react';
-import PixQr from '@/components/Pix/PixQr';
+import { CheckCircle, Loader2, AlertCircle, Copy, Check, Info, Shield, MessageSquare, MapPin, Phone } from 'lucide-react';
 
 type Props = {
   initialChildId: string;
@@ -13,6 +12,20 @@ type Props = {
 
 type PaymentMethod = 'PIX' | 'DROP_OFF';
 type SponsorshipMethod = 'PIX' | 'GIFT';
+
+type CollectionPoint = {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  address?: string | null;
+  district?: string | null;
+  cityName?: string | null;
+  state?: string | null;
+  zipCode?: string | null;
+  phone?: string | null;
+  active: boolean;
+};
 
 export default function ConcluirClient({ initialChildId, initialCampaignId }: Props) {
   const { data: session, status } = useSession();
@@ -43,11 +56,13 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
     [session]
   );
 
-  // PIX/Dropoff config
+  // PIX config
   const PIX_KEY = process.env.NEXT_PUBLIC_PIX_KEY || '';
   const PIX_FAV = process.env.NEXT_PUBLIC_PIX_FAVORECIDO || 'ONG Amigos de Minas';
   const PIX_CNPJ = process.env.NEXT_PUBLIC_PIX_CNPJ || '';
   const PIX_OBS = process.env.NEXT_PUBLIC_PIX_OBS || 'Apadrinhamento';
+
+  // Fallback imagem (se não vier lista de pontos por algum motivo)
   const DROP_IMG = process.env.NEXT_PUBLIC_DROPPOINTS_IMAGE || '/images/pontos-coleta.png';
 
   // estado UI
@@ -63,6 +78,14 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
   const [childName, setChildName] = useState<string | null>(null);
   const [campaignName, setCampaignName] = useState<string | null>(null);
   const [loadingNames, setLoadingNames] = useState(true);
+
+  // pontos de coleta
+  const [points, setPoints] = useState<CollectionPoint[]>([]);
+  const [loadingPoints, setLoadingPoints] = useState(true);
+  const [selectedPointId, setSelectedPointId] = useState<string>('');
+
+  // DEADLINE
+  const DEADLINE_LABEL = '30 de novembro de 2025';
 
   // Busca nomes (se 1 criança, busca nome; se múltiplas, só campanha)
   useEffect(() => {
@@ -96,6 +119,32 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
     fetchNames();
   }, [api, campaignId, childIds]);
 
+  // Carrega pontos de coleta ativos do backend
+  useEffect(() => {
+    async function fetchPoints() {
+      if (!api) { setLoadingPoints(false); return; }
+      setLoadingPoints(true);
+      try {
+        const res = await fetch(`${api}/collection-points?active=true`, { cache: 'no-store' });
+        if (!res.ok) { setPoints([]); return; }
+        const js = await res.json();
+        const list: CollectionPoint[] = Array.isArray(js?.items)
+          ? js.items
+          : Array.isArray(js?.data)
+          ? js.data
+          : Array.isArray(js)
+          ? js
+          : [];
+        setPoints(list.filter(p => p.active));
+      } catch {
+        setPoints([]);
+      } finally {
+        setLoadingPoints(false);
+      }
+    }
+    fetchPoints();
+  }, [api]);
+
   // Redireciona se não logado (preserva childIds quando múltiplo)
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -111,6 +160,14 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
   function mapPaymentToMethod(p: PaymentMethod): SponsorshipMethod {
     return p === 'PIX' ? 'PIX' : 'GIFT';
   }
+
+  // Auto-seleciona um ponto quando o usuário escolhe DROP_OFF e houver pontos
+  useEffect(() => {
+    if (paymentMethod !== 'DROP_OFF') return;
+    if (loadingPoints) return;
+    if (!points || points.length === 0) return;
+    if (!selectedPointId) setSelectedPointId(points[0].id);
+  }, [paymentMethod, loadingPoints, points, selectedPointId]);
 
   async function confirm() {
     if (!api || !accessToken) {
@@ -130,16 +187,34 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
       return;
     }
 
+    const method: SponsorshipMethod = mapPaymentToMethod(paymentMethod);
+
+    // Regras para GIFT (DROP_OFF)
+    if (method === 'GIFT') {
+      if (loadingPoints) {
+        setError('Aguarde carregar os pontos de coleta.');
+        return;
+      }
+      if (!selectedPointId?.trim()) {
+        setError('Selecione um ponto de coleta para a entrega.');
+        return;
+      }
+    }
+
     setSubmitting(true);
     setError(null);
     try {
-      const method: SponsorshipMethod = mapPaymentToMethod(paymentMethod);
+      // monta body conforme quantidade (inclui collectionPointId quando método = GIFT)
+      const common: any = {
+        campaignId,
+        method,
+        ...(method === 'GIFT' ? { collectionPointId: selectedPointId.trim() } : {}),
+      };
 
-      // monta body conforme quantidade
       const body =
         childIds.length === 1
-          ? { childId: childIds[0], campaignId, method }
-          : { childIds, campaignId, method };
+          ? { ...common, childId: childIds[0] }
+          : { ...common, childIds };
 
       const res = await fetch(`${api}/sponsorships`, {
         method: 'POST',
@@ -150,10 +225,12 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
         body: JSON.stringify(body),
       });
 
-      if (!res.ok) throw new Error(await safeErrMsg(res));
+      console.log(JSON.stringify(body));
 
-      // opcional: você pode ler o resumo de criação para exibir detalhes
-      // const summary = await res.json();
+      console.log(res);
+      
+
+      if (!res.ok) throw new Error(await safeErrMsg(res));
 
       setDone(true);
     } catch (e) {
@@ -165,6 +242,7 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
   }
 
   function PixInstructions() {
+    const [copied, setCopied] = useState(false);
     return (
       <div className="space-y-3">
         <p className="text-emerald-800">
@@ -173,8 +251,6 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
 
         <div className="bg-white border border-emerald-200 rounded-xl p-4">
           <div className="text-sm text-gray-700 space-y-2">
-            {/* Se você quiser gerar QR dinâmico por criança/campanha, reative o PixQr e adapte a descrição */}
-            {/* <PixQr ... /> */}
             <div>
               <b>Chave PIX:</b> <span className="select-all">{PIX_KEY || '—'}</span>
             </div>
@@ -210,26 +286,78 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
             </button>
           </div>
         </div>
+
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3 rounded-lg">
+          💡 <b>Importante:</b> o valor mínimo para contribuição via PIX é de <b>R$ 50,00</b>.
+        </div>
       </div>
     );
   }
 
-  function DropOffInstructions() {
+  function DropOffSelector() {
     return (
       <div className="space-y-3">
         <p className="text-emerald-800">
           Obrigado por apadrinhar! 💚 Você escolheu <b>entregar o presente em um ponto de coleta</b>.
         </p>
 
-        <div className="bg-white border border-emerald-200 rounded-xl p-4">
-          <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
-            <li>Embale o presente com material <b>impermeável</b> e identifique com o nome/numeração e campanha.</li>
-            <li>Entregue em um dos pontos de coleta listados na imagem abaixo.</li>
-          </ul>
+        <div className="bg-white border border-emerald-200 rounded-xl p-4 space-y-3">
+          {loadingPoints ? (
+            <div className="text-sm text-gray-600">Carregando pontos de coleta...</div>
+          ) : points.length > 0 ? (
+            <>
+              <label className="text-sm font-semibold text-gray-700">Selecione o ponto de coleta *</label>
+              <select
+                value={selectedPointId}
+                onChange={(e) => setSelectedPointId(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="">Selecione...</option>
+                {points.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} {p.cityName ? `• ${p.cityName}${p.state ? `/${p.state}` : ''}` : ''}
+                  </option>
+                ))}
+              </select>
 
-          <div className="mt-4">
-            <img src={DROP_IMG} alt="Pontos de coleta" className="w-full rounded-lg border border-emerald-100" />
-          </div>
+              {selectedPointId && (
+                <div className="mt-2 rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-900">
+                  {(() => {
+                    const p = points.find(x => x.id === selectedPointId);
+                    if (!p) return null;
+                    return (
+                      <div className="space-y-1">
+                        <div className="font-semibold">{p.name}</div>
+                        <div className="flex items-center gap-2 text-gray-700">
+                          <MapPin className="w-4 h-4 text-gray-500" />
+                          <span>{p.address || '—'}{p.district ? `, ${p.district}` : ''}</span>
+                        </div>
+                        <div className="text-gray-700">
+                          {p.cityName || ''}{p.state ? `/${p.state}` : ''} {p.zipCode ? `• CEP ${p.zipCode}` : ''}
+                        </div>
+                        <div className="flex items-center gap-2 text-gray-700">
+                          <Phone className="w-4 h-4 text-gray-500" />
+                          <span>{p.phone || '—'}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="text-sm text-gray-700">
+                Não encontramos pontos de coleta cadastrados. Você pode conferir os pontos na imagem abaixo.
+              </div>
+              <img src={DROP_IMG} alt="Pontos de coleta" className="w-full rounded-lg border border-emerald-100 mt-2" />
+            </>
+          )}
+
+          <ul className="text-xs text-gray-700 list-disc pl-5 space-y-1 mt-2">
+            <li>Embale o presente com material <b>impermeável</b> e identifique com o nome/numeração e campanha.</li>
+            <li>Verifique horários de funcionamento do ponto escolhido.</li>
+          </ul>
         </div>
       </div>
     );
@@ -256,6 +384,13 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
           <Shield className="w-4 h-4 text-blue-700" />
           <span className="text-xs sm:text-sm text-blue-900">
             Essas orientações garantem que o presente chegue corretamente e com segurança. 💙
+          </span>
+        </div>
+
+        <div className="flex items-start gap-2 bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-900">
+          <Info className="w-4 h-4 mt-0.5 text-yellow-700" />
+          <span>
+            <b>Data limite para entrega: {DEADLINE_LABEL}</b>.
           </span>
         </div>
 
@@ -331,6 +466,8 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
               <span className="text-sm text-gray-700">Entregar o presente em um ponto de coleta</span>
             </label>
           </div>
+
+          {paymentMethod === 'DROP_OFF' && <div className="mt-4"><DropOffSelector /></div>}
         </div>
       )}
 
@@ -343,7 +480,12 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
       {!done ? (
         <button
           onClick={confirm}
-          disabled={submitting || !guidelinesAccepted || childIds.length === 0}
+          disabled={
+            submitting ||
+            !guidelinesAccepted ||
+            childIds.length === 0 ||
+            (paymentMethod === 'DROP_OFF' && (loadingPoints || !selectedPointId))
+          }
           className="px-4 py-2 bg-[#253243] text-white rounded-lg hover:bg-[#375A7F] inline-flex items-center gap-2 disabled:opacity-70"
         >
           {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
@@ -364,12 +506,46 @@ export default function ConcluirClient({ initialChildId, initialCampaignId }: Pr
             </div>
           </div>
 
-          {paymentMethod === 'PIX' ? <PixInstructions /> : <DropOffInstructions />}
+          {paymentMethod === 'PIX' ? (
+            <PixInstructions />
+          ) : (
+            <>
+              <div className="rounded-lg border border-emerald-200 bg-white p-3 text-sm text-gray-800">
+                <div className="font-semibold mb-1">Ponto de coleta escolhido</div>
+                {(() => {
+                  const p = points.find(x => x.id === selectedPointId);
+                  if (!p) return <div>—</div>;
+                  return (
+                    <div className="space-y-1">
+                      <div>{p.name}</div>
+                      <div className="flex items-center gap-2">
+                        <MapPin className="w-4 h-4 text-gray-500" />
+                        <span>{p.address || '—'}{p.district ? `, ${p.district}` : ''}</span>
+                      </div>
+                      <div className="text-gray-700">{p.cityName || ''}{p.state ? `/${p.state}` : ''}</div>
+                      <div className="flex items-center gap-2">
+                        <Phone className="w-4 h-4 text-gray-500" />
+                        <span>{p.phone || '—'}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+              {/* Fallback visual se não carregou lista */}
+              {points.length === 0 && (
+                <div className="bg-white border border-emerald-200 rounded-xl p-3">
+                  <img src={DROP_IMG} alt="Pontos de coleta" className="w-full rounded-lg border border-emerald-100" />
+                </div>
+              )}
+            </>
+          )}
 
           <div className="flex items-start gap-2 bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-yellow-900">
             <MessageSquare className="w-4 h-4 mt-0.5 text-yellow-700" />
             <span>
               Nossa equipe entrará em contato para <b>finalizar</b> e confirmar todos os detalhes. 💛
+              <br />
+              <b>Data limite para entrega: {DEADLINE_LABEL}</b>.
             </span>
           </div>
 

@@ -13,7 +13,7 @@ export default function Footer() {
                   <h3 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-green-500 bg-clip-text text-transparent">
                     Amigos de Minas
                   </h3>
-                  <p className="text-sm text-gray-500">Transformando vidas desde 2019</p>
+                  <p className="text-sm text-gray-500">Transformando vidas desde 2001</p>
                 </div>
               </div>
               
@@ -62,15 +62,15 @@ export default function Footer() {
               <ul className="space-y-3">
                 <li className="flex items-center text-gray-600">
                   <div className="w-2 h-2 bg-blue-400 rounded-full mr-3"></div>
-                  contato@amigosminas.org
+                  ongamigosdeminas@gmail.com
                 </li>
                 <li className="flex items-center text-gray-600">
                   <div className="w-2 h-2 bg-green-400 rounded-full mr-3"></div>
-                  (38) 99999-9999
+                  (31) 99549-2237
                 </li>
                 <li className="flex items-center text-gray-600">
                   <div className="w-2 h-2 bg-yellow-400 rounded-full mr-3"></div>
-                  Norte de Minas Gerais
+                  Belo Horizonte
                 </li>
               </ul>
               

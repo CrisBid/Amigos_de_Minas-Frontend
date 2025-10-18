@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import {
-  CalendarDays, ChevronDown, Loader2
+  CalendarDays, ChevronDown, Loader2, MapPin
 } from 'lucide-react';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
 import { exportSponsorshipsPdf  } from '@/lib/pdf/exportSponsorshipsPdf';
@@ -56,22 +56,25 @@ type Child = {
   wantedGift?: string;
   photoUrl?: string;
   description?: string;
-  // extras para manter compatibilidade com ChildCard:
   publicId?: number | null;
   communityName?: string | null;
   images?: ChildImage[];
   media?: Array<{ framedUrl?: string; processedUrl?: string }>;
+  // algumas APIs podem retornar child.community.name
+  // então usamos (child as any).community?.name de forma defensiva
 };
 
 type Sponsorship = {
   id: string;
-  status: 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED' | 'IN_PROGRESS';
+  status: 'PENDING' | 'COMPLETED' | 'ENDED' | 'CANCELLED' | 'IN_PROGRESS';
   startDate?: string;
   endDate?: string;
   note?: string;
   child: Child;
   campaign: Campaign;
 };
+
+/* ---------- Página ---------- */
 
 export default function MeusApadrinhamentosPage() {
   const { data: session, status } = useSession();
@@ -187,7 +190,7 @@ export default function MeusApadrinhamentosPage() {
       await exportSponsorshipsPdf(data, {
         fileName: `meus-apadrinhamentos-${cardsPerPage}pp.pdf`,
         perPage: cardsPerPage,
-        onProgress: setProgress, 
+        onProgress: setProgress,
       });
 
     } finally {
@@ -196,7 +199,7 @@ export default function MeusApadrinhamentosPage() {
     }
   };
 
-  const grouped = groupByCampaign(items);
+  const grouped = groupByCampaignThenCommunity(items);
 
   return (
     <div className="min-h-[calc(100dvh-64px)] bg-gray-50 py-8 px-4">
@@ -205,10 +208,10 @@ export default function MeusApadrinhamentosPage() {
         <div className="mb-6 flex items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl md:text-3xl font-bold text-[#253243]">Meus Apadrinhamentos</h1>
-            <p className="text-gray-600">Veja suas crianças apadrinhadas por campanha.</p>
+            <p className="text-gray-600">Veja suas crianças apadrinhadas por campanha e comunidade.</p>
           </div>
 
-          {/* Filtro de campanha */}
+          {/* Filtros e export */}
           <div className="flex items-center gap-3">
             <div className="relative">
               <select
@@ -225,7 +228,7 @@ export default function MeusApadrinhamentosPage() {
               </select>
               <ChevronDown className="w-4 h-4 text-gray-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
-            {/* NOVO: botão de exportar */}
+
             <select
               value={cardsPerPage}
               onChange={(e) => setCardsPerPage(Number(e.target.value))}
@@ -255,7 +258,6 @@ export default function MeusApadrinhamentosPage() {
         <div className="bg-white border border-gray-100 shadow-xl rounded-2xl p-6">
           {loading ? (
             <div className="flex items-center gap-3 text-[#253243]">
-              {/* loader simples para manter o visual atual */}
               <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" fill="none" strokeWidth="4"></circle>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 004 12z"></path>
@@ -269,28 +271,43 @@ export default function MeusApadrinhamentosPage() {
           ) : items.length === 0 ? (
             <div className="text-gray-600">Você ainda não possui apadrinhamentos{campaignFilter ? ' nesta campanha.' : '.'}</div>
           ) : (
-            <div className="space-y-8">
+            <div className="space-y-10">
               {grouped.map(group => (
-                <section key={group.campaign.id} className="space-y-4">
+                <section key={group.campaign.id} className="space-y-6">
                   <header className="flex items-center gap-3">
                     <CalendarDays className="w-5 h-5 text-blue-600" />
                     <h2 className="text-lg font-semibold text-[#253243]">
                       {group.campaign.name}{group.campaign.year ? ` (${group.campaign.year})` : ''}
                     </h2>
                     <CampaignBadge status={group.campaign.status} />
-                    <span className="ml-auto text-sm text-gray-500">{group.items.length} criança(s)</span>
+                    <span className="ml-auto text-sm text-gray-500">
+                      {group.total} criança(s) · {group.communities.length} comunidade(s)
+                    </span>
                   </header>
 
-                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {group.items.map(sp => (
-                      <div key={sp.id} className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition bg-white">
-                        {/* Reuso do mesmo componente de exibição de imagens */}
-                        <ChildCard
-                          child={toChildCardData(sp)}
-                          onSponsor={() => {}}
-                          sponsoring={false}
-                        />
-                        {/* Caso queira manter algum rodapé específico desta página, acrescente aqui */}
+                  {/* Comunidades dentro da campanha */}
+                  <div className="space-y-8">
+                    {group.communities.map(com => (
+                      <div key={com.name} className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-emerald-600" />
+                          <h3 className="text-base font-semibold text-[#253243]">
+                            {com.name}
+                          </h3>
+                          <span className="ml-auto text-sm text-gray-500">{com.items.length} criança(s)</span>
+                        </div>
+
+                        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                          {com.items.map(sp => (
+                            <div key={sp.id} className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition bg-white">
+                              <ChildCard
+                                child={toChildCardData(sp)}
+                                onSponsor={() => {}}
+                                sponsoring={false}
+                              />
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -300,11 +317,11 @@ export default function MeusApadrinhamentosPage() {
           )}
         </div>
       </div>
+
       {exporting && progress && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
             <div className="flex items-center gap-3 mb-3">
-              {/* se ainda não importou, importe: import { Loader2 } from 'lucide-react' */}
               <svg className="w-5 h-5 animate-spin text-emerald-600" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" fill="none" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 004 12z" />
@@ -332,7 +349,7 @@ export default function MeusApadrinhamentosPage() {
   );
 }
 
-/* ---------- UI auxiliares (mantidas) ---------- */
+/* ---------- UI auxiliares ---------- */
 
 function CampaignBadge({ status }: { status: Campaign['status'] }) {
   const map = {
@@ -359,14 +376,60 @@ function uniqBy<T extends Record<string, any>>(arr: T[], key: keyof T) {
   return out;
 }
 
-function groupByCampaign(items: Sponsorship[]) {
-  const map = new Map<string, { campaign: Campaign; items: Sponsorship[] }>();
+function getCommunityName(child: Child): string {
+  const fromNested = (child as any)?.community?.name; // se vier do backend aninhado
+  const raw = fromNested ?? child.communityName ?? '';
+  const name = (raw ?? '').toString().trim();
+  return name || 'Sem comunidade';
+}
+
+function groupByCampaignThenCommunity(items: Sponsorship[]) {
+  // 1) agrupa por campanha
+  const campMap = new Map<string, { campaign: Campaign; items: Sponsorship[] }>();
   items.forEach(sp => {
     const id = sp.campaign.id;
-    if (!map.has(id)) map.set(id, { campaign: sp.campaign, items: [] });
-    map.get(id)!.items.push(sp);
+    if (!campMap.has(id)) campMap.set(id, { campaign: sp.campaign, items: [] });
+    campMap.get(id)!.items.push(sp);
   });
-  return Array.from(map.values());
+
+  // 2) dentro de cada campanha, agrupa por comunidade (ordenado)
+  const result = Array.from(campMap.values()).map(group => {
+    const comMap = new Map<string, Sponsorship[]>();
+    for (const sp of group.items) {
+      const name = getCommunityName(sp.child);
+      if (!comMap.has(name)) comMap.set(name, []);
+      comMap.get(name)!.push(sp);
+    }
+
+    // ordena crianças por nome dentro de cada comunidade
+    const communities = Array.from(comMap.entries())
+      .map(([name, arr]) => ({
+        name,
+        items: arr.sort((a, b) => a.child.name.localeCompare(b.child.name, 'pt-BR', { sensitivity: 'base' })),
+      }))
+      // ordena comunidades por nome (Sem comunidade vai pro final)
+      .sort((a, b) => {
+        const aIsNone = a.name === 'Sem comunidade';
+        const bIsNone = b.name === 'Sem comunidade';
+        if (aIsNone && !bIsNone) return 1;
+        if (!aIsNone && bIsNone) return -1;
+        return a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' });
+      });
+
+    return {
+      campaign: group.campaign,
+      communities,
+      total: group.items.length,
+    };
+  });
+
+  // opcional: ordenar campanhas por ano desc e nome
+  return result.sort((a, b) => {
+    const ay = a.campaign.year ?? 0;
+    const by = b.campaign.year ?? 0;
+    if (by !== ay) return by - ay;
+    return a.campaign.name.localeCompare(b.campaign.name, 'pt-BR', { sensitivity: 'base' });
+  });
 }
 
 async function safeErrMsg(res: Response) {
@@ -376,16 +439,11 @@ async function safeErrMsg(res: Response) {
 
 /**
  * Converte um Sponsorship (com child dentro) no shape esperado por <ChildCard />
- * Regras:
- * - Usa as mesmas fontes de imagem da listagem: images/media/photoUrl
- * - apadrinhado = true se status do sponsorship for ACTIVE ou PENDING (indisponível)
- * - status reaproveita o status do sponsorship (mapeado para o que o ChildCard entende)
  */
 function toChildCardData(sp: Sponsorship) {
   const c = sp.child || ({} as Child);
 
-  const apadrinhado = sp.status === 'ACTIVE' || sp.status === 'PENDING' || sp.status === 'IN_PROGRESS';
-  // Status do ChildCard segue o enum usado na listagem
+  const apadrinhado = sp.status === 'COMPLETED' || sp.status === 'PENDING' || sp.status === 'IN_PROGRESS';
   const statusMap = {
     ACTIVE: 'IN_PROGRESS',
     PENDING: 'PENDING',
@@ -395,7 +453,6 @@ function toChildCardData(sp: Sponsorship) {
   } as const;
   const status = (statusMap as any)[sp.status] ?? 'NONE';
 
-  // compat de imagens
   const images = c.images ?? undefined;
   const foto = c.photoUrl ?? (c.media?.[0]?.framedUrl || c.media?.[0]?.processedUrl || '');
 
@@ -404,8 +461,8 @@ function toChildCardData(sp: Sponsorship) {
     publicId: c.publicId ?? 0,
     nome: c.name,
     idade: c.age ?? 0,
-    cidade: c.city ?? '',
-    escola: c.school ?? '',
+    cidade: (c as any)?.city?.name ?? c.city ?? '',
+    escola: (c as any)?.school?.name ?? (c as any)?.school ?? '',
     categoria: c.category ?? '',
     presente: c.wantedGift ?? '',
     descricao: c.description ?? '',
@@ -413,6 +470,6 @@ function toChildCardData(sp: Sponsorship) {
     foto,
     images,
     status,
-    comunidade: c.communityName ?? '',
+    comunidade: getCommunityName(c),
   };
 }

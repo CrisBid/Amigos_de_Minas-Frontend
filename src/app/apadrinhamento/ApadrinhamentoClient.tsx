@@ -90,7 +90,17 @@ function parseFaixa(fo?: string): { minAge?: number; maxAge?: number } {
 type CategoryItem = { category: string; count?: number };
 
 export default function ApadrinhamentoClient({ initialScanFs }: Props) {
-  const { data: session, status } = useSession();
+  const { data: session, status } = useSession({
+    required: true,
+    onUnauthenticated() {
+      const returnTo =
+        typeof window !== 'undefined'
+          ? window.location.pathname + window.location.search
+          : '/apadrinhamento';
+      // manda para a tela de cadastro, guardando o destino para voltar depois
+      router.replace(`/auth/signin?returnTo=${encodeURIComponent(returnTo)}`);
+    },
+  });
   const router = useRouter();
   const api = process.env.NEXT_PUBLIC_NEST_API_URL;
 
@@ -539,6 +549,16 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
   }
 
   const selectedCount = selectedIds.size;
+
+  if (status === 'loading') {
+    return (
+      <div className="max-w-6xl mx-auto px-6 py-16 text-gray-600 flex items-center gap-2">
+        <Loader2 className="w-5 h-5 animate-spin" />
+        Carregando sua sessão…
+      </div>
+    );
+  }
+
 
   return (
     <div className="max-w-6xl mx-auto px-6">

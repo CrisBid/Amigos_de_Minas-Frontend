@@ -52,7 +52,7 @@ export type PdfCampaign = {
 
 export type PdfItem = {
   sponsorshipId: string;
-  status: 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED' | 'IN_PROGRESS';
+  status: 'PENDING' | 'COMPLETED' | 'ENDED' | 'CANCELLED' | 'IN_PROGRESS';
   child: PdfChildInput;
   campaign: PdfCampaign;
 };
