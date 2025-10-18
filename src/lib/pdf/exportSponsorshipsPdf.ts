@@ -1,4 +1,5 @@
 // lib/pdf/exportSponsorshipsPdf.ts
+// lib/pdf/exportSponsorshipsPdf.ts
 import jsPDF from 'jspdf';
 
 /* ===== Tipos ===== */
@@ -35,11 +36,9 @@ export type PdfChildInput = {
   community?: string | null;
   school?: string | null;
   wantedGift?: string | null;
-  // fontes de imagem
-  processedUrl?: string | null; // base/foto tratada
-  layoutUrl?: string | null;    // PNG com moldura
+  processedUrl?: string | null;
+  layoutUrl?: string | null;
   config?: ComposeConfig | null;
-  // fallbacks
   framedUrl?: string | null;
   photoUrl?: string | null;
 };
@@ -60,11 +59,60 @@ export type PdfItem = {
 export type ExportPdfOptions = {
   fileName?: string;
   onProgress?: (p: { current: number; total: number; phase: 'compose'|'pdf' }) => void;
-  /** quantidade por página (1,2,3,4,6,8,9…) — columns/rows têm prioridade */
   perPage?: number;
   columns?: number;
   rows?: number;
 };
+
+/* ===== Compatibilidade com Sponsorship ===== */
+
+export type SponsorshipLike = {
+  id: string;
+  status?: 'PENDING'|'COMPLETED'|'ENDED'|'CANCELLED'|'IN_PROGRESS'|string|null;
+  method?: 'PIX'|'GIFT'|string|null;
+  child?: any;
+  campaign?: any;
+  sponsor?: any;
+  collectionPoint?: any;
+};
+
+/** converte Sponsorship[] ou PdfItem[] em PdfItem[] */
+function normalizeItems(input: (PdfItem | SponsorshipLike)[]): PdfItem[] {
+  return input.map((it) => {
+    if ((it as PdfItem).sponsorshipId) {
+      return it as PdfItem;
+    }
+
+    const s = it as SponsorshipLike;
+    const child = s.child || {};
+    const campaign = s.campaign || {};
+
+    return {
+      sponsorshipId: s.id,
+      status: (s.status as any) ?? 'PENDING',
+      child: {
+        id: child.id ?? '',
+        name: child.name ?? '',
+        publicId: child.publicId ?? null,
+        age: child.age ?? null,
+        city: child.cityName ?? child.city ?? null,
+        community: child.community?.name ?? child.communityName ?? null,
+        school: child.school?.name ?? null,
+        wantedGift: child.wantedGift ?? child.gift ?? null,
+        processedUrl: child.processedUrl ?? child.photoUrl ?? null,
+        layoutUrl: child.layoutUrl ?? null,
+        config: child.config ?? null,
+        framedUrl: child.framedUrl ?? null,
+        photoUrl: child.photoUrl ?? null,
+      },
+      campaign: {
+        id: campaign.id ?? '',
+        name: campaign.name ?? '',
+        year: campaign.year ?? null,
+      },
+    };
+  });
+}
 
 /* ===== Defaults ===== */
 
@@ -150,7 +198,7 @@ function drawRoundedImage(
 
 async function loadImage(url: string): Promise<HTMLImageElement> {
   const img = new Image();
-  img.crossOrigin = 'anonymous'; // precisa CORS
+  img.crossOrigin = 'anonymous';
   img.decoding = 'async';
   img.referrerPolicy = 'no-referrer';
   return new Promise((resolve, reject) => {
@@ -183,7 +231,6 @@ async function composeToDataURL(
   const ctx = canvas.getContext('2d')!;
   canvas.width = W; canvas.height = H;
 
-  // background
   if (cfg.canvas.background) {
     ctx.fillStyle = cfg.canvas.background;
     ctx.fillRect(0, 0, W, H);
@@ -195,65 +242,28 @@ async function composeToDataURL(
   const photo = await loadImage(child.processedUrl);
 
   const pr = cfg.photoRect;
-  const targetX = pr.x;
-  const targetY = pr.y;
-  const targetW = pr.width;
-  const targetH = pr.height;
-
-  const sW0 = photo.naturalWidth, sH0 = photo.naturalHeight;
   const scaleFit =
     pr.fit === 'cover'
-      ? Math.max(targetW / sW0, targetH / sH0)
-      : Math.min(targetW / sW0, targetH / sH0);
+      ? Math.max(pr.width / photo.naturalWidth, pr.height / photo.naturalHeight)
+      : Math.min(pr.width / photo.naturalWidth, pr.height / photo.naturalHeight);
 
   const scale = scaleFit * (pr.scale || 1);
-  const drawW = sW0 * scale;
-  const drawH = sH0 * scale;
+  const drawW = photo.naturalWidth * scale;
+  const drawH = photo.naturalHeight * scale;
 
   const [ax, ay] = gravityToAnchor(pr.gravity);
-  const dx = targetX + (targetW - drawW) * ax + (pr.offsetX || 0);
-  const dy = targetY + (targetH - drawH) * ay + (pr.offsetY || 0);
+  const dx = pr.x + (pr.width - drawW) * ax + (pr.offsetX || 0);
+  const dy = pr.y + (pr.height - drawH) * ay + (pr.offsetY || 0);
 
   drawRoundedImage(ctx, photo, dx, dy, drawW, drawH, pr.cornerRadius || 0);
 
-  // overlay
   if (child.layoutUrl) {
     const overlay = await loadImage(child.layoutUrl);
-    let oW = overlay.naturalWidth, oH = overlay.naturalHeight;
-    let ox = 0, oy = 0;
-    if (cfg.layout?.resizeToCanvas) { oW = W; oH = H; }
     const opacity = Math.max(0, Math.min(1, cfg.layout?.opacity ?? 1));
     ctx.save();
     ctx.globalAlpha = opacity;
-    ctx.drawImage(overlay, ox, oy, oW, oH);
+    ctx.drawImage(overlay, 0, 0, W, H);
     ctx.restore();
-  }
-
-  // texts
-  if (Array.isArray(cfg.texts)) {
-    for (const t of cfg.texts) {
-      const text = replaceTokens(t.text ?? '', sample);
-      ctx.save();
-      const style =
-        t.fontStyle === 'bold' ? 'bold ' :
-        t.fontStyle === 'italic' ? 'italic ' :
-        t.fontStyle === 'bolditalic' ? 'bold italic ' : '';
-      ctx.font = `${style}${t.fontSize || 32}px ${t.fontFamily || 'sans-serif'}`;
-      ctx.fillStyle = t.color || '#000';
-      ctx.textAlign = (t.align || 'left') as CanvasTextAlign;
-
-      const maxW = t.maxWidth ?? undefined;
-      if (maxW) {
-        const lines = wrapText(ctx, text, maxW);
-        const lh = (t.fontSize || 32) * 1.15;
-        lines.forEach((ln, i) => {
-          ctx.fillText(ln, t.x, t.y + i * lh, maxW);
-        });
-      } else {
-        ctx.fillText(text, t.x, t.y);
-      }
-      ctx.restore();
-    }
   }
 
   return canvas.toDataURL('image/png');
@@ -297,9 +307,20 @@ function captionRatioForDensity(density: number): number {
 /* ===== Função principal ===== */
 
 export async function exportSponsorshipsPdf(
-  items: PdfItem[],
+  inputItems: ReadonlyArray<PdfItem | SponsorshipLike>,
   opts?: ExportPdfOptions
+): Promise<void>;
+export async function exportSponsorshipsPdf(
+  inputItems: ReadonlyArray<PdfItem | SponsorshipLike>,
+  fileName?: string
+): Promise<void>;
+export async function exportSponsorshipsPdf(
+  inputItems: ReadonlyArray<PdfItem | SponsorshipLike>,
+  optsOrFileName?: ExportPdfOptions | string
 ) {
+  const opts: ExportPdfOptions =
+    typeof optsOrFileName === 'string' ? { fileName: optsOrFileName } : optsOrFileName ?? {};
+  const items = normalizeItems(inputItems as Array<PdfItem | SponsorshipLike>);
   if (!items?.length) return;
 
   const report = (i: number, total: number, phase: 'compose'|'pdf') =>

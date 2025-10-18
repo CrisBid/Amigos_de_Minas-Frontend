@@ -204,6 +204,25 @@ export default function CadastroApadrinhamento() {
       </div>
 
       <div className="relative max-w-3xl mx-auto">
+        {/* === Top strip: Já tem cadastro? Faça login === */}
+        <div className="mb-6">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/80 backdrop-blur border border-gray-200 rounded-xl px-4 py-3 shadow-sm">
+            <div className="flex items-center text-sm text-gray-700">
+              <Lock className="w-4 h-4 mr-2 text-emerald-600" />
+              <span>Já tem cadastro? Acesse sua conta para continuar.</span>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => router.push('/auth/login')}
+                className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition"
+              >
+                Entrar
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-blue-500 to-green-400 rounded-full mb-4 shadow-lg">
@@ -297,8 +316,8 @@ export default function CadastroApadrinhamento() {
                 autoComplete="address-level2"
               />
 
-              {/* Profissão / Renda / Estado civil (opcional conforme estratégia) */}
-              {/* 
+              {/* Profissão / Renda / Estado civil (opcional) */}
+              {/*
               <Field
                 label="Profissão"
                 name="profissao"

@@ -140,7 +140,8 @@ export default function EditChildPage() {
   const router = useRouter();
   const params = useParams();
   const id = (params?.id as string) || '';
-  const api = process.env.NEXT_PUBLIC_NEST_API_URL;
+  // vai alimentar o modal (sem proxy)
+  const api = process.env.NEXT_PUBLIC_NEST_API_URL as string;
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -167,8 +168,8 @@ export default function EditChildPage() {
       setLoading(true);
       try {
         const [resChild, resCities] = await Promise.all([
-          fetch(`${api}/children/${id}`, { cache: 'no-store' }),
-          fetch(`${api}/cities?limit=1000`, { cache: 'no-store' }),
+          fetch(`/api/admin/children/${id}`, { cache: 'no-store' }),
+          fetch(`/api/admin/cities?limit=1000`, { cache: 'no-store' }),
         ]);
         if (!resChild.ok) throw new Error('Erro ao carregar a criança.');
         const data: ChildFull = await resChild.json();
@@ -203,7 +204,7 @@ export default function EditChildPage() {
   const reloadCommunities = async (cityId: string) => {
     setLoadingLoc(true);
     try {
-      const r = await fetch(`${api}/communities?cityId=${cityId}&limit=1000`, { cache: 'no-store' });
+      const r = await fetch(`/api/admin/communities?cityId=${cityId}&limit=1000`, { cache: 'no-store' });
       const j = r.ok ? await r.json() : [];
       setCommunities(Array.isArray(j?.items) ? j.items : j ?? []);
     } finally {
@@ -218,7 +219,7 @@ export default function EditChildPage() {
       if (cityId) qs.set('cityId', cityId);
       if (communityId) qs.set('communityId', communityId);
       qs.set('limit', '1000');
-      const r = await fetch(`${api}/schools?${qs.toString()}`, { cache: 'no-store' });
+      const r = await fetch(`/api/admin/schools?${qs.toString()}`, { cache: 'no-store' });
       const j = r.ok ? await r.json() : [];
       setSchools(Array.isArray(j?.items) ? j.items : j ?? []);
     } finally {
@@ -284,7 +285,7 @@ export default function EditChildPage() {
         description: child.description ?? null,
       };
 
-      const res = await fetch(`${api}/children/${child.id}`, {
+      const res = await fetch(`/api/admin/children/${child.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -783,7 +784,7 @@ export default function EditChildPage() {
         </div>
       </form>
 
-      {/* MODAL: Editor de Foto/Composição */}
+      {/* MODAL: Editor de Foto/Composição (sem proxy; usa apiBase) */}
       {showEditor && selectedImage && (
         <EditorComposicaoModal
           image={selectedImage}
@@ -799,7 +800,7 @@ export default function EditChildPage() {
               return { ...c, images: imgs };
             });
           }}
-          apiBase={api!}
+          apiBase={api}
         />
       )}
     </div>
@@ -808,6 +809,7 @@ export default function EditChildPage() {
 
 /* ============================================================
    MODAL: Editor de Composição (foco em photoRect / scale / offsets)
+   >>> Mantido sem proxy, usando apiBase direto
 ============================================================ */
 function EditorComposicaoModal({
   image,
@@ -839,8 +841,6 @@ function EditorComposicaoModal({
       texts: Array.isArray(cfg.texts) ? cfg.texts : [],
     };
   });
-
-
 
   const pr = local.photoRect;
   const layoutUrl = image.layoutUrl || '';
@@ -920,11 +920,11 @@ function EditorComposicaoModal({
   const handleSave = async () => {
     setSaving(true);
     try {
-      // atualiza o Config no backend
+      // atualiza o Config no backend (sem proxy)
       const res = await fetch(`${apiBase}/images/${image.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ Config: local }), // campo respeitando seu payload
+        body: JSON.stringify({ Config: local }),
       });
       if (!res.ok) throw new Error(`Erro ${res.status}`);
       onSaved(local);
@@ -959,23 +959,21 @@ function EditorComposicaoModal({
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 flex-1 min-h-0"> 
           {/* Canvas/guia */}
-            <div className="lg:col-span-2 p-4">
-              <div
-                ref={hostRef}
-                className="relative mx-auto border rounded-xl bg-gray-100"
-                style={{ maxHeight: '75vh', overflow: 'auto', padding: 8 }}
-              >
+          <div className="lg:col-span-2 p-4">
+            <div
+              ref={hostRef}
+              className="relative mx-auto border rounded-xl bg-gray-100"
+              style={{ maxHeight: '75vh', overflow: 'auto', padding: 8 }}
+            >
               <div
                 className="relative mx-auto overflow-hidden rounded-xl shadow"
-                style={{ width: local.canvas.width * scale, height: local.canvas.height * scale }}
+                style={{ width: local.canvas.width * 1, height: local.canvas.height * 1, transform: `scale(${Math.min(1, scale)})`, transformOrigin: 'top left' }}
               >
                 <div
                   className="absolute top-0 left-0"
                   style={{
                     width: local.canvas.width,
                     height: local.canvas.height,
-                    transform: `scale(${scale})`,
-                    transformOrigin: 'top left',
                     backgroundImage: `url(${layoutUrl})`,
                     backgroundRepeat: 'no-repeat',
                     backgroundPosition: 'center',
