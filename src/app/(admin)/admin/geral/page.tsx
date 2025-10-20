@@ -23,6 +23,7 @@ export default function CadastrosGeraisPage() {
       if (e.key === '4') window.location.href = '/admin/collection-points';
       if (e.key === '5') window.location.href = '/admin/users';
       if (e.key === '6') window.location.href = '/admin/conferencia';
+      if (e.key === '7') window.location.href = '/admin/exports';
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -93,6 +94,15 @@ export default function CadastrosGeraisPage() {
             title="Conferencia"
             desc="Conferência de dados e estatísticas."
             kbd="6"
+            accent="from-fuchsia-600 to-rose-600"
+          />
+
+          <NavCard
+            href="/admin/exports"
+            icon={<ListCheck className="w-6 h-6" />}
+            title="Exportar Dados"
+            desc="Exporte dados para análise externa."
+            kbd="7"
             accent="from-fuchsia-600 to-rose-600"
           />
         </div>
