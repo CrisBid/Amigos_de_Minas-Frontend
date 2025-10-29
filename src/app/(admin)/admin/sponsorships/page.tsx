@@ -25,10 +25,16 @@ import {
 // >>> PDF exporter
 import { exportSponsorshipsPdf } from '@/lib/pdf/exportSponsorshipsPdf';
 
+// >>> Status unificado
+import {
+  STATUS_PT,
+  type SponsorshipStatus,
+} from '@/lib/sponsorship-status';
+import StatusBadge from '@/components/Sponsorship/StatusBadge';
+
 /* ===================== */
 /* Tipos                 */
 /* ===================== */
-type SponsorshipStatus = 'PENDING' | 'COMPLETED' | 'IN_PROGRESS' | 'ENDED' | 'CANCELLED';
 type SponsorshipMethod = 'PIX' | 'GIFT';
 
 type ChildLite = {
@@ -251,6 +257,27 @@ export default function AdminSponsorshipsPage() {
   const [campaignId, setCampaignId] = useState<string>('');
   const [activeTab, setActiveTab] = useState<TabKey>('PENDING');
 
+  // NOVO: filtros extras por mais status
+  const EXTRA_STATUS: SponsorshipStatus[] = [
+    'IN_PURCHASE',
+    'PACKED',
+    'BOXED',
+    'AWAITING_DELIVERY',
+    'ENDED',
+    'CANCELLED',
+  ];
+  const [statusFilters, setStatusFilters] = useState<SponsorshipStatus[]>([]); // se não-vazio, sobrepõe aba
+
+  const METHOD_OPTIONS = ['PIX', 'GIFT'] as const;
+  type MethodOption = (typeof METHOD_OPTIONS)[number];
+
+  const [methodFilters, setMethodFilters] = useState<MethodOption[]>([]);
+
+  function toggleMethodFilter(m: MethodOption) {
+    setMethodFilters(prev => (prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]));
+  }
+  const isFilteringMethods = methodFilters.length > 0;
+
   // dados
   const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
   const [allRows, setAllRows] = useState<Sponsorship[]>([]);
@@ -289,7 +316,7 @@ export default function AdminSponsorshipsPage() {
   const [exportBusy, setExportBusy] = useState(false);
   const [exportProgress, setExportProgress] =
     useState<{ current: number; total: number; phase: 'compose' | 'pdf' } | null>(null);
-  const [exportPerPage, setExportPerPage] = useState<number>(4);
+  const [exportPerPage, setExportPerPage] = useState<number>(1);
   const [exportTextScale, setExportTextScale] = useState<number>(1);
 
   // ===== Transferência
@@ -388,30 +415,66 @@ export default function AdminSponsorshipsPage() {
     setExportProgress(null);
   }
 
-
-  /* ===== Filtros no cliente ===== */
-  const filteredByTab = useMemo(() => allRows.filter(r => r.status === activeTab), [allRows, activeTab]);
-
-  const tabCounts = useMemo(() => {
-    const counts: Record<TabKey, number> = { PENDING: 0, IN_PROGRESS: 0, COMPLETED: 0 };
-    for (const r of allRows) {
-      if (r.status === 'PENDING') counts.PENDING++;
-      else if (r.status === 'IN_PROGRESS') counts.IN_PROGRESS++;
-      else if (r.status === 'COMPLETED') counts.COMPLETED++;
-    }
-    return counts;
+  /* ===== Contagens por status ===== */
+  const countsAll = useMemo(() => {
+    const base: Record<SponsorshipStatus, number> = {
+      PENDING: 0,
+      IN_PROGRESS: 0,
+      IN_PURCHASE: 0,
+      PACKED: 0,
+      BOXED: 0,
+      AWAITING_DELIVERY: 0,
+      COMPLETED: 0,
+      ENDED: 0,
+      CANCELLED: 0,
+    };
+    for (const r of allRows) base[r.status] = (base[r.status] ?? 0) + 1;
+    return base;
   }, [allRows]);
 
+  const countsByMethod = useMemo(() => {
+    const base: Record<MethodOption, number> = { PIX: 0, GIFT: 0 };
+    for (const r of allRows) {
+      const k = (r.method ?? '') as MethodOption;
+      if (k === 'PIX' || k === 'GIFT') base[k] += 1;
+    }
+    return base;
+  }, [allRows]);
+
+  /* ===== Filtros no cliente ===== */
+
+  // [MODIFICAR] o bloco que calcula "filteredBySelection" e "visibleRows"
+
+  // (1) mantém como está a parte de status (aba x filtros extras)
+  const filteredBySelection = useMemo(() => {
+    if (statusFilters.length > 0) {
+      return allRows.filter(r => statusFilters.includes(r.status));
+    }
+    return allRows.filter(r => r.status === activeTab);
+  }, [allRows, activeTab, statusFilters]);
+
+  // (2) [ADICIONAR] aplicar filtro por método sobre o resultado acima
+  const filteredByMethod = useMemo(() => {
+    if (!isFilteringMethods) return filteredBySelection;
+    return filteredBySelection.filter(r => {
+      // se método estiver vazio, ele não passa por nenhum filtro explícito
+      if (!r.method) return false;
+      return methodFilters.includes(r.method as MethodOption);
+    });
+  }, [filteredBySelection, isFilteringMethods, methodFilters]);
+
+  // (3) [MODIFICAR] visibleRows para usar "filteredByMethod" como base
   const visibleRows = useMemo(() => {
     const qLower = q.trim().toLowerCase();
-    if (!qLower) return filteredByTab;
-    return filteredByTab.filter((r) => {
+    const base = filteredByMethod;
+    if (!qLower) return base;
+    return base.filter((r) => {
       const childName = r.child?.name?.toLowerCase() ?? '';
       const sponsorName = r.sponsor?.name?.toLowerCase() ?? '';
       const sponsorEmail = r.sponsor?.email?.toLowerCase() ?? '';
       const cpName =
-        (r.collectionPoint?.name || (r.collectionPointId ? cpMap.get(r.collectionPointId || '')?.name : ''))?.toLowerCase() ??
-        '';
+        (r.collectionPoint?.name ||
+          (r.collectionPointId ? cpMap.get(r.collectionPointId || '')?.name : ''))?.toLowerCase() ?? '';
       return (
         childName.includes(qLower) ||
         sponsorName.includes(qLower) ||
@@ -419,36 +482,12 @@ export default function AdminSponsorshipsPage() {
         cpName.includes(qLower)
       );
     });
-  }, [filteredByTab, q, cpMap]);
+  }, [filteredByMethod, q, cpMap]);
+
 
   const noRows = !loading && visibleRows.length === 0;
 
-  /* ===== Helpers de status/método ===== */
-  function getStatusConfig(s: SponsorshipStatus) {
-    switch (s) {
-      case 'COMPLETED':
-        return { label: 'Concluído', className: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' };
-      case 'IN_PROGRESS':
-        return { label: 'Em Progresso', className: 'bg-cyan-50 text-cyan-700 border-cyan-200', dot: 'bg-cyan-500' };
-      case 'PENDING':
-        return { label: 'Pendente', className: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' };
-      case 'ENDED':
-        return { label: 'Encerrado', className: 'bg-blue-50 text-blue-700 border-blue-200', dot: 'bg-blue-500' };
-      case 'CANCELLED':
-        return { label: 'Cancelado', className: 'bg-red-50 text-red-700 border-red-200', dot: 'bg-red-500' };
-      default:
-        return { label: '—', className: 'bg-gray-50 text-gray-600 border-gray-200', dot: 'bg-gray-500' };
-    }
-  }
-  function StatusBadge({ status }: { status: SponsorshipStatus }) {
-    const config = getStatusConfig(status);
-    return (
-      <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border ${config.className}`}>
-        <span className={`w-1.5 h-1.5 rounded-full ${config.dot}`} />
-        {config.label}
-      </span>
-    );
-  }
+  /* ===== Método ===== */
   function MethodBadge({ method }: { method?: SponsorshipMethod | null }) {
     if (!method) return <Badge className="bg-gray-50 text-gray-600 border-gray-200">—</Badge>;
     if (method === 'PIX') return <Badge className="bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200">PIX</Badge>;
@@ -614,7 +653,7 @@ export default function AdminSponsorshipsPage() {
     try {
       const url = new URL('/api/admin/users', window.location.origin);
       url.searchParams.set('q', q);
-      url.searchParams.set('roles', 'SPONSOR'); // se seu endpoint aceitar
+      url.searchParams.set('roles', 'SPONSOR');
       url.searchParams.set('pageSize', '20');
       const r = await fetch(url.toString(), { credentials: 'include', cache: 'no-store' });
       if (!r.ok) return setDestResults([]);
@@ -673,6 +712,16 @@ export default function AdminSponsorshipsPage() {
     );
   }
 
+  // helpers botão de filtro extra
+  function toggleStatusFilter(s: SponsorshipStatus) {
+    setStatusFilters(prev => {
+      const has = prev.includes(s);
+      if (has) return prev.filter(x => x !== s);
+      return [...prev, s];
+    });
+  }
+  const isFilteringExtras = statusFilters.length > 0;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -705,12 +754,12 @@ export default function AdminSponsorshipsPage() {
           </div>
         </div>
 
-        {/* Stats (da aba atual) */}
+        {/* Stats (da aba/filtro atual) */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
           <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Total (aba)</p>
+                <p className="text-sm font-medium text-gray-600 mb-1">Total (filtro atual)</p>
                 <p className="text-3xl font-bold text-gray-900">{visibleRows.length}</p>
               </div>
               <div className="p-3 bg-blue-100 rounded-xl">
@@ -722,7 +771,7 @@ export default function AdminSponsorshipsPage() {
           <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Concluídos (na aba)</p>
+                <p className="text-sm font-medium text-gray-600 mb-1">Concluídos (filtro)</p>
                 <p className="text-3xl font-bold text-emerald-600">
                   {visibleRows.filter(r => r.status === 'COMPLETED').length}
                 </p>
@@ -736,7 +785,7 @@ export default function AdminSponsorshipsPage() {
           <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Pendentes (na aba)</p>
+                <p className="text-sm font-medium text-gray-600 mb-1">Pendentes (filtro)</p>
                 <p className="text-3xl font-bold text-amber-600">
                   {visibleRows.filter(r => r.status === 'PENDING').length}
                 </p>
@@ -750,7 +799,7 @@ export default function AdminSponsorshipsPage() {
           <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Em Progresso (na aba)</p>
+                <p className="text-sm font-medium text-gray-600 mb-1">Em processo/andamento (filtro)</p>
                 <p className="text-3xl font-bold text-cyan-600">
                   {visibleRows.filter(r => r.status === 'IN_PROGRESS').length}
                 </p>
@@ -762,16 +811,96 @@ export default function AdminSponsorshipsPage() {
           </div>
         </div>
 
-        {/* Abas */}
-        <div className="mb-6">
+        {/* Abas principais */}
+        <div className="mb-3">
           <div className="flex flex-wrap gap-2">
-            <Tab id="PENDING" label="Pendentes" count={tabCounts.PENDING} active={activeTab === 'PENDING'} onClick={() => setActiveTab('PENDING')} />
-            <Tab id="IN_PROGRESS" label="Em andamento" count={tabCounts.IN_PROGRESS} active={activeTab === 'IN_PROGRESS'} onClick={() => setActiveTab('IN_PROGRESS')} />
-            <Tab id="COMPLETED" label="Concluídos" count={tabCounts.COMPLETED} active={activeTab === 'COMPLETED'} onClick={() => setActiveTab('COMPLETED')} />
+            <Tab id="PENDING" label="Pendentes" count={countsAll.PENDING} active={!isFilteringExtras && activeTab === 'PENDING'} onClick={() => setActiveTab('PENDING')} />
+            <Tab id="IN_PROGRESS" label="Em andamento" count={countsAll.IN_PROGRESS} active={!isFilteringExtras && activeTab === 'IN_PROGRESS'} onClick={() => setActiveTab('IN_PROGRESS')} />
+            <Tab id="COMPLETED" label="Concluídos" count={countsAll.COMPLETED} active={!isFilteringExtras && activeTab === 'COMPLETED'} onClick={() => setActiveTab('COMPLETED')} />
+          </div>
+          {isFilteringExtras && (
+            <div className="mt-2 text-xs text-gray-600">
+              * Filtro extra por status ativo; as abas ficam desabilitadas enquanto os filtros abaixo estiverem selecionados.
+            </div>
+          )}
+        </div>
+
+        {/* NOVO: Botões de filtro para mais status */}
+        <div className="mb-6 bg-white/70 backdrop-blur-sm rounded-2xl p-4 border border-white/20 shadow-lg">
+          <div className="flex flex-wrap items-center gap-2">
+            {EXTRA_STATUS.map((s) => {
+              const active = statusFilters.includes(s);
+              return (
+                <button
+                  key={s}
+                  onClick={() => toggleStatusFilter(s)}
+                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm transition ${
+                    active
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                  title={`Filtrar por ${STATUS_PT[s]}`}
+                >
+                  <StatusBadge status={s} />
+                  <span className="text-xs">{countsAll[s]}</span>
+                </button>
+              );
+            })}
+
+            {/* Botão para limpar filtros extras */}
+            <button
+              onClick={() => setStatusFilters([])}
+              className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
+              title="Limpar filtros de status"
+            >
+              Limpar filtros
+            </button>
           </div>
         </div>
 
-        {/* Filtros */}
+        {/* === Filtros por método === */}
+        <div className="mb-6 bg-white/70 backdrop-blur-sm rounded-2xl p-4 border border-white/20 shadow-lg">
+          <div className="flex flex-wrap items-center gap-2">
+            {METHOD_OPTIONS.map((m) => {
+              const active = methodFilters.includes(m);
+              const label = m === 'PIX' ? 'PIX' : 'Presente no ponto (GIFT)';
+              return (
+                <button
+                  key={m}
+                  onClick={() => toggleMethodFilter(m)}
+                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm transition ${
+                    active
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                  title={`Filtrar por ${label}`}
+                >
+                  <span className="text-xs font-medium">{label}</span>
+                  <span className="text-[11px] px-1.5 py-0.5 rounded-full border bg-white/70 text-gray-700">
+                    {countsByMethod[m]}
+                  </span>
+                </button>
+              );
+            })}
+
+            {/* Limpar filtros de método */}
+            <button
+              onClick={() => setMethodFilters([])}
+              className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
+              title="Limpar filtros de método"
+            >
+              Limpar filtros de método
+            </button>
+          </div>
+
+          {(isFilteringMethods) && (
+            <div className="mt-2 text-xs text-gray-600">
+              * Filtro por método ativo; a busca e contagens acima consideram apenas os métodos selecionados.
+            </div>
+          )}
+        </div>
+
+        {/* Filtros de busca/campanha */}
         <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg mb-8">
           <div className="flex flex-col lg:flex-row gap-4">
             <div className="flex-1 relative">
@@ -955,7 +1084,9 @@ export default function AdminSponsorshipsPage() {
                           ) : <span className="text-sm text-gray-400">—</span>}
                         </td>
 
-                        <td className="px-6 py-4"><StatusBadge status={s.status} /></td>
+                        <td className="px-6 py-4">
+                          <StatusBadge status={s.status} />
+                        </td>
 
                         <td className="px-6 py-4">
                           <div className="flex items-center justify-end gap-2">
@@ -973,11 +1104,21 @@ export default function AdminSponsorshipsPage() {
                               onChange={(e) => changeStatus(s.id, e.target.value as SponsorshipStatus)}
                               title="Alterar status"
                             >
-                              <option value="PENDING">Pendente</option>
-                              <option value="COMPLETED">Concluído</option>
-                              <option value="IN_PROGRESS">Em Progresso</option>
-                              <option value="ENDED">Encerrado</option>
-                              <option value="CANCELLED">Cancelado</option>
+                              {(
+                                [
+                                  'PENDING',
+                                  'IN_PROGRESS',
+                                  'IN_PURCHASE',
+                                  'PACKED',
+                                  'BOXED',
+                                  'AWAITING_DELIVERY',
+                                  'COMPLETED',
+                                  'ENDED',
+                                  'CANCELLED',
+                                ] as SponsorshipStatus[]
+                              ).map((st) => (
+                                <option key={st} value={st}>{STATUS_PT[st]}</option>
+                              ))}
                             </select>
                             <button
                               onClick={() => del(s.id)}
@@ -1111,11 +1252,21 @@ export default function AdminSponsorshipsPage() {
                         disabled={bulkBusy}
                         title="Selecionar novo status para todos"
                       >
-                        <option value="PENDING">Pendente</option>
-                        <option value="COMPLETED">Concluído</option>
-                        <option value="IN_PROGRESS">Em Progresso</option>
-                        <option value="ENDED">Encerrado</option>
-                        <option value="CANCELLED">Cancelado</option>
+                        {(
+                          [
+                            'PENDING',
+                            'IN_PROGRESS',
+                            'IN_PURCHASE',
+                            'PACKED',
+                            'BOXED',
+                            'AWAITING_DELIVERY',
+                            'COMPLETED',
+                            'ENDED',
+                            'CANCELLED',
+                          ] as SponsorshipStatus[]
+                        ).map((st) => (
+                          <option key={st} value={st}>{STATUS_PT[st]}</option>
+                        ))}
                       </select>
 
                       <button
@@ -1345,11 +1496,21 @@ export default function AdminSponsorshipsPage() {
                                                   changeStatus(s.id, e.target.value as SponsorshipStatus)
                                                 }
                                               >
-                                                <option value="PENDING">Pendente</option>
-                                                <option value="COMPLETED">Concluído</option>
-                                                <option value="IN_PROGRESS">Em Progresso</option>
-                                                <option value="ENDED">Encerrado</option>
-                                                <option value="CANCELLED">Cancelado</option>
+                                                {(
+                                                  [
+                                                    'PENDING',
+                                                    'IN_PROGRESS',
+                                                    'IN_PURCHASE',
+                                                    'PACKED',
+                                                    'BOXED',
+                                                    'AWAITING_DELIVERY',
+                                                    'COMPLETED',
+                                                    'ENDED',
+                                                    'CANCELLED',
+                                                  ] as SponsorshipStatus[]
+                                                ).map((st) => (
+                                                  <option key={st} value={st}>{STATUS_PT[st]}</option>
+                                                ))}
                                               </select>
                                               <button
                                                 onClick={() => del(s.id)}
@@ -1464,7 +1625,9 @@ export default function AdminSponsorshipsPage() {
                         {childDetail.sponsorships.map((s: any) => (
                           <div key={s.id} className="flex flex-col gap-1 px-3 py-2 rounded-lg border border-gray-200 bg-gray-50">
                             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
-                              <span><b>Status:</b> <Badge className="bg-gray-100 text-gray-700 border-gray-200">{s.status}</Badge></span>
+                              <span className="inline-flex items-center gap-1">
+                                <b>Status:</b> <StatusBadge status={s.status as SponsorshipStatus} />
+                              </span>
                               <span><b>Início:</b> {fmtDateBR(s.startDate)}</span>
                               <span><b>Fim:</b> {fmtDateBR(s.endDate)}</span>
                               <span><b>Método:</b> {s.method ?? '—'}</span>
@@ -1514,8 +1677,10 @@ export default function AdminSponsorshipsPage() {
                     <div className="space-y-2">
                       {sponsorDetail.sponsorships.map((s: any) => (
                         <div key={s.id} className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                          <div className="flex flex-wrap gap-x-4 gap-y-1">
-                            <span><b>Status:</b> {s.status}</span>
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 items-center">
+                            <span className="inline-flex items-center gap-1">
+                              <b>Status:</b> <StatusBadge status={s.status as SponsorshipStatus} />
+                            </span>
                             <span><b>Método:</b> {s.method ?? '—'}</span>
                             <span><b>Início:</b> {fmtDateBR(s.startDate)}</span>
                             <span><b>Fim:</b> {fmtDateBR(s.endDate)}</span>

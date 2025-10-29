@@ -15,7 +15,6 @@ import {
 
 // ajuste o alias conforme seu projeto:
 import ComposedImage, { ComposeConfig } from '@/components/media/ComposedImage';
-import { pickComposeInputsFromImages } from '@/components/media/pickComposeInputs';
 
 /* ===================== Tipos ===================== */
 type City = { id: string; publicId?: number | null; name: string; state?: string | null };
@@ -50,7 +49,7 @@ type ImageItem = {
   framedUrl?: string | null;
   layoutKey?: string | null;
   layoutUrl?: string | null;
-  Config?: ComposeConfig | any;
+  Config?: ComposeConfig | any | string | null;
   width?: number | null;
   height?: number | null;
   status?: string | null;
@@ -107,7 +106,9 @@ type ComposeSample = {
 /* ===================== Helpers ===================== */
 function toInputDate(iso?: string | null) {
   if (!iso) return '';
-  return new Date(iso).toISOString().slice(0, 10);
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
 }
 function fromInputDate(d: string) {
   if (!d) return null;
@@ -123,6 +124,7 @@ function calcAgeFromBirth(dateIso?: string | null) {
   if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age--;
   return age < 0 ? 0 : age;
 }
+
 const DEFAULT_CFG: ComposeConfig = {
   version: 2,
   canvas: { width: 1080, height: 1920, background: null },
@@ -134,6 +136,33 @@ const DEFAULT_CFG: ComposeConfig = {
   },
   texts: [],
 };
+
+/* ===================== Helpers extra ===================== */
+function bestImageUrl(img?: ImageItem | null) {
+  if (!img) return '';
+  return img.framedUrl || img.processedUrl || img.originalUrl || '';
+}
+
+function parseComposeConfig(cfg: unknown): ComposeConfig {
+  try {
+    const raw = typeof cfg === 'string' ? JSON.parse(cfg) : (cfg ?? {});
+    const base = (raw || {}) as Partial<ComposeConfig>;
+    const layout = base.layout ?? {} as Partial<ComposeConfig['layout']>;
+    return {
+      version: base.version ?? 2,
+      canvas: base.canvas ?? { width: 1080, height: 1920, background: null },
+      layout: {
+        onTop: layout.onTop ?? true,
+        opacity: layout.opacity ?? 1,
+        resizeToCanvas: layout.resizeToCanvas ?? true,
+      },
+      photoRect: { ...DEFAULT_CFG.photoRect, ...(base.photoRect ?? {}) },
+      texts: Array.isArray(base.texts) ? base.texts : [],
+    };
+  } catch {
+    return DEFAULT_CFG;
+  }
+}
 
 /* ===================== Página ===================== */
 export default function EditChildPage() {
@@ -161,6 +190,10 @@ export default function EditChildPage() {
 
   // Editor
   const [showEditor, setShowEditor] = useState(false);
+
+  // Upload / troca de foto
+  const [uploading, setUploading] = useState(false);
+  const [newPhotoUrl, setNewPhotoUrl] = useState<string>('');
 
   /* ---- Carregar registro e listas ---- */
   useEffect(() => {
@@ -322,6 +355,11 @@ export default function EditChildPage() {
       communityName: child?.community?.name ?? '',
     }),
     [child, ageText]
+  );
+
+  const selectedConfig = useMemo(
+    () => parseComposeConfig(selectedImage?.Config),
+    [selectedImage?.Config]
   );
 
   /* ---- UI ---- */
@@ -542,7 +580,7 @@ export default function EditChildPage() {
           </div>
 
           {/* Controles */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
             <div>
               <label className="block text-sm text-gray-700">Imagem vinculada</label>
               <select
@@ -620,6 +658,127 @@ export default function EditChildPage() {
                 )}
               </div>
             </div>
+
+            {/* Trocar/editar foto (arquivo ou URL) */}
+            <div>
+              <label className="block text-sm text-gray-700">Trocar foto da criança</label>
+
+              {/* Definir rapidamente a foto principal a partir da selecionada */}
+              <div className="mt-2 flex gap-2 flex-wrap">
+                <button
+                  type="button"
+                  disabled={!selectedImage}
+                  onClick={() => setField('photoUrl', bestImageUrl(selectedImage) || null)}
+                  className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50 disabled:opacity-50"
+                  title="Usar a melhor versão da imagem selecionada (framed > processed > original)"
+                >
+                  Usar imagem selecionada como foto
+                </button>
+
+                {selectedImage?.originalUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setField('photoUrl', selectedImage.originalUrl!)}
+                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
+                  >
+                    Usar original
+                  </button>
+                )}
+                {selectedImage?.processedUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setField('photoUrl', selectedImage.processedUrl!)}
+                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
+                  >
+                    Usar processada
+                  </button>
+                )}
+                {selectedImage?.framedUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setField('photoUrl', selectedImage.framedUrl!)}
+                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
+                  >
+                    Usar enquadrada
+                  </button>
+                )}
+              </div>
+
+              {/* Colar uma URL manualmente */}
+              <input
+                type="text"
+                value={newPhotoUrl}
+                onChange={(e) => setNewPhotoUrl(e.target.value)}
+                placeholder="Cole uma URL de imagem (https://...)"
+                className="w-full border rounded-lg px-3 py-2 mt-2"
+              />
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newPhotoUrl) return;
+                    setField('photoUrl', newPhotoUrl);
+                    setNewPhotoUrl('');
+                  }}
+                  className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
+                >
+                  Definir URL como foto
+                </button>
+                {child.photoUrl && (
+                  <a
+                    href={child.photoUrl}
+                    target="_blank"
+                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
+                  >
+                    Abrir foto atual <ExternalLink className="inline-block w-3 h-3" />
+                  </a>
+                )}
+              </div>
+
+              {/* Upload de arquivo (multipart) */}
+              <label className="block text-xs mt-3 text-gray-600">Enviar nova imagem (JPEG/PNG)</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setUploading(true);
+                  try {
+                    // EXEMPLO de endpoint (ajuste pro seu Nest):
+                    // POST /api/admin/images/upload  (form-data: file, childId, campaignId)
+                    const fd = new FormData();
+                    fd.append('file', file);
+                    fd.append('childId', child.id);
+                    if (selectedImage?.campaignId) fd.append('campaignId', selectedImage.campaignId);
+
+                    const res = await fetch('/api/admin/images/upload', { method: 'POST', body: fd });
+                    if (!res.ok) throw new Error('Falha no upload');
+
+                    const created: ImageItem = await res.json();
+
+                    // 1) adiciona a imagem à lista local
+                    setChild((c) => (c ? { ...c, images: [created, ...(c.images ?? [])] } : c));
+                    // 2) seleciona a nova
+                    setSelectedImageId(created.id);
+                    // 3) define como foto principal
+                    setField('photoUrl', bestImageUrl(created) || null);
+                  } catch (err) {
+                    console.error(err);
+                    alert('Não foi possível enviar a imagem.');
+                  } finally {
+                    setUploading(false);
+                    if (e.target) e.target.value = '';
+                  }
+                }}
+                className="mt-1"
+              />
+              {uploading && (
+                <div className="text-xs text-gray-500 mt-1 inline-flex items-center gap-2">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Enviando…
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Preview + thumbs */}
@@ -642,7 +801,7 @@ export default function EditChildPage() {
                   <ComposedImage
                     photoUrl={selectedImage.processedUrl || selectedImage.originalUrl || ''}
                     layoutUrl={selectedImage.layoutUrl || ''}
-                    config={(selectedImage.Config as ComposeConfig) ?? DEFAULT_CFG}
+                    config={selectedConfig}
                     sample={{
                       name: sample.name,
                       publicId: sample.publicId,
@@ -668,7 +827,7 @@ export default function EditChildPage() {
               <div className="px-3 py-2 border-b text-sm text-gray-600">Arquivos vinculados</div>
               <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {(child.images ?? []).map((img) => {
-                  const best = img.framedUrl || img.processedUrl || img.originalUrl || '';
+                  const best = bestImageUrl(img);
                   const tag =
                     (img.framedUrl && 'framed') ||
                     (img.processedUrl && 'processed') ||
@@ -684,6 +843,7 @@ export default function EditChildPage() {
                       title={img.id}
                     >
                       {best ? (
+                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={best} alt={img.id} className="w-full h-36 object-cover" />
                       ) : (
                         <div className="h-36 grid place-content-center text-gray-400">—</div>
@@ -747,7 +907,7 @@ export default function EditChildPage() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
             <div>
               <span className="block text-gray-500">ID</span>
-              <span className="font-mono">{child.id}</span>
+              <span className="font-mono break-all">{child.id}</span>
             </div>
             <div>
               <span className="block text-gray-500">Criado em</span>
@@ -825,26 +985,12 @@ function EditorComposicaoModal({
   apiBase: string;
 }) {
   const [saving, setSaving] = useState(false);
-  const [local, setLocal] = useState<ComposeConfig>(() => {
-    const cfg = (image?.Config as ComposeConfig) ?? DEFAULT_CFG;
-    const inLayout = cfg.layout ?? {};
-    return {
-      version: cfg.version ?? 2,
-      canvas: cfg.canvas ?? DEFAULT_CFG.canvas,
-      layout: {
-        ...inLayout,
-        onTop: inLayout.onTop ?? true,
-        opacity: inLayout.opacity ?? 1,
-        resizeToCanvas: inLayout.resizeToCanvas ?? true,
-      },
-      photoRect: { ...DEFAULT_CFG.photoRect, ...(cfg.photoRect ?? {}) },
-      texts: Array.isArray(cfg.texts) ? cfg.texts : [],
-    };
-  });
+  const [local, setLocal] = useState<ComposeConfig>(() => parseComposeConfig(image?.Config));
+  const [customPhotoUrl, setCustomPhotoUrl] = useState<string>('');
 
   const pr = local.photoRect;
   const layoutUrl = image.layoutUrl || '';
-  const fotoPreviewUrl = image.processedUrl || image.originalUrl || '';
+  const fotoPreviewUrl = customPhotoUrl || image.processedUrl || image.originalUrl || '';
   const [scale, setScale] = useState(1);
   const hostRef = useRef<HTMLDivElement>(null);
 
@@ -921,7 +1067,7 @@ function EditorComposicaoModal({
     setSaving(true);
     try {
       // atualiza o Config no backend (sem proxy)
-      const res = await fetch(`${apiBase}/images/${image.id}`, {
+      const res = await fetch(`${apiBase.replace(/\/+$/,'')}/images/${image.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ Config: local }),
@@ -957,7 +1103,7 @@ function EditorComposicaoModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 flex-1 min-h-0"> 
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 flex-1 min-h-0">
           {/* Canvas/guia */}
           <div className="lg:col-span-2 p-4">
             <div
@@ -1101,6 +1247,20 @@ function EditorComposicaoModal({
                     ))}
                   </select>
                 </label>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="font-semibold">Foto de prévia</div>
+              <input
+                type="text"
+                placeholder="Cole uma URL para prévia (opcional)"
+                value={customPhotoUrl}
+                onChange={(e) => setCustomPhotoUrl(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-sm"
+              />
+              <div className="text-xs text-gray-500">
+                Se vazio, usamos processed/original da imagem vinculada.
               </div>
             </div>
 

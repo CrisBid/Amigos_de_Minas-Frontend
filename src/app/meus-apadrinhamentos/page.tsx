@@ -3,11 +3,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import {
-  CalendarDays, ChevronDown, Loader2, MapPin
-} from 'lucide-react';
+import { CalendarDays, ChevronDown, Loader2, MapPin } from 'lucide-react';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
-import { exportSponsorshipsPdf  } from '@/lib/pdf/exportSponsorshipsPdf';
+import { exportSponsorshipsPdf } from '@/lib/pdf/exportSponsorshipsPdf';
+
+// 🔽 Core unificado de status (front-only)
+import {
+  type SponsorshipStatus,
+  ACTIVE_STATUSES,
+} from '@/lib/sponsorship-status';
 
 /* ---------- Tipos ---------- */
 
@@ -60,13 +64,11 @@ type Child = {
   communityName?: string | null;
   images?: ChildImage[];
   media?: Array<{ framedUrl?: string; processedUrl?: string }>;
-  // algumas APIs podem retornar child.community.name
-  // então usamos (child as any).community?.name de forma defensiva
 };
 
 type Sponsorship = {
   id: string;
-  status: 'PENDING' | 'COMPLETED' | 'ENDED' | 'CANCELLED' | 'IN_PROGRESS';
+  status: SponsorshipStatus; // 👈 agora usamos o enum do front (inclui os novos)
   startDate?: string;
   endDate?: string;
   note?: string;
@@ -167,7 +169,7 @@ export default function MeusApadrinhamentosPage() {
 
         return {
           sponsorshipId: sp.id,
-          status: sp.status,
+          status: sp.status, // já no enum correto
           campaign: { id: sp.campaign.id, name: sp.campaign.name, year: sp.campaign.year ?? null },
           child: {
             id: ch.id,
@@ -324,7 +326,7 @@ export default function MeusApadrinhamentosPage() {
             <div className="flex items-center gap-3 mb-3">
               <svg className="w-5 h-5 animate-spin text-emerald-600" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" fill="none" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 004 12z" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a 8 8 0 018-8v4A4 4 0 004 12z" />
               </svg>
               <h3 className="font-semibold text-gray-800">Gerando PDF</h3>
             </div>
@@ -377,7 +379,7 @@ function uniqBy<T extends Record<string, any>>(arr: T[], key: keyof T) {
 }
 
 function getCommunityName(child: Child): string {
-  const fromNested = (child as any)?.community?.name; // se vier do backend aninhado
+  const fromNested = (child as any)?.community?.name;
   const raw = fromNested ?? child.communityName ?? '';
   const name = (raw ?? '').toString().trim();
   return name || 'Sem comunidade';
@@ -401,13 +403,11 @@ function groupByCampaignThenCommunity(items: Sponsorship[]) {
       comMap.get(name)!.push(sp);
     }
 
-    // ordena crianças por nome dentro de cada comunidade
     const communities = Array.from(comMap.entries())
       .map(([name, arr]) => ({
         name,
         items: arr.sort((a, b) => a.child.name.localeCompare(b.child.name, 'pt-BR', { sensitivity: 'base' })),
       }))
-      // ordena comunidades por nome (Sem comunidade vai pro final)
       .sort((a, b) => {
         const aIsNone = a.name === 'Sem comunidade';
         const bIsNone = b.name === 'Sem comunidade';
@@ -423,7 +423,6 @@ function groupByCampaignThenCommunity(items: Sponsorship[]) {
     };
   });
 
-  // opcional: ordenar campanhas por ano desc e nome
   return result.sort((a, b) => {
     const ay = a.campaign.year ?? 0;
     const by = b.campaign.year ?? 0;
@@ -433,26 +432,18 @@ function groupByCampaignThenCommunity(items: Sponsorship[]) {
 }
 
 async function safeErrMsg(res: Response) {
-  try { const d = await res.json(); return d?.message || d?.error || res.statusText }
-  catch { return res.statusText }
+  try { const d = await res.json(); return d?.message || d?.error || res.statusText; }
+  catch { return res.statusText; }
 }
 
 /**
  * Converte um Sponsorship (com child dentro) no shape esperado por <ChildCard />
+ * Agora repassamos o status real (inclui IN_PURCHASE, PACKED, BOXED, AWAITING_DELIVERY).
  */
 function toChildCardData(sp: Sponsorship) {
   const c = sp.child || ({} as Child);
 
-  const apadrinhado = sp.status === 'COMPLETED' || sp.status === 'PENDING' || sp.status === 'IN_PROGRESS';
-  const statusMap = {
-    ACTIVE: 'IN_PROGRESS',
-    PENDING: 'PENDING',
-    IN_PROGRESS: 'IN_PROGRESS',
-    ENDED: 'ENDED',
-    CANCELLED: 'CANCELLED',
-  } as const;
-  const status = (statusMap as any)[sp.status] ?? 'NONE';
-
+  const apadrinhado = ACTIVE_STATUSES.includes(sp.status);
   const images = c.images ?? undefined;
   const foto = c.photoUrl ?? (c.media?.[0]?.framedUrl || c.media?.[0]?.processedUrl || '');
 
@@ -461,7 +452,7 @@ function toChildCardData(sp: Sponsorship) {
     publicId: c.publicId ?? 0,
     nome: c.name,
     idade: c.age ?? 0,
-    cidade: (c as any)?.city?.name ?? c.city ?? '',
+    cidade: (c as any)?.city?.name ?? (c as any)?.city ?? '',
     escola: (c as any)?.school?.name ?? (c as any)?.school ?? '',
     categoria: c.category ?? '',
     presente: c.wantedGift ?? '',
@@ -469,7 +460,7 @@ function toChildCardData(sp: Sponsorship) {
     apadrinhado,
     foto,
     images,
-    status,
+    status: sp.status, // 👈 deixa o ChildCard/StatusBadge traduzirem para PT-BR
     comunidade: getCommunityName(c),
   };
 }

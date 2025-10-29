@@ -1,6 +1,9 @@
 // lib/pdf/exportSponsorshipsPdf.ts
-// lib/pdf/exportSponsorshipsPdf.ts
 import jsPDF from 'jspdf';
+import {
+  STATUS_PT,
+  type SponsorshipStatus,
+} from '@/lib/sponsorship-status';
 
 /* ===== Tipos ===== */
 
@@ -51,7 +54,7 @@ export type PdfCampaign = {
 
 export type PdfItem = {
   sponsorshipId: string;
-  status: 'PENDING' | 'COMPLETED' | 'ENDED' | 'CANCELLED' | 'IN_PROGRESS';
+  status: SponsorshipStatus;
   child: PdfChildInput;
   campaign: PdfCampaign;
 };
@@ -68,7 +71,7 @@ export type ExportPdfOptions = {
 
 export type SponsorshipLike = {
   id: string;
-  status?: 'PENDING'|'COMPLETED'|'ENDED'|'CANCELLED'|'IN_PROGRESS'|string|null;
+  status?: SponsorshipStatus | string | null;
   method?: 'PIX'|'GIFT'|string|null;
   child?: any;
   campaign?: any;
@@ -80,16 +83,21 @@ export type SponsorshipLike = {
 function normalizeItems(input: (PdfItem | SponsorshipLike)[]): PdfItem[] {
   return input.map((it) => {
     if ((it as PdfItem).sponsorshipId) {
-      return it as PdfItem;
+      // já está no formato PdfItem
+      const p = it as PdfItem;
+      return { ...p, status: (p.status ?? 'PENDING') as SponsorshipStatus };
     }
 
     const s = it as SponsorshipLike;
     const child = s.child || {};
     const campaign = s.campaign || {};
 
+    // garante o tipo SponsorshipStatus (fallback seguro)
+    const status = (String(s.status ?? 'PENDING').toUpperCase() as SponsorshipStatus);
+
     return {
       sponsorshipId: s.id,
-      status: (s.status as any) ?? 'PENDING',
+      status,
       child: {
         id: child.id ?? '',
         name: child.name ?? '',
@@ -285,7 +293,6 @@ function gridFromOptions(perPage?: number): { cols: number; rows: number } {
 }
 
 function legendScaleForDensity(density: number): number {
-  // antes era agressivo; agora é mais contido
   if (density <= 1) return 1.35;
   if (density === 2) return 1.25;
   if (density === 3) return 1.15;
@@ -302,6 +309,34 @@ function captionRatioForDensity(density: number): number {
   if (density === 4) return 0.28;
   if (density === 6) return 0.25;
   return 0.23; // 8+
+}
+
+/* ===== Chip de status (texto PT-BR via STATUS_PT) ===== */
+
+function drawStatusChip(pdf: jsPDF, x: number, y: number, text: string, maxWidth: number) {
+  // tipografia
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(9);
+
+  const paddingX = 6;
+  const paddingY = 3;
+
+  const safeText = text || '—';
+  const tw = pdf.getTextWidth(safeText);
+  const chipW = Math.min(tw + paddingX * 2, maxWidth);
+  const chipH = 14;
+
+  // container (cantinhos levemente arredondados)
+  pdf.setDrawColor(210);
+  pdf.setFillColor(240, 253, 244); // verde bem claro
+  pdf.roundedRect(x, y, chipW, chipH, 3, 3, 'FD');
+
+  // texto
+  pdf.setTextColor(5, 122, 85); // verde-escuro
+  const textX = x + paddingX;
+  const textY = y + chipH - paddingY - 2;
+  pdf.text(safeText, textX, textY, { maxWidth: chipW - paddingX * 2 });
+  pdf.setTextColor(0);
 }
 
 /* ===== Função principal ===== */
@@ -339,7 +374,7 @@ export async function exportSponsorshipsPdf(
     cols = g.cols; rows = g.rows;
   }
 
-  // margens/gutter dinâmicos (reduz quando há menos cartões para ocupar mais a página)
+  // margens/gutter dinâmicos
   const density = cols * rows;
   const baseMargin = 34, denseMargin = 28, ultraMargin = 20;
   const margin = density <= 2 ? 28 : density >= 8 ? ultraMargin : density >= 6 ? denseMargin : baseMargin;
@@ -402,7 +437,6 @@ export async function exportSponsorshipsPdf(
   // ===== FASE 2: desenhar no PDF (sem cabeçalho global)
   let i = 0;
   while (i < composed.length) {
-    // --- dentro do while (páginas) ---
     for (let r = 0; r < rows && i < composed.length; r++) {
       for (let c = 0; c < cols && i < composed.length; c++, i++) {
         const slotW = (innerW - gutter * (cols - 1)) / cols;
@@ -411,41 +445,32 @@ export async function exportSponsorshipsPdf(
         const slotX = margin + c * (slotW + gutter);
         const slotY = margin + r * (slotH + gutter);
 
-        const { dataURL, cfg, child, camp } = composed[i];
+        const { dataURL, cfg, child, camp, status } = composed[i];
 
         // manter aspecto do canvas do Config
         const aspect =
           (cfg.canvas.width || DEFAULT_CONFIG.canvas.width) /
           (cfg.canvas.height || DEFAULT_CONFIG.canvas.height);
 
-        // gap entre imagem e legenda (um pouco maior com poucas imagens por página)
+        // gap entre imagem e legenda
         const legendGap = (cols * rows) <= 2 ? 18 : (cols * rows) <= 4 ? 14 : 10;
 
         // ===== 1) dimensionamento inicial assumindo imagem em toda a largura do slot
         let drawW = slotW;
         let drawH = drawW / aspect;
 
-        // escala de fonte baseada na densidade + largura da imagem (estimativa)
+        // escalas de tipografia
         const density = cols * rows;
-
-        // multiplicador “suave” por densidade (função acima)
         const densityScale = legendScaleForDensity(density);
-
-        // multiplicador por largura real da imagem (clamp mais estreito)
         const widthScale = Math.max(0.9, Math.min(1.20, drawW / 360));
-
-        // multiplicador global opcional vindo das opções
         const userScale = (1);
 
-        // base sizes
+        const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
         const baseTitle = 11;
         const baseSub   = 10;
         const baseMeta  = 9;
 
-        // helper clamp
-        const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-
-        // aplica escalas e limita tamanho min/máx (evita exageros)
         const titleSize = clamp(Math.round(baseTitle * densityScale * widthScale * userScale), 9, 16);
         const subSize   = clamp(Math.round(baseSub   * densityScale * widthScale * userScale), 8, 14);
         const metaSize  = clamp(Math.round(baseMeta  * densityScale * widthScale * userScale), 8, 12);
@@ -474,18 +499,16 @@ export async function exportSponsorshipsPdf(
           (linesAge.length    ? linesAge.length    * lineH(metaSize)  : 0) +
           (linesLoc.length    ? linesLoc.length    * lineH(metaSize)  : 0) +
           (linesSchool.length ? linesSchool.length * lineH(metaSize)  : 0) +
-          (linesGift.length   ? linesGift.length   * lineH(metaSize)  : 0);
+          (linesGift.length   ? linesGift.length   * lineH(metaSize)  : 0) +
+          (/* espaço para chip */ lineH(metaSize));
 
         // ===== 3) dar à IMAGEM TODO o espaço restante (sem cortar legenda)
-        // altura máxima possível para imagem dentro do slot
         let imgMaxH = Math.max(0, slotH - legendHeight);
 
-        // se a imagem, usando slotW, ficar mais alta do que pode, reduz para caber
         if (drawH > imgMaxH) {
           drawH = imgMaxH;
           drawW = drawH * aspect;
-          // (opcional) recomputar wrapping com nova largura da imagem — geralmente não necessário,
-          // mas se quiser ser 100% exato, reexecute splitTextToSize com drawW atualizado.
+          // (poderia re-splitar textos com nova largura, mas geralmente ok)
         }
 
         // centralizar imagem
@@ -528,6 +551,14 @@ export async function exportSponsorshipsPdf(
 
         // Presente
         if (giftLine) write(giftLine, 'normal', metaSize, 60);
+
+        // ===== Chip de Status (PT-BR via STATUS_PT)
+        const statusLabel = STATUS_PT[status ?? 'NONE'] ?? '—';
+        // posiciona chip logo abaixo da legenda
+        const chipMaxWidth = drawW;
+        const chipY = textY + 2;
+        drawStatusChip(pdf, textX, chipY, statusLabel, chipMaxWidth);
+        textY += 18; // avança para evitar sobreposição
 
         report(i, total, 'pdf');
       }

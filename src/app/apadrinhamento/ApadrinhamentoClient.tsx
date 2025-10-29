@@ -7,7 +7,11 @@ import { Filter, Search, Loader2, AlertCircle, X, CheckSquare, Square } from 'lu
 import Stats from '@/components/Apadrinhamento/Stats';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
 
-type SponsorshipStatus = 'PENDING' | 'COMPLETED' | 'IN_PROGRESS' | 'ENDED' | 'CANCELLED' | 'NONE';
+// 🔽 Core unificado de status (front-only)
+import {
+  type SponsorshipStatus,
+  ACTIVE_STATUSES,
+} from '@/lib/sponsorship-status';
 
 type City = { id: string; publicId?: number | null; name: string; state?: string | null; };
 type Community = { id: string; publicId?: number | null; cityId?: string | null; name: string; slug?: string | null; description?: string | null; };
@@ -45,8 +49,8 @@ type Child = {
   city?: City | null; community?: Community | null; school?: SchoolObj | null;
   category?: string | null; wantedGift?: string | null; description?: string | null;
   photoUrl?: string | null; photoKey?: string | null;
-  sponsorships?: Array<{ id: string; status: SponsorshipStatus; campaignId: string }>;
-  sponsorshipStatus: SponsorshipStatus;
+  sponsorships?: Array<{ id: string; status: SponsorshipStatus; campaignId: string; createdAt?: string }>;
+  sponsorshipStatus: SponsorshipStatus | 'NONE';
   media?: Array<{ framedUrl?: string; processedUrl?: string }>;
   images?: ChildImage[];
 };
@@ -58,15 +62,29 @@ type StatusFiltro = '' | 'disponivel' | 'apadrinhado';
 const FAIXAS_ETARIAS = ['0-3 anos','4-6 anos','7-9 anos','10-12 anos','13+ anos'];
 
 // ===== helpers =====
-function normalizeStatus(s?: string): SponsorshipStatus {
-  return s === 'COMPLETED' || s === 'PENDING' || s === 'IN_PROGRESS' || s === 'ENDED' || s === 'CANCELLED' ? s : 'NONE';
+function normalizeStatus(s?: string): SponsorshipStatus | 'NONE' {
+  const allowed = new Set<string>([
+    'PENDING',
+    'IN_PROGRESS',
+    'IN_PURCHASE',
+    'PACKED',
+    'BOXED',
+    'AWAITING_DELIVERY',
+    'COMPLETED',
+    'ENDED',
+    'CANCELLED',
+  ]);
+  if (!s) return 'NONE';
+  return (allowed.has(s) ? (s as SponsorshipStatus) : 'NONE');
 }
+
 async function safeErrMsg(res: Response) {
   try {
     const d = await res.json();
     return (d as any)?.message || (d as any)?.error || res.statusText;
   } catch { return res.statusText; }
 }
+
 function calcularIdade(birthDate?: string | Date | null): number {
   if (!birthDate) return 0;
   const d = new Date(birthDate);
@@ -97,7 +115,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         typeof window !== 'undefined'
           ? window.location.pathname + window.location.search
           : '/apadrinhamento';
-      // manda para a tela de cadastro, guardando o destino para voltar depois
       router.replace(`/auth/signin?returnTo=${encodeURIComponent(returnTo)}`);
     },
   });
@@ -133,10 +150,10 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     status: 'disponivel' as StatusFiltro,
   });
 
-  // >>> NOVO: seleção múltipla
+  // >>> seleção múltipla
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // opções vindas do backend
+  // opções do backend
   const [citiesOpt, setCitiesOpt] = useState<City[]>([]);
   const [communitiesOpt, setCommunitiesOpt] = useState<Community[]>([]);
   const [schoolsOpt, setSchoolsOpt] = useState<SchoolObj[]>([]);
@@ -194,7 +211,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     })();
   }, []);
 
-  // ===== opções (buscam no backend) =====
+  // ===== opções =====
   const fetchCities = useCallback(async () => {
     if (!api) return;
     setLoadingOptions(prev => ({ ...prev, cities: true }));
@@ -248,7 +265,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     }
   }, [api]);
 
-  // >>> NOVO: categorias (usando /children/categories)
+  // >>> categorias (via /children/categories)
   const fetchCategories = useCallback(async () => {
     if (!api) return;
     setLoadingOptions(prev => ({ ...prev, categories: true }));
@@ -256,7 +273,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       const url = new URL(`${api}/children/categories`);
       if (campaignId) url.searchParams.set('campaignId', campaignId);
 
-      // aplicar mesmos filtros pais, mas NÃO enviar 'category'
       const q = searchTerm.trim();
       if (q) url.searchParams.set('q', q);
       if (filtros.cidadeId) url.searchParams.set('cityId', filtros.cidadeId);
@@ -272,7 +288,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       if (!res.ok) throw new Error(await safeErrMsg(res));
       const data = await res.json();
 
-      // Aceita tanto {items:[{category,count}], total} quanto array simples
       const items = Array.isArray(data)
         ? data.map((c: any) => (typeof c === 'string' ? { category: c } : c))
         : (data?.items ?? []);
@@ -283,16 +298,15 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     } finally {
       setLoadingOptions(prev => ({ ...prev, categories: false }));
     }
-  // deps que determinam o universo possível de categorias
   }, [api, campaignId, searchTerm, filtros.cidadeId, filtros.comunidadeId, filtros.escolaId, filtros.status, filtros.idade]);
 
-  // carregar cidades ao escolher campanha (ou ao montar a tela)
+  // carregar cidades ao escolher campanha
   useEffect(() => {
     if (!campaignId) return;
     fetchCities();
   }, [campaignId, fetchCities]);
 
-  // quando muda cidade -> carrega comunidades/escolas dessa cidade e zera dependentes
+  // quando muda cidade
   useEffect(() => {
     const cid = filtros.cidadeId || undefined;
     setFiltros(prev => ({ ...prev, comunidadeId: '', escolaId: '' }));
@@ -300,7 +314,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     fetchSchools(cid, undefined);
   }, [filtros.cidadeId, fetchCommunities, fetchSchools]);
 
-  // quando muda comunidade -> refina escolas
+  // quando muda comunidade
   useEffect(() => {
     const cid = filtros.cidadeId || undefined;
     const coid = filtros.comunidadeId || undefined;
@@ -311,13 +325,10 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
   // ===== map do backend
   const mapChildren = useCallback((data: any[], selectedCampaignId: string): Child[] => {
     return (data ?? []).map((c: any) => {
-      const rel = Array.isArray(c.sponsorships)
-        ? c.sponsorships.find(
-            (s: any) => s.campaignId === selectedCampaignId &&
-              (s.status === 'ACTIVE' || s.status === 'PENDING' || s.status === 'COMPLETED' || s.status === 'IN_PROGRESS')
-          )
-        : null;
-      const status: SponsorshipStatus = normalizeStatus(rel?.status) || 'NONE';
+      // /children já traz sponsorships filtrados (BUSY) e, quando campaignId é enviado,
+      // também por campaignId, ordenados desc e take 1 — basta pegar o primeiro.
+      const rel = Array.isArray(c.sponsorships) && c.sponsorships.length > 0 ? c.sponsorships[0] : null;
+      const status = normalizeStatus(rel?.status);
       return {
         id: c.id,
         publicId: c.publicId ?? null,
@@ -357,7 +368,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     if (filtros.comunidadeId) url.searchParams.set('communityId', filtros.comunidadeId);
     if (filtros.escolaId) url.searchParams.set('schoolId', filtros.escolaId);
 
-    // >>> categoria vinda do endpoint de categorias
     if (filtros.categoria) url.searchParams.set('category', filtros.categoria);
 
     if (filtros.status === 'disponivel') url.searchParams.set('status', 'available');
@@ -393,7 +403,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       if (reset) {
         setChildren(mapped);
         nextSkipRef.current = mapped.length;
-        setSelectedIds(new Set()); // zera seleção ao refazer a lista
+        setSelectedIds(new Set());
       } else {
         setChildren(prev => [...prev, ...mapped]);
         nextSkipRef.current = skip + mapped.length;
@@ -431,7 +441,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     return () => { if (debounceTimer.current) window.clearTimeout(debounceTimer.current); };
   }, [campaignId, filtros, searchTerm, fetchPage]);
 
-  // >>> debounce separado para categorias (evita flood enquanto digita)
+  // >>> debounce para categorias
   const debounceCats = useRef<number | null>(null);
   useEffect(() => {
     if (!campaignId) return;
@@ -440,7 +450,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       fetchCategories();
     }, 250);
     return () => { if (debounceCats.current) window.clearTimeout(debounceCats.current); };
-  // re-carrega categorias quando universo muda (não inclui filtros.categoria)
   }, [campaignId, searchTerm, filtros.cidadeId, filtros.comunidadeId, filtros.escolaId, filtros.status, filtros.idade, fetchCategories]);
 
   // ===== infinite scroll =====
@@ -475,10 +484,10 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     } finally { setSponsoringId(null); }
   }
 
-  // ===== NOVO: seleção múltipla =====
-  const isUnavailable = (s: SponsorshipStatus) => ['COMPLETED', 'IN_PROGRESS', 'PENDING'].includes(s);
+  // ===== seleção múltipla =====
+  const isUnavailable = (s: SponsorshipStatus | 'NONE') => (s !== 'NONE') && ACTIVE_STATUSES.includes(s as SponsorshipStatus);
 
-  function toggleSelect(id: string, status: SponsorshipStatus) {
+  function toggleSelect(id: string, status: SponsorshipStatus | 'NONE') {
     if (isUnavailable(status)) return; // não permite selecionar indisponíveis
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -504,7 +513,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
 
-    // Se houver apenas 1, mantém fluxo igual (compatibilidade)
     if (ids.length === 1) {
       return handleSponsor(ids[0]);
     }
@@ -558,7 +566,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       </div>
     );
   }
-
 
   return (
     <div className="max-w-6xl mx-auto px-6">
@@ -818,7 +825,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         <div className="text-center text-gray-500 py-10">Nenhuma criança encontrada com os filtros aplicados.</div>
       )}
 
-      {/* ===== NOVO: Barra fixa de ação em massa ===== */}
+      {/* ===== Barra fixa de ação em massa ===== */}
       {selectedCount > 0 && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] sm:w-auto">
           <div className="mx-auto flex items-center gap-3 bg-white border border-emerald-200 shadow-xl rounded-2xl px-4 py-3">
