@@ -1,42 +1,92 @@
-# Amigos de Minas — Frontend
+<div align="center">
 
-Frontend do sistema de gestão de apadrinhamento da **ONG Amigos de Minas**: área pública de apadrinhamento (catálogo de crianças, registro, Pix) e painel administrativo completo para a equipe da ONG operar campanhas, cadastros e relatórios.
+# 💙 Amigos de Minas — Frontend
 
-Construído com **Next.js 15 (App Router)** e **React 19**, consome a [API backend em NestJS](../Amigos_de_Minas-Backend-master).
+### Área pública de apadrinhamento + painel administrativo da ONG Amigos de Minas
 
-## Sumário
+[![Next.js](https://img.shields.io/badge/Next.js-15-000000?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![NextAuth](https://img.shields.io/badge/NextAuth.js-v4-7C3AED?style=for-the-badge)](https://next-auth.js.org/)
 
-- [Sobre o projeto](#sobre-o-projeto)
-- [Stack técnica](#stack-técnica)
-- [Rotas da aplicação](#rotas-da-aplicação)
-- [Autenticação](#autenticação)
-- [Funcionalidades de destaque](#funcionalidades-de-destaque)
-- [Como rodar localmente](#como-rodar-localmente)
-- [Variáveis de ambiente](#variáveis-de-ambiente)
-- [Scripts disponíveis](#scripts-disponíveis)
-- [Estrutura de pastas](#estrutura-de-pastas)
-- [Roadmap / pontos de atenção](#roadmap--pontos-de-atenção)
+*Catálogo de crianças • Registro de apadrinhamento • Pix • Painel administrativo • Relatórios*
 
-## Sobre o projeto
+</div>
 
-O frontend oferece dois grandes fluxos:
+---
 
-- **Área pública**: catálogo de crianças disponíveis para apadrinhar, registro de apadrinhamento, pagamento/doação via Pix e acompanhamento dos apadrinhamentos pelo próprio padrinho/madrinha.
-- **Painel administrativo** (`/admin`): gestão completa da operação da ONG — crianças, campanhas, apadrinhamentos, cidades/comunidades/escolas, pontos de coleta, usuários, conferência e exportação de relatórios — permitindo à equipe acompanhar em tempo real toda a evolução da campanha.
+## 📖 Sumário
 
-## Stack técnica
+- [Sobre o projeto](#-sobre-o-projeto)
+- [Stack técnica](#-stack-técnica)
+- [Arquitetura em alto nível](#-arquitetura-em-alto-nível)
+- [Rotas da aplicação](#-rotas-da-aplicação)
+- [Autenticação](#-autenticação)
+- [✨ Funcionalidades de destaque](#-funcionalidades-de-destaque)
+- [Como rodar localmente](#-como-rodar-localmente)
+- [Variáveis de ambiente](#-variáveis-de-ambiente)
+- [Scripts disponíveis](#-scripts-disponíveis)
+- [Estrutura de pastas](#-estrutura-de-pastas)
+- [Roadmap / pontos de atenção](#-roadmap--pontos-de-atenção)
 
-- **Framework**: [Next.js 15](https://nextjs.org/) (App Router, Turbopack em dev)
-- **UI**: React 19 + [Tailwind CSS 4](https://tailwindcss.com/) (sem biblioteca de componentes — UI construída sob medida), ícones via `lucide-react`
-- **Autenticação**: [NextAuth v4](https://next-auth.js.org/) (Credentials + Google OAuth), delegando a validação real ao backend NestJS
-- **HTTP**: `fetch` nativo, encapsulado em um client próprio (`src/lib/api.ts`)
-- **Relatórios**: [`exceljs`](https://github.com/exceljs/exceljs) (exportação Excel) e [`jspdf`](https://github.com/parallax/jsPDF) (exportação PDF)
-- **Pix**: geração própria de QR Code (payload BR Code/EMV com CRC16), sem gateway de pagamento terceirizado
-- **Linguagem**: TypeScript 5 (modo `strict`)
+---
 
-## Rotas da aplicação
+## 🎯 Sobre o projeto
 
-### Área pública
+Este é o frontend do sistema de apadrinhamento da **ONG Amigos de Minas**, dividido em duas experiências:
+
+| | |
+|---|---|
+| 🌐 **Área pública** | Catálogo de crianças disponíveis para apadrinhar, registro do apadrinhamento, doação via Pix e acompanhamento pelo próprio padrinho/madrinha. |
+| 🛠️ **Painel administrativo** (`/admin`) | Gestão completa da operação: crianças, campanhas, apadrinhamentos, cidades/comunidades/escolas, pontos de coleta, usuários, conferência e exportação de relatórios — tudo em tempo real. |
+
+---
+
+## 🛠️ Stack técnica
+
+| Categoria | Tecnologia |
+|---|---|
+| **Framework** | [Next.js 15](https://nextjs.org/) (App Router, Turbopack em dev) |
+| **UI** | React 19 + [Tailwind CSS 4](https://tailwindcss.com/) — sem biblioteca de componentes, UI construída sob medida |
+| **Ícones** | `lucide-react` |
+| **Autenticação** | [NextAuth v4](https://next-auth.js.org/) (Credentials + Google OAuth), validação delegada ao backend NestJS |
+| **HTTP** | `fetch` nativo, encapsulado em client próprio (`src/lib/api.ts`) |
+| **Relatórios** | [`exceljs`](https://github.com/exceljs/exceljs) (Excel) + [`jspdf`](https://github.com/parallax/jsPDF) (PDF) |
+| **Pix** | Geração própria de QR Code (payload BR Code/EMV + CRC16), sem gateway terceirizado |
+| **Linguagem** | TypeScript 5 (modo `strict`) |
+
+---
+
+## 🏗️ Arquitetura em alto nível
+
+```
+┌────────────────────────────┐
+│        Navegador             │
+│  Área pública  │  Painel admin │
+└───────┬─────────────┬───────┘
+        │              │
+        ▼              ▼
+┌────────────────────────────────────────────┐
+│        Next.js App Router (frontend)         │
+│  ┌────────────┐        ┌──────────────────┐  │
+│  │  NextAuth   │        │  API Routes (BFF)  │  │
+│  │  v4 (JWT)   │        │  /api/admin/*        │  │
+│  └─────┬──────┘        └─────────┬────────┘  │
+└────────┼────────────────────────┼─────────────┘
+         │                        │
+         ▼                        ▼
+┌────────────────────────────────────────────┐
+│          API NestJS (backend externo)         │
+│   /auth/login  /auth/refresh  /children  ...    │
+└────────────────────────────────────────────┘
+```
+
+---
+
+## 🗺️ Rotas da aplicação
+
+### 🌐 Área pública
 
 | Rota | Função |
 |---|---|
@@ -49,46 +99,54 @@ O frontend oferece dois grandes fluxos:
 | `/meus-apadrinhamentos` | Área logada do padrinho: apadrinhamentos ativos, com exportação em PDF |
 | `/perfil` | Edição de dados pessoais |
 
-### Painel administrativo (`/admin/*`)
+### 🛠️ Painel administrativo (`/admin/*`)
 
 | Rota | Função |
 |---|---|
-| `/admin` | Dashboard com KPIs (crianças, campanhas, apadrinhamentos, cidades) e atividade recente |
-| `/admin/children` | CRUD e listagem de crianças |
-| `/admin/children/[id]` | Edição de uma criança, incluindo composição de imagem com moldura |
-| `/admin/children/bulk` | Importação em massa de crianças (migração de dados legados) |
-| `/admin/campaigns` | CRUD de campanhas e associação de molduras/layouts |
-| `/admin/sponsorships` | Gestão de apadrinhamentos, transferência entre padrinhos, exportação |
-| `/admin/conferencia` | Painel de conferência/reconciliação da operação |
-| `/admin/geral` | Hub de cadastros gerais (atalhos de teclado 1–6) |
-| `/admin/cities` `/admin/communities` `/admin/schools` | CRUDs hierárquicos (cidade → comunidade → escola) |
-| `/admin/collection-points` | CRUD de pontos de coleta/entrega |
-| `/admin/users` | Gestão de usuários e papéis |
-| `/admin/exports/children` | Exportação Excel de crianças |
-| `/admin/exports/sponsorships` | Exportação Excel de apadrinhamentos |
+| 📊 `/admin` | Dashboard com KPIs (crianças, campanhas, apadrinhamentos, cidades) e atividade recente |
+| 🧒 `/admin/children` | CRUD e listagem de crianças |
+| 🖼️ `/admin/children/[id]` | Edição de uma criança, incluindo composição de imagem com moldura |
+| 📥 `/admin/children/bulk` | Importação em massa de crianças (migração de dados legados) |
+| 🎉 `/admin/campaigns` | CRUD de campanhas e associação de molduras/layouts |
+| 💝 `/admin/sponsorships` | Gestão de apadrinhamentos, transferência entre padrinhos, exportação |
+| ✅ `/admin/conferencia` | Painel de conferência/reconciliação da operação |
+| 🗂️ `/admin/geral` | Hub de cadastros gerais (atalhos de teclado 1–6) |
+| 🏙️ `/admin/cities` `/admin/communities` `/admin/schools` | CRUDs hierárquicos (cidade → comunidade → escola) |
+| 📍 `/admin/collection-points` | CRUD de pontos de coleta/entrega |
+| 👤 `/admin/users` | Gestão de usuários e papéis |
+| 📤 `/admin/exports/children` | Exportação Excel de crianças |
+| 📤 `/admin/exports/sponsorships` | Exportação Excel de apadrinhamentos |
 
-Além disso, `src/app/api/admin/*` funciona como uma camada BFF (Backend for Frontend) em Next.js API Routes, fazendo proxy autenticado para o backend NestJS.
+> `src/app/api/admin/*` funciona como camada **BFF** (Backend for Frontend) em Next.js API Routes, fazendo proxy autenticado para o backend NestJS.
 
-## Autenticação
+---
+
+## 🔐 Autenticação
 
 - **NextAuth v4** com sessão em JWT.
 - **Credentials**: login por e-mail ou telefone, validado contra o backend NestJS (`/auth/login`), com refresh automático de token (`/auth/refresh`).
 - **Google OAuth**: usuários que entram via Google recebem o papel padrão `SPONSOR`.
 - `session.user` carrega `id`, `roles` e `phone`; `session.accessToken`/`refreshToken` ficam disponíveis para chamadas autenticadas ao backend.
 
-> ⚠️ Não há `middleware.ts` no projeto — a proteção das rotas `/admin/*` hoje é feita por verificação de sessão em cada página (client-side). A validação de autorização "de verdade" ocorre no backend, mas vale considerar um middleware de rota para reforçar a proteção no próprio Next.js.
+> ⚠️ **Atenção**: não há `middleware.ts` no projeto — a proteção das rotas `/admin/*` hoje é feita por verificação de sessão em cada página (client-side). A validação de autorização "de verdade" ocorre no backend, mas vale considerar um middleware de rota para reforçar a proteção no próprio Next.js.
 
-## Funcionalidades de destaque
+---
 
-- **Composição de imagens no navegador** (`ComposedImage.tsx`): monta, via canvas, a foto da criança + moldura da campanha + textos dinâmicos (nome, presente desejado, cidade), refletindo o mesmo pipeline de composição do backend.
-- **Importação em massa** (`/admin/children/bulk`): tela dedicada para migrar rapidamente os cadastros que já existiam em planilhas da ONG, com preview antes de confirmar o envio.
-- **Exportação de relatórios**: geração de planilhas Excel (por cidade, comunidade, padrinho ou seleção livre) e PDFs de comprovante, direto no navegador.
-- **Pix nativo**: geração de QR Code Pix estático (chave, favorecido, CNPJ) sem depender de gateway de pagamento externo.
-- **Fluxo logístico de apadrinhamento**: acompanhamento do status do presente (pendente → em compra → embalado → encaixotado → aguardando entrega → concluído), com badges e agrupamentos padronizados em `src/lib/sponsorship-status.ts`.
+## ✨ Funcionalidades de destaque
 
-## Como rodar localmente
+| Funcionalidade | Detalhes |
+|---|---|
+| 🎨 **Composição de imagens no navegador** | `ComposedImage.tsx` monta, via canvas, a foto da criança + moldura da campanha + textos dinâmicos (nome, presente desejado, cidade) — espelhando o pipeline de composição do backend. |
+| 📥 **Importação em massa** | `/admin/children/bulk` migra rapidamente os cadastros que já existiam em planilhas da ONG, com preview antes de confirmar o envio. |
+| 📊 **Exportação de relatórios** | Planilhas Excel (por cidade, comunidade, padrinho ou seleção livre) e PDFs de comprovante, gerados direto no navegador. |
+| 💳 **Pix nativo** | QR Code Pix estático (chave, favorecido, CNPJ), sem depender de gateway de pagamento externo. |
+| 📦 **Fluxo logístico do apadrinhamento** | Acompanhamento do status do presente — `pendente → em compra → embalado → encaixotado → aguardando entrega → concluído` — com badges e agrupamentos padronizados em `src/lib/sponsorship-status.ts`. |
 
-Pré-requisitos: Node.js 18+, e o [backend](../Amigos_de_Minas-Backend-master) rodando (ou uma URL de API acessível).
+---
+
+## 🚀 Como rodar localmente
+
+**Pré-requisitos:** Node.js 18+, e o [backend](../Amigos_de_Minas-Backend-master) rodando (ou uma URL de API acessível).
 
 ```bash
 # 1. Instalar dependências
@@ -101,11 +159,13 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Acesse [http://localhost:3000](http://localhost:3000).
+🌐 Acesse [http://localhost:3000](http://localhost:3000).
 
-## Variáveis de ambiente
+---
 
-Não há `.env.example` versionado — recomenda-se criar um com as variáveis abaixo, identificadas no código:
+## 🔑 Variáveis de ambiente
+
+> Não há `.env.example` versionado — recomenda-se criar um com as variáveis abaixo, identificadas no código.
 
 | Variável | Descrição |
 |---|---|
@@ -120,7 +180,9 @@ Não há `.env.example` versionado — recomenda-se criar um com as variáveis a
 | `NEXT_PUBLIC_PIX_OBS` | Observação padrão incluída no Pix |
 | `NEXT_PUBLIC_DROPPOINTS_IMAGE` | Imagem/mapa dos pontos de coleta |
 
-## Scripts disponíveis
+---
+
+## 📜 Scripts disponíveis
 
 | Comando | Descrição |
 |---|---|
@@ -131,37 +193,49 @@ Não há `.env.example` versionado — recomenda-se criar um com as variáveis a
 
 > Erros de lint não bloqueiam o build de produção (`eslint.ignoreDuringBuilds: true` em `next.config.ts`); rodar `npm run lint` manualmente é recomendado antes de subir alterações.
 
-## Estrutura de pastas
+---
+
+## 📁 Estrutura de pastas
 
 ```
 src/
 ├── app/
-│   ├── apadrinhamento/       # Catálogo, registro e conclusão do apadrinhamento
-│   ├── auth/                  # Login e cadastro
-│   ├── cidades/                 # Página institucional
-│   ├── meus-apadrinhamentos/     # Área logada do padrinho
-│   ├── perfil/                    # Edição de perfil
-│   ├── (admin)/admin/               # Painel administrativo completo
-│   └── api/                           # API Routes (BFF/proxy para o backend + NextAuth)
+│   ├── apadrinhamento/          # Catálogo, registro e conclusão do apadrinhamento
+│   ├── auth/                     # Login e cadastro
+│   ├── cidades/                   # Página institucional
+│   ├── meus-apadrinhamentos/       # Área logada do padrinho
+│   ├── perfil/                      # Edição de perfil
+│   ├── (admin)/admin/                 # Painel administrativo completo
+│   └── api/                             # API Routes (BFF/proxy para o backend + NextAuth)
 ├── components/
-│   ├── Admin/           # Navegação do painel administrativo
-│   ├── Apadrinhamento/    # Catálogo e formulário de apadrinhamento
-│   ├── Home/                # Seções institucionais
-│   ├── Pix/                   # Geração de QR Code Pix
-│   ├── Sponsorship/             # Status do apadrinhamento
-│   └── media/                     # Composição de imagem (foto + moldura)
+│   ├── Admin/               # Navegação do painel administrativo
+│   ├── Apadrinhamento/        # Catálogo e formulário de apadrinhamento
+│   ├── Home/                    # Seções institucionais
+│   ├── Pix/                       # Geração de QR Code Pix
+│   ├── Sponsorship/                 # Status do apadrinhamento
+│   └── media/                         # Composição de imagem (foto + moldura)
 ├── lib/
-│   ├── api.ts             # Cliente HTTP central
-│   ├── auth.ts               # Configuração do NextAuth
-│   ├── auth-fetch.ts            # Fetch autenticado server-side
-│   ├── sponsorship-status.ts       # Fonte única de verdade dos status
-│   └── export/ pdf/                   # Geração de relatórios Excel/PDF
+│   ├── api.ts                # Cliente HTTP central
+│   ├── auth.ts                  # Configuração do NextAuth
+│   ├── auth-fetch.ts               # Fetch autenticado server-side
+│   ├── sponsorship-status.ts          # Fonte única de verdade dos status
+│   └── export/ pdf/                      # Geração de relatórios Excel/PDF
 └── config/
-    └── adminNav.ts         # Rotas de navegação do painel administrativo
+    └── adminNav.ts             # Rotas de navegação do painel administrativo
 ```
 
-## Roadmap / pontos de atenção
+---
 
-- Adicionar `middleware.ts` para reforçar a proteção das rotas `/admin/*` no próprio Next.js.
-- Versionar um `.env.example` com as variáveis documentadas acima.
-- A landing institucional (`Home/*`) hoje não é acessada — `/` redireciona direto para `/apadrinhamento`.
+## 🧭 Roadmap / pontos de atenção
+
+- [ ] Adicionar `middleware.ts` para reforçar a proteção das rotas `/admin/*` no próprio Next.js.
+- [ ] Versionar um `.env.example` com as variáveis documentadas acima.
+- [ ] A landing institucional (`Home/*`) hoje não é acessada — `/` redireciona direto para `/apadrinhamento`.
+
+---
+
+<div align="center">
+
+Feito com 💙 para a **ONG Amigos de Minas**
+
+</div>
