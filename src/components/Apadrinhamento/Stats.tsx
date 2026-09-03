@@ -4,9 +4,10 @@ interface StatsProps {
   stats: {
     total: number;
     active: number;
-    pending: number,
-    available: number,
-    sponsorshipRate: number
+    pending: number;
+    in_progress?: number;
+    available: number;
+    sponsorshipRate: number;
   };
 }
 

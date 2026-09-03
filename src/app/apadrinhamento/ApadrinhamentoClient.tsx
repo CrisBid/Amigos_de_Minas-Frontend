@@ -137,7 +137,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [scanFs, setScanFs] = useState<boolean>(initialScanFs);
 
-  const [stats, setStats] = useState({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
+  const [stats, setStats] = useState({ total: 0, active: 0, pending: 0, in_progress: 0, available: 0, sponsorshipRate: 0 });
 
   const [searchTerm, setSearchTerm] = useState('');
   // filtros por ID
@@ -202,14 +202,15 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             total: j.total ?? 0,
             active: j.active ?? 0,
             pending: j.pending ?? 0,
+            in_progress: j.in_progress ?? 0,
             available: j.available ?? Math.max(0, (j.total ?? 0) - ((j.active ?? 0) + (j.pending ?? 0))),
             sponsorshipRate: j.sponsorshipRate ?? (j.total ? Math.round(((j.active ?? 0) / j.total) * 100) : 0),
           });
         } else {
-          setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
+          setStats({ total: 0, active: 0, pending: 0, in_progress: 0, available: 0, sponsorshipRate: 0 });
         }
       } catch {
-        setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
+        setStats({ total: 0, active: 0, pending: 0, in_progress: 0, available: 0, sponsorshipRate: 0 });
       }
     })();
   }, [campaignId]);
