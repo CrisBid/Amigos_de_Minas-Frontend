@@ -142,7 +142,14 @@ export default function AdminCampaignsPage() {
     if (!confirm(`Excluir campanha "${name}"? Essa ação não pode ser desfeita.`)) return;
     const res = await fetch(`/api/admin/campaigns/${id}`, { method: 'DELETE', credentials: 'include' });
     if (!res.ok) {
-      alert('Falha ao excluir.');
+      let message = 'Falha ao excluir.';
+      try {
+        const body = await res.json();
+        if (body?.message) message = Array.isArray(body.message) ? body.message.join(' ') : String(body.message);
+      } catch {
+        // resposta sem corpo JSON; mantém a mensagem padrão
+      }
+      alert(message);
       return;
     }
     load();

@@ -188,11 +188,14 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     })();
   }, [api]);
 
-  // ===== stats =====
+  // ===== stats (por campanha selecionada) =====
   useEffect(() => {
+    if (!campaignId) return;
     (async () => {
       try {
-        const res = await fetch('/api/admin/children/stats', { cache: 'no-store', credentials: 'include', headers: { accept: 'application/json' } });
+        const url = new URL('/api/admin/children/stats', window.location.origin);
+        url.searchParams.set('campaignId', campaignId);
+        const res = await fetch(url.toString(), { cache: 'no-store', credentials: 'include', headers: { accept: 'application/json' } });
         if (res.ok) {
           const j = await res.json();
           setStats({
@@ -209,7 +212,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
       }
     })();
-  }, []);
+  }, [campaignId]);
 
   // ===== opções =====
   const fetchCities = useCallback(async () => {

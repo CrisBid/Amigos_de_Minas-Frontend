@@ -6,6 +6,9 @@ const API = process.env.NEXT_PUBLIC_NEST_API_URL;
 export async function GET(req: NextRequest) {
 
   const url = new URL(`${API}/children/stats/all`);
+  const campaignId = req.nextUrl.searchParams.get('campaignId');
+  if (campaignId) url.searchParams.set('campaignId', campaignId);
+
   const res = await fetch(url.toString(), {
     headers: {
       accept: 'application/json',

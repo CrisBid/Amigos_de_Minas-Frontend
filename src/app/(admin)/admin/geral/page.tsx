@@ -10,6 +10,7 @@ import {
   User,
   ListCheck,
   Home,
+  Users,
 } from 'lucide-react';
 
 export default function CadastrosGeraisPage() {
@@ -24,6 +25,7 @@ export default function CadastrosGeraisPage() {
       if (e.key === '5') window.location.href = '/admin/users';
       if (e.key === '6') window.location.href = '/admin/conferencia';
       if (e.key === '7') window.location.href = '/admin/exports';
+      if (e.key === '8') window.location.href = '/admin/campaigns/migrate-children';
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -104,6 +106,15 @@ export default function CadastrosGeraisPage() {
             desc="Exporte dados para análise externa."
             kbd="7"
             accent="from-fuchsia-600 to-rose-600"
+          />
+
+          <NavCard
+            href="/admin/campaigns/migrate-children"
+            icon={<Users className="w-6 h-6" />}
+            title="Migração de Crianças"
+            desc="Escolha de qual campanha migrar e para qual campanha (por cidade, comunidade ou individualmente)."
+            kbd="8"
+            accent="from-amber-600 to-orange-600"
           />
         </div>
 
