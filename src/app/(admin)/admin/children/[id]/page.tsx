@@ -94,6 +94,34 @@ type ChildFull = {
   images?: ImageItem[];
 };
 
+type CampaignHistoryItem = {
+  campaign: { id: string; name: string; year?: number | null; status?: string | null };
+  wantedGift: string | null;
+  giftFromHistory: boolean;
+  photoUrl: string | null;
+  hasPhoto: boolean;
+  migratedFrom: { id: string | null; name: string | null; at: string } | null;
+  sponsorships: {
+    id: string;
+    status: string;
+    method?: string | null;
+    createdAt?: string;
+    sponsor?: { id: string; name: string; email?: string | null } | null;
+  }[];
+};
+
+const SPONSORSHIP_STATUS_LABEL: Record<string, string> = {
+  PENDING: 'Pendente',
+  IN_PROGRESS: 'Em andamento',
+  IN_PURCHASE: 'Em compra',
+  PACKED: 'Embalado',
+  BOXED: 'Encaixotado',
+  AWAITING_DELIVERY: 'Aguardando entrega',
+  COMPLETED: 'Concluído',
+  ENDED: 'Encerrado',
+  CANCELLED: 'Cancelado',
+};
+
 type ComposeSample = {
   name?: string;
   publicId?: string | number;
@@ -177,6 +205,7 @@ export default function EditChildPage() {
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const [child, setChild] = useState<ChildFull | null>(null);
+  const [history, setHistory] = useState<CampaignHistoryItem[] | null>(null);
 
   // Combos
   const [cities, setCities] = useState<City[]>([]);
@@ -226,6 +255,18 @@ export default function EditChildPage() {
     };
     if (id) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    (async () => {
+      try {
+        const r = await fetch(`/api/admin/children/${id}/campaigns`, { cache: 'no-store' });
+        setHistory(r.ok ? await r.json() : []);
+      } catch {
+        setHistory([]);
+      }
+    })();
   }, [id]);
 
   useEffect(() => {
@@ -865,6 +906,66 @@ export default function EditChildPage() {
               </div>
             </div>
           </div>
+        </section>
+
+        {/* Seção: Histórico de campanhas */}
+        <section className="bg-white rounded-xl border p-5 shadow-sm">
+          <h2 className="font-semibold text-gray-800 mb-4">Histórico de campanhas</h2>
+          {history === null ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin" /> Carregando histórico…
+            </div>
+          ) : history.length === 0 ? (
+            <p className="text-sm text-gray-500">Esta criança ainda não participou de nenhuma campanha.</p>
+          ) : (
+            <ol className="space-y-3">
+              {history.map((h) => (
+                <li key={h.campaign.id} className="flex gap-4 border rounded-lg p-3">
+                  {h.photoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={h.photoUrl} alt={h.campaign.name} className="w-16 h-24 object-cover rounded-md border shrink-0" />
+                  ) : (
+                    <div className="w-16 h-24 rounded-md border border-dashed grid place-content-center text-[10px] text-gray-400 shrink-0">
+                      sem foto
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1 text-sm">
+                    <p className="font-semibold text-gray-900">
+                      {h.campaign.name}
+                      {h.campaign.year ? <span className="text-gray-500 font-normal"> · {h.campaign.year}</span> : null}
+                    </p>
+                    <p className="mt-1">
+                      <span className="text-gray-500">Presente: </span>
+                      {h.wantedGift ? (
+                        <span className="text-gray-900">{h.wantedGift}</span>
+                      ) : (
+                        <span className="text-gray-400">não registrado</span>
+                      )}
+                    </p>
+                    {h.migratedFrom && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Migrada{h.migratedFrom.name ? ` de ${h.migratedFrom.name}` : ''} em{' '}
+                        {new Date(h.migratedFrom.at).toLocaleDateString()}
+                      </p>
+                    )}
+                    {h.sponsorships.length > 0 ? (
+                      <ul className="mt-1 space-y-0.5">
+                        {h.sponsorships.map((s) => (
+                          <li key={s.id} className="text-xs text-gray-600">
+                            Apadrinhamento: <strong>{SPONSORSHIP_STATUS_LABEL[s.status] ?? s.status}</strong>
+                            {s.sponsor?.name ? ` · ${s.sponsor.name}` : ''}
+                            {s.createdAt ? ` · ${new Date(s.createdAt).toLocaleDateString()}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-gray-400 mt-1">Sem apadrinhamento nesta campanha.</p>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
         </section>
 
         {/* Seção: Patrocínios */}

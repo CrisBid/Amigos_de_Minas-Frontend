@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { ArrowLeft, ArrowRight, CheckSquare, Loader2, Search, Square, Trash2, Users } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckSquare, ClipboardPaste, ListChecks, Loader2, Search, Square, Trash2, Users } from 'lucide-react';
+import PasteMigration from './PasteMigration';
 
 type Campaign = { id: string; name: string; slug: string; year?: number | null };
 type City = { id: string; name: string; state?: string | null };
@@ -22,6 +23,7 @@ type IncludedRow = {
   childId: string;
   sourceCampaignId: string | null;
   includedAt: string;
+  wantedGift?: string | null;
   child: {
     id: string;
     publicId?: number | null;
@@ -54,6 +56,7 @@ export default function MigrateChildrenClient() {
   const [loadingCampaigns, setLoadingCampaigns] = useState(true);
   const [targetCampaignId, setTargetCampaignId] = useState<string>(initialTarget);
   const [sourceCampaignId, setSourceCampaignId] = useState<string>(initialSource);
+  const [mode, setMode] = useState<'paste' | 'manual'>('paste');
 
   const [citiesOpt, setCitiesOpt] = useState<City[]>([]);
   const [communitiesOpt, setCommunitiesOpt] = useState<CommunityOpt[]>([]);
@@ -294,8 +297,8 @@ export default function MigrateChildrenClient() {
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900">Migração de Crianças</h1>
           <p className="text-gray-600 mt-1">
-            Escolha de qual campanha migrar e para qual campanha, depois selecione as crianças (por cidade, comunidade
-            ou individualmente).
+            Escolha de qual campanha migrar e para qual campanha. Depois cole as linhas da sua planilha (ID e presente
+            novo) ou selecione as crianças manualmente.
           </p>
         </div>
 
@@ -349,6 +352,29 @@ export default function MigrateChildrenClient() {
             Selecione a campanha de origem e a de destino para começar.
           </div>
         ) : (
+          <>
+            {/* Modo */}
+            <div className="inline-flex rounded-xl bg-white shadow p-1 mb-6">
+              {([
+                ['paste', 'Colar da planilha', ClipboardPaste],
+                ['manual', 'Selecionar manualmente', ListChecks],
+              ] as const).map(([value, label, Icon]) => (
+                <button
+                  key={value}
+                  onClick={() => setMode(value)}
+                  className={[
+                    'inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                    mode === value ? 'bg-emerald-600 text-white' : 'text-gray-600 hover:bg-gray-50',
+                  ].join(' ')}
+                >
+                  <Icon className="w-4 h-4" /> {label}
+                </button>
+              ))}
+            </div>
+
+            {mode === 'paste' && targetCampaign ? (
+              <PasteMigration targetCampaign={targetCampaign} sourceCampaignId={sourceCampaignId} onMigrated={loadIncluded} />
+            ) : (
           <>
             {/* Filtros */}
             <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-6">
@@ -476,6 +502,8 @@ export default function MigrateChildrenClient() {
                 </>
               )}
             </div>
+          </>
+            )}
 
             {/* Já migradas */}
             <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6">
@@ -495,6 +523,9 @@ export default function MigrateChildrenClient() {
                         <p className="text-xs text-gray-500 truncate">
                           {r.child.community?.name ?? '—'} · {r.child.city?.name ?? r.child.cityName ?? '—'}
                         </p>
+                        {r.wantedGift && (
+                          <p className="text-xs text-emerald-700 truncate" title={r.wantedGift}>🎁 {r.wantedGift}</p>
+                        )}
                       </div>
                       <button
                         onClick={() => removeIncluded(r.childId)}
