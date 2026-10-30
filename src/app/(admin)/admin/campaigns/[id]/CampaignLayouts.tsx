@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, ImagePlus, LayoutTemplate, Loader2, Search, Star, Trash2 } from 'lucide-react';
+import { composeConfigForFrame } from '@/components/media/composeConfig';
 
 type Frame = { id: string; url: string; name?: string | null; active?: boolean; config?: unknown };
 type City = { id: string; name: string; state?: string | null };
@@ -85,8 +86,8 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
       const fd = new FormData();
       fd.append('file', uploadFile);
       if (uploadName.trim()) fd.append('name', uploadName.trim());
-      // o enquadramento (posição da foto e textos) começa igual ao do layout padrão
-      if (defaultFrame?.config) fd.append('config', JSON.stringify(defaultFrame.config));
+      // o enquadramento (posição da foto e textos) começa igual ao do layout padrão, sempre completo
+      fd.append('config', JSON.stringify(composeConfigForFrame(defaultFrame?.config)));
       const res = await fetch(`/api/admin/campaigns/${campaignId}/layouts`, { method: 'POST', credentials: 'include', body: fd });
       if (!res.ok) throw new Error(await extractError(res, 'Falha ao enviar layout.'));
       const created: Frame = await res.json();

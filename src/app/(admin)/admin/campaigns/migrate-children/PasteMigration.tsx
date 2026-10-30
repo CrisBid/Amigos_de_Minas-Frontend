@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowRight, CheckCircle2, ClipboardPaste, Columns2, FileImage, Image as ImageIcon, ImagePlus, Loader2, Trash2, X,
 } from 'lucide-react';
+import { composeConfigForFrame } from '@/components/media/composeConfig';
 
 type Campaign = { id: string; name: string; slug: string; year?: number | null };
 type City = { id: string; name: string; state?: string | null };
@@ -618,7 +619,8 @@ export default function PasteMigration({
           if (!childId) throw new Error('criança nova não foi criada');
           const fd = new FormData();
           fd.append('file', photos[r.photoKey]);
-          if (frame?.config) fd.append('Config', JSON.stringify(frame.config));
+          // igual ao cadastro guiado: composição completa (padrão + layout), usada pelo apadrinhamento para montar a arte
+          fd.append('Config', JSON.stringify(composeConfigForFrame(frame?.config)));
           const qs = new URLSearchParams({ campaignId: targetCampaign.id });
           if (frame?.id) qs.set('layoutId', frame.id);
           const up = await fetch(`/api/admin/children/${childId}/photo?${qs.toString()}`, {
