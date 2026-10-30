@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Save, Trash2, Users } from 'lucide-react';
+import CampaignLayouts from './CampaignLayouts';
 
 type CampaignStatus = 'DRAFT' | 'ACTIVE' | 'FINISHED' | 'ARCHIVED';
 
@@ -235,6 +236,9 @@ export default function EditCampaignPage() {
               />
             </div>
           </div>
+
+          {/* Layouts (molduras) da campanha, por cidade */}
+          <CampaignLayouts campaignId={id} />
 
           {/* Migração seletiva de crianças de outras campanhas */}
           <div className="border-t border-gray-100 px-6 py-6">

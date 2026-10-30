@@ -447,18 +447,28 @@ export default function BulkChildrenWizardPage() {
         if (!res.ok) return;
         const list: CampaignFrame[] = await res.json();
         setFrames(list);
-        const active = list.find((f) => f.active);
+
+        // layout configurado para a cidade escolhida nesta campanha; senão, o ativo
+        let cityFrameId: string | undefined;
+        if (cityId) {
+          const r2 = await fetch(`/api/admin/campaigns/${campaignId}/city-layouts`, { cache: 'no-store', credentials: 'include' });
+          if (r2.ok) {
+            const byCity: { cityId: string; frameId: string }[] = await r2.json();
+            cityFrameId = byCity.find((l) => l.cityId === cityId)?.frameId;
+          }
+        }
+        const active = list.find((f) => f.id === cityFrameId) ?? list.find((f) => f.active);
         setSelectedFrameId(active?.id ?? null);
         setLayoutUploadedUrl(active?.url ?? null);
 
-        // se o frame ativo tiver config, mescla no nosso composeCfg
+        // se o frame escolhido tiver config, mescla no nosso composeCfg
         if (active?.config) {
           setComposeCfg((old) => deepMerge(old, active.config));
         }
       } catch {}
     };
     loadFrames();
-  }, [campaignId]);
+  }, [campaignId, cityId]);
 
   /* =====================
      Reações Passo 2 (planilha)

@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, CheckCircle2, ClipboardPaste, ImagePlus, Loader2, Trash2, X } from 'lucide-react';
+import {
+  AlertTriangle, ArrowRight, CheckCircle2, ClipboardPaste, Columns2, FileImage, Image as ImageIcon, ImagePlus, Loader2, Trash2, X,
+} from 'lucide-react';
 
 type Campaign = { id: string; name: string; slug: string; year?: number | null };
 type City = { id: string; name: string; state?: string | null };
@@ -40,7 +42,7 @@ type SheetRow = {
   motherName: string;
 };
 
-type Frame = { id: string; active?: boolean; config?: unknown };
+type Frame = { id: string; name?: string | null; active?: boolean; config?: unknown };
 
 type Progress = { phase: 'migrando' | 'fotos'; done: number; total: number };
 
@@ -61,6 +63,15 @@ function parseSheetAge(raw?: string): number | null {
   if (/^\d+\s*m$/i.test(s)) return 0;
   return /^\d{1,3}$/.test(s) ? parseInt(s, 10) : null;
 }
+
+const COLUMN_FIELDS: { key: keyof ColumnMap; label: string }[] = [
+  { key: 'publicId', label: 'ID na campanha nova' },
+  { key: 'name', label: 'Nome da criança (obrigatório)' },
+  { key: 'birthDate', label: 'Data de nascimento' },
+  { key: 'age', label: 'Idade (anos ou ex.: 8M)' },
+  { key: 'wantedGift', label: 'Presente' },
+  { key: 'motherName', label: 'Nome da mãe' },
+];
 
 const HEADER_ALIASES: Record<keyof ColumnMap, string[]> = {
   publicId: ['id', 'publicid', 'codigo', 'cod', 'numero', 'n', 'no', 'id novo', 'novo id'],
@@ -154,6 +165,28 @@ function parseClipboardTable(text: string): string[][] {
 
 const isIdCell = (s?: string) => /^\d{1,9}$/.test((s ?? '').trim());
 
+/** Letra da coluna como no Excel: 0 → A, 26 → AA. */
+function columnLetter(i: number) {
+  let s = '';
+  for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
+
+/** Formato padrão aplicado às colunas que têm dados, pulando as que estão em branco. */
+function layoutOverFilledColumns(rows: string[][]): ColumnMap {
+  const width = Math.max(0, ...rows.map((r) => r.length));
+  const filled = Array.from({ length: width }, (_, i) => i).filter((i) => rows.some((r) => (r[i] ?? '').trim()));
+  const at = (pos: number) => (pos >= 0 && pos < filled.length ? filled[pos] : NONE);
+  return {
+    publicId: at(SHEET_LAYOUT.publicId),
+    name: at(SHEET_LAYOUT.name),
+    birthDate: at(SHEET_LAYOUT.birthDate),
+    age: at(SHEET_LAYOUT.age),
+    wantedGift: at(SHEET_LAYOUT.wantedGift),
+    motherName: at(SHEET_LAYOUT.motherName),
+  };
+}
+
 /** Linha do cabeçalho (procurada nas primeiras linhas, para ignorar títulos acima dele), ou -1. */
 function findHeaderRow(rows: string[][]) {
   return rows.slice(0, 5).findIndex((r) => r.some((c) => HEADER_ALIASES.name.includes(normalize(c))));
@@ -203,15 +236,16 @@ export default function PasteMigration({
   const [giftEdits, setGiftEdits] = useState<Record<number, string>>({});
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const [photos, setPhotos] = useState<Record<string, File>>({}); // por childId
-  const [photoIssues, setPhotoIssues] = useState<string[]>([]);
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]); // todos os arquivos enviados no lote
   const [showMissing, setShowMissing] = useState(false);
   const [editingChild, setEditingChild] = useState<Set<number>>(new Set()); // linhas com a escolha da criança aberta
 
   const [frame, setFrame] = useState<Frame | null>(null);
+  const [frameIsCity, setFrameIsCity] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
 
-  const bulkPhotoInput = useRef<HTMLInputElement>(null);
+  const photosSection = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     (async () => {
@@ -272,26 +306,37 @@ export default function PasteMigration({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cityId, communityId, sourceCampaignId, targetCampaign.id]);
 
-  // ---- layout ativo da campanha de destino (a foto nova é composta com ele) ----
+  // ---- layout da cidade na campanha de destino (senão o padrão): a foto nova é composta com ele ----
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`/api/admin/campaigns/${targetCampaign.id}/layouts`, { cache: 'no-store', credentials: 'include' });
-        if (!res.ok) { setFrame(null); return; }
-        const list: Frame[] = await res.json();
-        setFrame(Array.isArray(list) ? list.find((f) => f.active) ?? null : null);
+        const [resFrames, resByCity] = await Promise.all([
+          fetch(`/api/admin/campaigns/${targetCampaign.id}/layouts`, { cache: 'no-store', credentials: 'include' }),
+          fetch(`/api/admin/campaigns/${targetCampaign.id}/city-layouts`, { cache: 'no-store', credentials: 'include' }),
+        ]);
+        const list: Frame[] = resFrames.ok ? await resFrames.json() : [];
+        const byCity: { cityId: string; frameId: string }[] = resByCity.ok ? await resByCity.json() : [];
+        const cityFrameId = byCity.find((l) => l.cityId === cityId)?.frameId;
+        const cityFrame = list.find((f) => f.id === cityFrameId);
+        setFrame(cityFrame ?? list.find((f) => f.active) ?? null);
+        setFrameIsCity(!!cityFrame);
       } catch {
         setFrame(null);
       }
     })();
-  }, [targetCampaign.id]);
+  }, [targetCampaign.id, cityId]);
 
   // ---- tabela colada ----
   const table = useMemo(() => parseClipboardTable(rawText), [rawText]);
   const headers = headerRow >= 0 ? table[headerRow] ?? [] : null;
   const dataRows = useMemo(() => table.slice(headerRow + 1), [table, headerRow]);
   const columnCount = Math.max(0, ...table.map((r) => r.length));
-  const columnLabel = (i: number) => (headers?.[i] ? `${headers[i]} (col. ${i + 1})` : `Coluna ${i + 1}`);
+  // colunas sem nenhum dado (comuns na planilha) ficam de fora das opções
+  const filledColumns = useMemo(
+    () => Array.from({ length: columnCount }, (_, i) => i).filter((i) => table.some((r) => (r[i] ?? '').trim())),
+    [table, columnCount],
+  );
+  const columnLabel = (i: number) => `${columnLetter(i)}${headers?.[i] ? ` · ${headers[i]}` : ''}`;
 
   function handleTextChange(text: string) {
     setRawText(text);
@@ -305,7 +350,8 @@ export default function PasteMigration({
     const header = findHeaderRow(parsed);
     setHeaderRow(header);
     // com cabeçalho, segue os nomes das colunas; sem ele, assume o formato padrão da planilha
-    setColMap(header >= 0 ? columnsFromHeader(parsed[header]) : SHEET_LAYOUT);
+    // contando só as colunas com dados (as em branco no meio são puladas)
+    setColMap(header >= 0 ? columnsFromHeader(parsed[header]) : layoutOverFilledColumns(parsed));
   }
 
   function toggleHeader(on: boolean) {
@@ -452,8 +498,18 @@ export default function PasteMigration({
   }, [photos]);
   useEffect(() => () => Object.values(photoUrls).forEach((u) => URL.revokeObjectURL(u)), [photoUrls]);
 
+  // arquivos enviados que não ficaram associados a nenhuma linha
+  const unassignedFiles = useMemo(() => {
+    const used = new Set(Object.values(photos));
+    return photoFiles.filter((f) => !used.has(f));
+  }, [photoFiles, photos]);
+
+  /** Recebe os arquivos (vários de uma vez) e associa cada um pelo ID no início do nome ou pelo nome da criança. */
   function addPhotos(files: FileList | null) {
     if (!files?.length) return;
+    const incoming = Array.from(files);
+    setPhotoFiles((prev) => [...prev.filter((p) => !incoming.some((f) => f.name === p.name)), ...incoming]);
+
     const byId = new Map<number, string>();
     const byName = new Map<string, string>();
     rows.forEach((r) => {
@@ -468,16 +524,25 @@ export default function PasteMigration({
     });
 
     const next = { ...photos };
-    const issues: string[] = [];
-    Array.from(files).forEach((f) => {
+    incoming.forEach((f) => {
       const base = f.name.replace(/\.[^.]+$/, '');
       const pid = base.match(/^(\d{1,9})/)?.[1];
-      const key = (pid ? byId.get(Number(pid)) : undefined) ?? byName.get(normalize(base));
+      // "123_foto.jpg" → ID 123; "Maria Silva.jpg" → nome
+      const key = (pid ? byId.get(Number(pid)) : undefined) ?? byName.get(normalize(base.replace(/^\d+[\s_-]*/, '')));
       if (key) next[key] = f;
-      else issues.push(f.name);
     });
     setPhotos(next);
-    setPhotoIssues(issues);
+  }
+
+  /** Foto escolhida direto na linha: entra na lista do lote e fica associada à linha. */
+  function pickRowFile(key: string, file: File | null) {
+    if (file) setPhotoFiles((prev) => [...prev.filter((p) => p.name !== file.name), file]);
+    setRowPhoto(key, file);
+  }
+
+  /** Associação manual (como no cadastro guiado): escolhe um dos arquivos enviados para a linha. */
+  function assignFile(key: string, fileName: string) {
+    setRowPhoto(key, fileName ? photoFiles.find((f) => f.name === fileName) ?? null : null);
   }
 
   function setRowPhoto(key: string, file: File | null) {
@@ -504,7 +569,7 @@ export default function PasteMigration({
     setGiftEdits({});
     setExcluded(new Set());
     setPhotos({});
-    setPhotoIssues([]);
+    setPhotoFiles([]);
   }
 
   // ---- migrar (e cadastrar as novas) ----
@@ -668,40 +733,75 @@ export default function PasteMigration({
           />
 
           {table.length > 0 && (
-            <details className="mt-3 text-sm">
-              <summary className="cursor-pointer text-gray-600 hover:text-gray-900">
-                Colunas: {headerRow >= 0 ? `cabeçalho na linha ${headerRow + 1}` : 'sem cabeçalho (formato padrão ID, CRIANÇA, NASCIM, IDADE, PRESENTE, MÃE)'}
-                {colMap.name === NONE && <span className="text-red-700"> · coluna CRIANÇA não encontrada</span>}
-              </summary>
-              <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                {([
-                  ['publicId', 'ID (campanha nova)'],
-                  ['name', 'Criança'],
-                  ['birthDate', 'Nascimento'],
-                  ['age', 'Idade'],
-                  ['wantedGift', 'Presente'],
-                  ['motherName', 'Mãe'],
-                ] as const).map(([key, label]) => (
-                  <div key={key}>
-                    <label className="text-xs font-semibold text-gray-600 mb-1 block">{label}</label>
+            <div className="mt-4 rounded-xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <Columns2 className="w-5 h-5 text-blue-600" /> Mapeie as colunas
+                </h3>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input type="checkbox" checked={headerRow >= 0} onChange={(e) => toggleHeader(e.target.checked)} className="w-4 h-4" />
+                  Tem cabeçalho{headerRow >= 0 ? ` (linha ${headerRow + 1})` : ''}
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {COLUMN_FIELDS.map(({ key, label }) => (
+                  <div key={key} className="flex items-center gap-3">
+                    <label className="w-48 text-sm text-gray-700">{label}</label>
                     <select
                       value={colMap[key]}
                       onChange={(e) => setColMap((m) => ({ ...m, [key]: Number(e.target.value) }))}
-                      className="w-full p-2 border border-gray-300 rounded-lg bg-white text-sm"
+                      className={`flex-1 rounded-lg border p-2 bg-white text-sm ${key === 'name' && colMap.name === NONE ? 'border-red-400' : 'border-gray-300'}`}
                     >
-                      <option value={NONE}>— nenhuma —</option>
-                      {Array.from({ length: columnCount }, (_, i) => (
+                      <option value={NONE}>— (ignorar)</option>
+                      {filledColumns.map((i) => (
                         <option key={i} value={i}>{columnLabel(i)}</option>
                       ))}
                     </select>
                   </div>
                 ))}
-                <label className="flex items-center gap-2 text-sm text-gray-700 sm:pt-6">
-                  <input type="checkbox" checked={headerRow >= 0} onChange={(e) => toggleHeader(e.target.checked)} className="w-4 h-4" />
-                  Tem cabeçalho
-                </label>
               </div>
-            </details>
+              {colMap.name === NONE && (
+                <p className="mt-2 text-sm text-red-700">Escolha a coluna com o nome da criança — é por ela que o sistema encontra cada uma.</p>
+              )}
+              {filledColumns.length < columnCount && (
+                <p className="mt-2 text-xs text-gray-500">
+                  {columnCount - filledColumns.length} coluna{columnCount - filledColumns.length === 1 ? '' : 's'} em branco ignorada{columnCount - filledColumns.length === 1 ? '' : 's'}.
+                </p>
+              )}
+
+              {/* prévia: só colunas com dados, destacando as mapeadas */}
+              <div className="mt-3 overflow-x-auto">
+                <table className="min-w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50">
+                      {filledColumns.map((i) => {
+                        const field = COLUMN_FIELDS.find((f) => colMap[f.key] === i);
+                        return (
+                          <th key={i} className={`px-2 py-1.5 text-left font-semibold whitespace-nowrap ${field ? 'text-blue-700' : 'text-gray-400'}`}>
+                            {columnLabel(i)}
+                            {field && <div className="font-normal">→ {field.label}</div>}
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {dataRows.slice(0, 5).map((r, ri) => (
+                      <tr key={ri}>
+                        {filledColumns.map((i) => {
+                          const mapped = COLUMN_FIELDS.some((f) => colMap[f.key] === i);
+                          return (
+                            <td key={i} className={`px-2 py-1.5 whitespace-nowrap ${mapped ? 'text-gray-800' : 'text-gray-400'}`}>{r[i] ?? ''}</td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {dataRows.length > 5 && <p className="text-xs text-gray-500 mt-1">Mostrando 5 de {dataRows.length} linhas.</p>}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -719,20 +819,11 @@ export default function PasteMigration({
               {blockingRows.length > 0 && <span className="text-red-700"><strong>{blockingRows.length}</strong> com problema de ID</span>}
             </div>
             <div className="flex flex-wrap gap-2">
-              <input
-                ref={bulkPhotoInput}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => { addPhotos(e.target.files); e.target.value = ''; }}
-              />
               <button
-                onClick={() => bulkPhotoInput.current?.click()}
+                onClick={() => photosSection.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
-                title="Os arquivos são associados pelo ID no início do nome (ex.: 15.jpg) ou pelo nome da criança"
               >
-                <ImagePlus className="w-4 h-4" /> Adicionar fotos novas
+                <ImagePlus className="w-4 h-4" /> Fotos em lote{photoFiles.length ? ` (${photoFiles.length})` : ''}
               </button>
               <button
                 onClick={submit}
@@ -747,17 +838,11 @@ export default function PasteMigration({
             </div>
           </div>
 
-          {photoIssues.length > 0 && (
-            <div className="mb-3 text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl p-3">
-              Não consegui associar {photoIssues.length} foto{photoIssues.length === 1 ? '' : 's'} a nenhuma linha: {photoIssues.join(', ')}.
-              Use o ID da criança no início do nome do arquivo (ex.: <code>15.jpg</code>) ou escolha a foto na linha.
-            </div>
-          )}
-          {!frame && (
-            <p className="mb-3 text-xs text-gray-500">
-              A campanha de destino não tem layout ativo: as fotos novas serão salvas sem moldura.
-            </p>
-          )}
+          <p className="mb-3 text-xs text-gray-500">
+            {frame
+              ? <>Fotos novas serão montadas com o layout <strong>{frame.name || 'sem nome'}</strong> ({frameIsCity ? 'definido para esta cidade' : 'padrão da campanha'}).</>
+              : 'A campanha de destino não tem layout: as fotos novas serão salvas sem moldura.'}
+          </p>
 
           <div className="overflow-x-auto -mx-4 sm:mx-0">
             <table className="min-w-full text-sm">
@@ -926,7 +1011,7 @@ export default function PasteMigration({
                                   type="file"
                                   accept="image/*"
                                   className="hidden"
-                                  onChange={(e) => { setRowPhoto(r.photoKey, e.target.files?.[0] ?? null); e.target.value = ''; }}
+                                  onChange={(e) => { pickRowFile(r.photoKey, e.target.files?.[0] ?? null); e.target.value = ''; }}
                                 />
                               </label>
                               {newPhoto ? (
@@ -943,6 +1028,86 @@ export default function PasteMigration({
                 })}
               </tbody>
             </table>
+          </div>
+
+          {/* Fotos em lote (mesmo formato do cadastro guiado) */}
+          <div ref={photosSection} className="mt-6 rounded-xl border border-gray-200 p-4 scroll-mt-4">
+            <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+              <FileImage className="w-5 h-5 text-blue-600" /> Fotos em lote
+            </h3>
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={(e) => { addPhotos(e.target.files); e.target.value = ''; }}
+                className="text-sm"
+              />
+              <p className="text-xs text-gray-500">
+                Dica: nomeie os arquivos como <strong>123_foto.jpg</strong> (onde 123 é o ID da planilha) ou exatamente o nome da criança.
+              </p>
+            </div>
+
+            {photoFiles.length > 0 && (
+              <>
+                <div className="mt-3 text-sm text-gray-700 flex flex-wrap gap-x-3">
+                  <span><strong>{photoFiles.length}</strong> arquivo{photoFiles.length === 1 ? '' : 's'}</span>
+                  <span className="text-emerald-700"><strong>{selectedWithPhoto.length}</strong> criança{selectedWithPhoto.length === 1 ? '' : 's'} com foto</span>
+                  <span className="text-gray-500"><strong>{selectedRows.length - selectedWithPhoto.length}</strong> sem foto nova</span>
+                </div>
+
+                <div className="mt-3 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50">
+                        <th className="px-3 py-2 text-left">ID</th>
+                        <th className="px-3 py-2 text-left">Criança</th>
+                        <th className="px-3 py-2 text-left">Foto associada</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {selectedRows.map((r) => {
+                        const file = photos[r.photoKey] ?? null;
+                        return (
+                          <tr key={r.line}>
+                            <td className="px-3 py-2 font-mono">{r.newId ?? r.child?.currentPublicId ?? '—'}</td>
+                            <td className="px-3 py-2">
+                              {r.child?.name ?? r.name}
+                              {r.isNew && <span className="ml-2 text-xs text-blue-700">nova</span>}
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <ImageIcon className={`w-4 h-4 ${file ? 'text-emerald-600' : 'text-gray-400'}`} />
+                                <select
+                                  className="rounded border border-gray-300 p-1 text-sm max-w-[260px]"
+                                  value={file ? file.name : ''}
+                                  onChange={(e) => assignFile(r.photoKey, e.target.value)}
+                                >
+                                  <option value="">(sem foto)</option>
+                                  {photoFiles.map((f) => (
+                                    <option key={f.name} value={f.name}>{f.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {unassignedFiles.length > 0 && (
+                  <div className="mt-3 p-3 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-sm">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <AlertTriangle className="w-4 h-4" /> {unassignedFiles.length} arquivo{unassignedFiles.length === 1 ? '' : 's'} sem criança associada
+                    </div>
+                    <p className="mt-1 text-xs">{unassignedFiles.map((f) => f.name).join(', ')}</p>
+                    <p className="mt-1 text-xs">Escolha o arquivo na linha da criança acima.</p>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           {sourceCampaignId && missingFromSheet.length > 0 && (
