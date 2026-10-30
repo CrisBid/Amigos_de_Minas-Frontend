@@ -35,6 +35,16 @@ const normalize = <T,>(raw: any, p: number): PageResp<T> => {
 };
 
 /* ===================== Página ===================== */
+/** Mensagem legível do erro do backend ({ message } do Nest) ou o texto cru. */
+async function errorMessage(res: Response) {
+  const text = await res.text().catch(() => '');
+  try {
+    const body = JSON.parse(text);
+    if (body?.message) return Array.isArray(body.message) ? body.message.join(' ') : String(body.message);
+  } catch { /* não é JSON */ }
+  return text || `Erro ${res.status}`;
+}
+
 export default function AdminCommunitiesPage() {
   const [data, setData] = useState<PageResp<Community> | null>(null);
   const [loading, setLoading] = useState(false);
@@ -281,7 +291,7 @@ function CreateCommunityButton({ cities, onCreated }: { cities: CityMin[]; onCre
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(payload),
             });
-            if (!res.ok) { alert(await res.text()); return; }
+            if (!res.ok) { alert(await errorMessage(res)); return; }
             setOpen(false); onCreated();
           }}
         />
@@ -309,7 +319,7 @@ function EditCommunityButton({ community, cities, onUpdated }: { community: Comm
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(payload),
             });
-            if (!res.ok) { alert(await res.text()); return; }
+            if (!res.ok) { alert(await errorMessage(res)); return; }
             setOpen(false); onUpdated();
           }}
         />
@@ -321,7 +331,7 @@ function DeleteCommunityButton({ community, onDeleted }: { community: Community;
   const del = async () => {
     if (!confirm(`Excluir a comunidade "${community.name}"?`)) return;
     const res = await fetch(`/api/admin/communities/${community.id}`, { method: 'DELETE', credentials: 'include' });
-    if (!res.ok) { alert(await res.text()); return; }
+    if (!res.ok) { alert(await errorMessage(res)); return; }
     onDeleted();
   };
   return (
