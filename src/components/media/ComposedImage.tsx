@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type Gravity =
   | 'north'|'northeast'|'east'|'southeast'|'south'|'southwest'|'west'|'northwest'|'center';
@@ -78,10 +78,18 @@ export default function ComposedImage({
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
+  // só limpa a imagem quando muda a foto ou o layout; ao mudar só a config (editor),
+  // mantém a anterior até a nova ficar pronta, sem piscar "Carregando…"
+  const sourceKey = `${photoUrl}|${layoutUrl}`;
+  const lastSource = useRef(sourceKey);
+
   useEffect(() => {
     let cancelled = false;
     setFailed(false);
-    setSrc(null);
+    if (lastSource.current !== sourceKey) {
+      lastSource.current = sourceKey;
+      setSrc(null);
+    }
 
     (async () => {
       try {

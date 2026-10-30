@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, ImagePlus, LayoutTemplate, Loader2, Search, Star, Trash2 } from 'lucide-react';
+import { CheckCircle2, ImagePlus, LayoutTemplate, Loader2, PencilRuler, Search, Star, Trash2 } from 'lucide-react';
 import { composeConfigForFrame } from '@/components/media/composeConfig';
+import ComposerModal from '@/components/media/ComposerModal';
+import { placeholderPhoto, SAMPLE_CHILD } from '@/components/media/LayoutComposer';
 
 type Frame = { id: string; url: string; name?: string | null; active?: boolean; config?: unknown };
 type City = { id: string; name: string; state?: string | null };
@@ -36,6 +38,12 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
   const [uploading, setUploading] = useState(false);
   const [savingCity, setSavingCity] = useState<string | null>(null);
   const [cityQuery, setCityQuery] = useState('');
+
+  // enquadramento padrão do layout (vale para toda foto nova montada com ele)
+  const [configuring, setConfiguring] = useState<Frame | null>(null);
+  const [applyToExisting, setApplyToExisting] = useState(false);
+  const [samplePhoto, setSamplePhoto] = useState('');
+  useEffect(() => { setSamplePhoto(placeholderPhoto()); }, []);
 
   async function loadFrames() {
     const res = await fetch(`/api/admin/campaigns/${campaignId}/layouts`, { cache: 'no-store', credentials: 'include' });
@@ -144,6 +152,37 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
     }
   }
 
+  async function saveFrameConfig(frame: Frame, config: unknown) {
+    const res = await fetch(`/api/admin/campaign-frames/${frame.id}`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ config }),
+    });
+    if (!res.ok) { alert(await extractError(res, 'Falha ao salvar o enquadramento do layout.')); return; }
+
+    if (applyToExisting) {
+      const r2 = await fetch(`/api/admin/campaign-frames/${frame.id}/apply-to-images`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ config }),
+      });
+      if (!r2.ok) alert(await extractError(r2, 'O layout foi salvo, mas não consegui aplicar às fotos já enviadas.'));
+      else {
+        const { updated } = await r2.json().catch(() => ({ updated: 0 }));
+        alert(`Enquadramento salvo e aplicado a ${updated} foto(s) já enviada(s) com este layout.`);
+      }
+    }
+    setConfiguring(null);
+    setApplyToExisting(false);
+    await loadFrames();
+  }
+
+  // cidades que usam o layout: escolhido para elas, ou sem escolha quando ele é o padrão
+  const citiesUsing = (frame: Frame) =>
+    cities.filter((c) => (byCity[c.id] ? byCity[c.id] === frame.id : !!frame.active)).map((c) => c.name);
+
   const q = cityQuery.trim().toLowerCase();
   const shownCities = cities.filter((c) => !q || c.name.toLowerCase().includes(q));
 
@@ -172,6 +211,15 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
                 <img src={f.url} alt={frameLabel(f, i)} className="w-full aspect-[4/5] object-contain bg-gray-50" />
                 <div className="p-2 text-xs">
                   <p className="font-semibold text-gray-900 truncate" title={frameLabel(f, i)}>{frameLabel(f, i)}</p>
+                  <p className={`mt-0.5 ${f.config ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    {f.config ? 'Enquadramento configurado' : 'Sem enquadramento'}
+                  </p>
+                  <button
+                    onClick={() => setConfiguring(f)}
+                    className="mt-1.5 w-full inline-flex items-center justify-center gap-1 px-2 py-1 rounded-md border hover:bg-gray-50"
+                  >
+                    <PencilRuler className="w-3.5 h-3.5" /> Configurar enquadramento
+                  </button>
                   <div className="mt-1 flex items-center justify-between gap-1">
                     {f.active ? (
                       <span className="inline-flex items-center gap-1 text-blue-700"><Star className="w-3 h-3" /> Padrão</span>
@@ -253,6 +301,18 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
                           <option value="">Padrão da campanha ({nameOf(defaultFrame?.id)})</option>
                           {frames.map((f, i) => (<option key={f.id} value={f.id}>{frameLabel(f, i)}</option>))}
                         </select>
+                        {(() => {
+                          const used = frames.find((f) => f.id === chosen) ?? defaultFrame;
+                          return used ? (
+                            <button
+                              onClick={() => setConfiguring(used)}
+                              className="p-1.5 rounded-lg border hover:bg-gray-50"
+                              title={`Configurar o enquadramento do layout usado por ${c.name}`}
+                            >
+                              <PencilRuler className="w-4 h-4" />
+                            </button>
+                          ) : null;
+                        })()}
                       </div>
                     </div>
                   );
@@ -263,6 +323,32 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
           )}
         </>
       )}
+
+      {configuring && (() => {
+        const using = citiesUsing(configuring);
+        return (
+          <ComposerModal
+            title={`Enquadramento padrão · ${frameLabel(configuring, frameIndex.get(configuring.id) ?? 0)}`}
+            subtitle={using.length ? `Usado por: ${using.join(', ')}` : 'Nenhuma cidade usa este layout ainda'}
+            photoUrl={samplePhoto}
+            layoutUrl={configuring.url}
+            initialConfig={composeConfigForFrame(configuring.config)}
+            resetConfig={composeConfigForFrame(null)}
+            resetLabel="Modelo padrão"
+            sample={{ ...SAMPLE_CHILD, cityName: using[0] ?? SAMPLE_CHILD.cityName }}
+            allowPhotoPick
+            footer={
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={applyToExisting} onChange={(e) => setApplyToExisting(e.target.checked)} />
+                Aplicar também às fotos já enviadas com este layout
+                <span className="text-xs text-gray-500">(substitui ajustes individuais)</span>
+              </label>
+            }
+            onClose={() => { setConfiguring(null); setApplyToExisting(false); }}
+            onSave={(cfg) => saveFrameConfig(configuring, cfg)}
+          />
+        );
+      })()}
     </div>
   );
 }

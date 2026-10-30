@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, ClipboardPaste, Columns2, FileImage, Image as ImageIcon, ImagePlus, Loader2, Trash2, X,
+  AlertTriangle, ArrowRight, CheckCircle2, ClipboardPaste, Columns2, FileImage, Image as ImageIcon, ImagePlus, Loader2, PencilRuler, Trash2, X,
 } from 'lucide-react';
-import { composeConfigForFrame } from '@/components/media/composeConfig';
+import { ComposeConfig, composeConfigForFrame } from '@/components/media/composeConfig';
+import ComposerModal from '@/components/media/ComposerModal';
+import { placeholderPhoto } from '@/components/media/LayoutComposer';
 
 type Campaign = { id: string; name: string; slug: string; year?: number | null };
 type City = { id: string; name: string; state?: string | null };
@@ -25,6 +27,7 @@ type Candidate = {
   currentGift: string | null;
   targetGift: string | null;
   currentPhotoUrl: string | null;
+  currentRawPhotoUrl?: string | null; // foto sem layout, para a prévia do enquadramento
   targetPhotoUrl: string | null;
 };
 
@@ -243,6 +246,13 @@ export default function PasteMigration({
 
   const [frame, setFrame] = useState<Frame | null>(null);
   const [frameIsCity, setFrameIsCity] = useState(false);
+
+  // enquadramento usado nas fotos deste lote (null = o padrão do layout)
+  const [batchConfig, setBatchConfig] = useState<ComposeConfig | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [saveAsLayoutDefault, setSaveAsLayoutDefault] = useState(false);
+  const [samplePhoto, setSamplePhoto] = useState('');
+  useEffect(() => { setSamplePhoto(placeholderPhoto()); }, []);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
 
@@ -321,6 +331,7 @@ export default function PasteMigration({
         const cityFrame = list.find((f) => f.id === cityFrameId);
         setFrame(cityFrame ?? list.find((f) => f.active) ?? null);
         setFrameIsCity(!!cityFrame);
+        setBatchConfig(null); // outro layout: o ajuste do lote não vale mais
       } catch {
         setFrame(null);
       }
@@ -620,7 +631,7 @@ export default function PasteMigration({
           const fd = new FormData();
           fd.append('file', photos[r.photoKey]);
           // igual ao cadastro guiado: composição completa (padrão + layout), usada pelo apadrinhamento para montar a arte
-          fd.append('Config', JSON.stringify(composeConfigForFrame(frame?.config)));
+          fd.append('Config', JSON.stringify(batchConfig ?? composeConfigForFrame(frame?.config)));
           const qs = new URLSearchParams({ campaignId: targetCampaign.id });
           if (frame?.id) qs.set('layoutId', frame.id);
           const up = await fetch(`/api/admin/children/${childId}/photo?${qs.toString()}`, {
@@ -840,11 +851,25 @@ export default function PasteMigration({
             </div>
           </div>
 
-          <p className="mb-3 text-xs text-gray-500">
-            {frame
-              ? <>Fotos novas serão montadas com o layout <strong>{frame.name || 'sem nome'}</strong> ({frameIsCity ? 'definido para esta cidade' : 'padrão da campanha'}).</>
-              : 'A campanha de destino não tem layout: as fotos novas serão salvas sem moldura.'}
-          </p>
+          <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-gray-500">
+            <span>
+              {frame
+                ? <>Fotos novas serão montadas com o layout <strong>{frame.name || 'sem nome'}</strong> ({frameIsCity ? 'definido para esta cidade' : 'padrão da campanha'})
+                    {batchConfig ? <> com o <strong className="text-blue-700">enquadramento ajustado para este lote</strong></> : <> com o enquadramento padrão dele</>}.</>
+                : 'A campanha de destino não tem layout: as fotos novas serão salvas sem moldura.'}
+            </span>
+            {frame && (
+              <button
+                onClick={() => setComposerOpen(true)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-white text-gray-700 hover:bg-gray-50"
+              >
+                <PencilRuler className="w-3.5 h-3.5" /> Ajustar enquadramento das fotos
+              </button>
+            )}
+            {batchConfig && (
+              <button onClick={() => setBatchConfig(null)} className="text-gray-500 hover:text-gray-800 underline">voltar ao padrão do layout</button>
+            )}
+          </div>
 
           <div className="overflow-x-auto -mx-4 sm:mx-0">
             <table className="min-w-full text-sm">
@@ -1130,6 +1155,60 @@ export default function PasteMigration({
           )}
         </div>
       )}
+
+      {composerOpen && frame && (() => {
+        // prévia com a primeira criança do lote que tem foto nova (senão, a foto atual dela ou uma silhueta)
+        const withNew = selectedRows.find((r) => photoUrls[r.photoKey]);
+        const ref = withNew ?? selectedRows.find((r) => r.child?.currentRawPhotoUrl) ?? selectedRows[0];
+        const photo = (ref && photoUrls[ref.photoKey]) || ref?.child?.currentRawPhotoUrl || samplePhoto;
+        const refAge = ref?.age ?? null;
+        const cityLabel = cities.find((c) => c.id === cityId)?.name ?? '';
+        const communityLabel = communities.find((c) => c.id === communityId)?.name ?? ref?.child?.community?.name ?? '';
+        return (
+          <ComposerModal
+            title="Enquadramento das fotos desta migração"
+            subtitle={`Layout ${frame.name || 'sem nome'} · vale para as ${selectedWithPhoto.length} foto(s) nova(s) do lote`}
+            photoUrl={photo}
+            layoutUrl={frame.url}
+            initialConfig={batchConfig ?? composeConfigForFrame(frame.config)}
+            resetConfig={composeConfigForFrame(frame.config)}
+            sample={{
+              name: ref?.child?.name ?? ref?.name ?? 'Nome da criança',
+              publicId: ref?.newId ?? ref?.child?.currentPublicId ?? '',
+              ageText: refAge != null ? `${refAge} ${refAge === 1 ? 'ano' : 'anos'}` : '',
+              wantedGift: ref?.gift || ref?.child?.currentGift || '',
+              cityName: cityLabel,
+              communityName: communityLabel,
+            }}
+            allowPhotoPick
+            saveLabel="Usar nesta migração"
+            footer={
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={saveAsLayoutDefault} onChange={(e) => setSaveAsLayoutDefault(e.target.checked)} />
+                Salvar também como padrão do layout {frameIsCity ? 'desta cidade' : 'da campanha'}
+              </label>
+            }
+            onClose={() => setComposerOpen(false)}
+            onSave={async (cfg) => {
+              if (saveAsLayoutDefault) {
+                const res = await fetch(`/api/admin/campaign-frames/${frame.id}`, {
+                  method: 'PATCH',
+                  credentials: 'include',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ config: cfg }),
+                });
+                if (!res.ok) { alert(await extractError(res, 'Falha ao salvar o padrão do layout.')); return; }
+                setFrame({ ...frame, config: cfg });
+                setBatchConfig(null); // agora é o próprio padrão do layout
+              } else {
+                setBatchConfig(cfg);
+              }
+              setSaveAsLayoutDefault(false);
+              setComposerOpen(false);
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
