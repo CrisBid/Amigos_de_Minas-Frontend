@@ -10,6 +10,8 @@ type CommunityOpt = { id: string; name: string; cityId?: string | null };
 type Candidate = {
   id: string;
   name: string;
+  birthDate?: string | null;
+  motherName?: string | null;
   cityName?: string | null;
   city?: { id: string; name: string } | null;
   community?: { id: string; name: string } | null;
@@ -25,9 +27,17 @@ type Candidate = {
 
 type UsedId = { publicId: number; childId: string; name: string };
 
-type ColumnMap = { name: number; publicId: number; wantedGift: number };
+type ColumnMap = { name: number; publicId: number; wantedGift: number; birthDate: number; motherName: number };
 
-type SheetRow = { line: number; name: string; sheetId: number | null; gift: string };
+type SheetRow = {
+  line: number;
+  name: string;
+  sheetId: number | null;
+  gift: string;
+  birthDate: string | null; // yyyy-mm-dd
+  birthText: string;
+  motherName: string;
+};
 
 type Frame = { id: string; active?: boolean; config?: unknown };
 
@@ -39,6 +49,33 @@ type MatchKind = 'exact' | 'approx' | 'ambiguous' | 'none' | 'manual';
 
 const NONE = -1;
 const STOPWORDS = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
+
+/** Formato da planilha da associação: ID | CRIANÇA | NASCIM | IDADE | PRESENTE | MÃE */
+const SHEET_LAYOUT: ColumnMap = { publicId: 0, name: 1, birthDate: 2, wantedGift: 4, motherName: 5 };
+
+const HEADER_ALIASES: Record<keyof ColumnMap, string[]> = {
+  publicId: ['id', 'publicid', 'codigo', 'cod', 'numero', 'n', 'no', 'id novo', 'novo id'],
+  name: ['crianca', 'nome', 'name', 'nome da crianca', 'child'],
+  birthDate: ['nascim', 'nasc', 'nascimento', 'data de nascimento', 'data nasc', 'dn'],
+  wantedGift: ['presente', 'presente desejado', 'wantedgift', 'pedido', 'desejo', 'presente novo', 'novo presente'],
+  motherName: ['mae', 'nome da mae', 'mother', 'responsavel'],
+};
+
+/** "05/03/2017", "5/3/17" ou "2017-03-05" → "2017-03-05". */
+function parseSheetDate(raw?: string): string | null {
+  const s = (raw ?? '').trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const br = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/);
+  if (!br) return null;
+  const [, d, m, y] = br;
+  const year = y.length === 2 ? 2000 + Number(y) : Number(y);
+  const date = new Date(Date.UTC(year, Number(m) - 1, Number(d)));
+  if (date.getUTCDate() !== Number(d) || date.getUTCMonth() !== Number(m) - 1) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+const formatDate = (iso?: string | null) => (iso ? iso.slice(0, 10).split('-').reverse().join('/') : '—');
 
 async function extractError(res: Response, fallback: string) {
   try {
@@ -107,24 +144,20 @@ function parseClipboardTable(text: string): string[][] {
 
 const isIdCell = (s?: string) => /^\d{1,9}$/.test((s ?? '').trim());
 
-function guessColumns(headers: string[] | null, rows: string[][]): ColumnMap {
-  const width = Math.max(0, ...rows.map((r) => r.length), headers?.length ?? 0);
-  const cols = Array.from({ length: width }, (_, i) => i);
+/** Linha do cabeçalho (procurada nas primeiras linhas, para ignorar títulos acima dele), ou -1. */
+function findHeaderRow(rows: string[][]) {
+  return rows.slice(0, 5).findIndex((r) => r.some((c) => HEADER_ALIASES.name.includes(normalize(c))));
+}
 
-  if (headers) {
-    const find = (alts: string[]) => cols.find((i) => alts.includes(normalize(headers[i])));
-    const name = find(['nome', 'name', 'crianca', 'nome da crianca', 'child']) ?? NONE;
-    const publicId = find(['id', 'publicid', 'codigo', 'cod', 'numero', 'n', 'no', 'id novo', 'novo id']) ?? NONE;
-    const wantedGift = find(['presente', 'presente desejado', 'wantedgift', 'pedido', 'desejo', 'presente novo', 'novo presente']) ?? NONE;
-    if (name !== NONE) return { name, publicId, wantedGift };
-  }
-
-  // sem cabeçalho reconhecível: ID = primeira coluna numérica, nome = próxima de texto, presente = a seguinte
-  const sample = rows.slice(0, 20);
-  const numericShare = (i: number) => sample.filter((r) => isIdCell(r[i])).length / Math.max(sample.length, 1);
-  const publicId = cols.find((i) => numericShare(i) >= 0.6) ?? NONE;
-  const textCols = cols.filter((i) => i !== publicId && numericShare(i) < 0.6);
-  return { name: textCols[0] ?? 0, publicId, wantedGift: textCols[1] ?? NONE };
+function columnsFromHeader(headers: string[]): ColumnMap {
+  const find = (key: keyof ColumnMap) => headers.findIndex((h) => HEADER_ALIASES[key].includes(normalize(h)));
+  return {
+    publicId: find('publicId'),
+    name: find('name'),
+    birthDate: find('birthDate'),
+    wantedGift: find('wantedGift'),
+    motherName: find('motherName'),
+  };
 }
 
 export default function PasteMigration({
@@ -150,8 +183,8 @@ export default function PasteMigration({
 
   // ---- planilha ----
   const [rawText, setRawText] = useState('');
-  const [hasHeader, setHasHeader] = useState(true);
-  const [colMap, setColMap] = useState<ColumnMap>({ name: 0, publicId: NONE, wantedGift: NONE });
+  const [headerRow, setHeaderRow] = useState(0); // índice da linha de cabeçalho, -1 = sem cabeçalho
+  const [colMap, setColMap] = useState<ColumnMap>(SHEET_LAYOUT);
 
   // ajustes feitos na tela, por linha da planilha
   const [choice, setChoice] = useState<Record<number, string>>({});
@@ -244,8 +277,8 @@ export default function PasteMigration({
 
   // ---- tabela colada ----
   const table = useMemo(() => parseClipboardTable(rawText), [rawText]);
-  const headers = hasHeader ? table[0] ?? [] : null;
-  const dataRows = useMemo(() => (hasHeader ? table.slice(1) : table), [table, hasHeader]);
+  const headers = headerRow >= 0 ? table[headerRow] ?? [] : null;
+  const dataRows = useMemo(() => table.slice(headerRow + 1), [table, headerRow]);
   const columnCount = Math.max(0, ...table.map((r) => r.length));
   const columnLabel = (i: number) => (headers?.[i] ? `${headers[i]} (col. ${i + 1})` : `Coluna ${i + 1}`);
 
@@ -258,49 +291,72 @@ export default function PasteMigration({
     setExcluded(new Set());
     const parsed = parseClipboardTable(text);
     if (parsed.length === 0) return;
-    // cabeçalho = primeira linha sem nenhuma célula que pareça ID
-    const header = !parsed[0].some(isIdCell);
-    setHasHeader(header);
-    setColMap(guessColumns(header ? parsed[0] : null, header ? parsed.slice(1) : parsed));
+    const header = findHeaderRow(parsed);
+    setHeaderRow(header);
+    // com cabeçalho, segue os nomes das colunas; sem ele, assume o formato padrão da planilha
+    setColMap(header >= 0 ? columnsFromHeader(parsed[header]) : SHEET_LAYOUT);
   }
 
-  const sheetRows: SheetRow[] = useMemo(
-    () =>
-      dataRows.map((r, idx) => {
-        const rawId = colMap.publicId === NONE ? '' : r[colMap.publicId] ?? '';
-        return {
-          line: idx + 1 + (hasHeader ? 1 : 0),
-          name: colMap.name === NONE ? '' : r[colMap.name] ?? '',
-          sheetId: isIdCell(rawId) ? parseInt(rawId, 10) : null,
-          gift: colMap.wantedGift === NONE ? '' : r[colMap.wantedGift] ?? '',
-        };
-      }),
-    [dataRows, colMap, hasHeader],
-  );
+  function toggleHeader(on: boolean) {
+    setHeaderRow(on ? Math.max(findHeaderRow(table), 0) : -1);
+  }
+
+  const sheetRows: SheetRow[] = useMemo(() => {
+    const cell = (r: string[], col: number) => (col === NONE ? '' : r[col] ?? '');
+    return dataRows.map((r, idx) => {
+      const rawId = cell(r, colMap.publicId);
+      const birthText = cell(r, colMap.birthDate);
+      return {
+        line: headerRow + 2 + idx,
+        name: cell(r, colMap.name),
+        sheetId: isIdCell(rawId) ? parseInt(rawId, 10) : null,
+        gift: cell(r, colMap.wantedGift),
+        birthDate: parseSheetDate(birthText),
+        birthText,
+        motherName: cell(r, colMap.motherName),
+      };
+    }).filter((r) => r.name.trim()); // linhas sem nome (totais, rodapé) não entram
+  }, [dataRows, colMap, headerRow]);
 
   const candidateById = useMemo(() => new Map(candidates.map((c) => [c.id, c])), [candidates]);
-  const candidateTokens = useMemo(() => candidates.map((c) => ({ c, tokens: nameTokens(c.name) })), [candidates]);
+  const candidateTokens = useMemo(
+    () => candidates.map((c) => ({ c, tokens: nameTokens(c.name), mother: nameTokens(c.motherName) })),
+    [candidates],
+  );
 
-  // ---- casamento automático pelo nome ----
+  // ---- casamento automático: nome, com nascimento e mãe para desempatar ----
   const autoMatches = useMemo(() => {
     const result = new Map<number, { childId: string | null; kind: MatchKind; options: Candidate[] }>();
     for (const r of sheetRows) {
       const tokens = nameTokens(r.name);
-      let best = 0;
-      let found: Candidate[] = [];
-      for (const { c, tokens: ct } of candidateTokens) {
-        const s = nameScore(tokens, ct);
-        if (s > best) { best = s; found = [c]; }
-        else if (s === best && s > 0) found.push(c);
+      const mother = nameTokens(r.motherName);
+      const scored = candidateTokens
+        .map((x) => ({ ...x, score: nameScore(tokens, x.tokens) }))
+        .filter((x) => x.score > 0);
+
+      const sameBirth = (x: (typeof scored)[number]) => !!r.birthDate && x.c.birthDate?.slice(0, 10) === r.birthDate;
+      const sameMother = (x: (typeof scored)[number]) => mother.length > 0 && nameScore(mother, x.mother) > 0;
+
+      // 1) nome parecido + mesmo nascimento é o sinal mais forte
+      let pick = scored.filter(sameBirth);
+      if (pick.length !== 1) {
+        // 2) melhor nota de nome, desempatando por mãe e depois por estar na campanha de origem
+        const best = Math.max(0, ...scored.map((x) => x.score));
+        pick = scored.filter((x) => x.score === best);
+        for (const narrow of [sameMother, (x: (typeof scored)[number]) => x.c.inSource]) {
+          if (pick.length <= 1) break;
+          const narrowed = pick.filter(narrow);
+          if (narrowed.length >= 1) pick = narrowed;
+        }
       }
-      // homônimos: prefere quem está na campanha de origem
-      if (found.length > 1) {
-        const inSource = found.filter((c) => c.inSource);
-        if (inSource.length === 1) found = inSource;
+
+      if (pick.length === 1) {
+        result.set(r.line, { childId: pick[0].c.id, kind: pick[0].score === 3 ? 'exact' : 'approx', options: pick.map((x) => x.c) });
+      } else if (pick.length > 1) {
+        result.set(r.line, { childId: null, kind: 'ambiguous', options: pick.map((x) => x.c) });
+      } else {
+        result.set(r.line, { childId: null, kind: 'none', options: [] });
       }
-      if (found.length === 1) result.set(r.line, { childId: found[0].id, kind: best === 3 ? 'exact' : 'approx', options: found });
-      else if (found.length > 1) result.set(r.line, { childId: null, kind: 'ambiguous', options: found });
-      else result.set(r.line, { childId: null, kind: 'none', options: [] });
     }
     return result;
   }, [sheetRows, candidateTokens]);
@@ -565,36 +621,44 @@ export default function PasteMigration({
           <textarea
             value={rawText}
             onChange={(e) => handleTextChange(e.target.value)}
-            placeholder={'Selecione as colunas na planilha (Nome, ID novo, Presente), copie e cole aqui.\n\nNome\tID\tPresente\nMaria Silva\t15\tBoneca\nJoão Souza\t16\tBola'}
+            placeholder={'Copie as linhas da planilha da comunidade (com ou sem o cabeçalho) e cole aqui.\n\nID\tCRIANÇA\tNASCIM\tIDADE\tPRESENTE\tMÃE\n15\tMaria Silva\t05/03/2017\t8\tBoneca\tAna Silva\n16\tJoão Souza\t12/09/2015\t10\tBola\tRita Souza'}
             className="w-full min-h-[140px] p-3 border border-gray-300 rounded-lg font-mono text-xs"
           />
 
           {table.length > 0 && (
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              {([
-                ['name', 'Coluna do nome'],
-                ['publicId', 'Coluna do ID na campanha nova'],
-                ['wantedGift', 'Coluna do presente novo'],
-              ] as const).map(([key, label]) => (
-                <div key={key}>
-                  <label className="text-xs font-semibold text-gray-600 mb-1 block">{label}</label>
-                  <select
-                    value={colMap[key]}
-                    onChange={(e) => setColMap((m) => ({ ...m, [key]: Number(e.target.value) }))}
-                    className="w-full p-2 border border-gray-300 rounded-lg bg-white text-sm"
-                  >
-                    {key !== 'name' && <option value={NONE}>— nenhuma —</option>}
-                    {Array.from({ length: columnCount }, (_, i) => (
-                      <option key={i} value={i}>{columnLabel(i)}</option>
-                    ))}
-                  </select>
-                </div>
-              ))}
-              <label className="flex items-center gap-2 text-sm text-gray-700 sm:pt-6">
-                <input type="checkbox" checked={hasHeader} onChange={(e) => setHasHeader(e.target.checked)} className="w-4 h-4" />
-                Primeira linha é cabeçalho
-              </label>
-            </div>
+            <details className="mt-3 text-sm">
+              <summary className="cursor-pointer text-gray-600 hover:text-gray-900">
+                Colunas: {headerRow >= 0 ? `cabeçalho na linha ${headerRow + 1}` : 'sem cabeçalho (formato padrão ID, CRIANÇA, NASCIM, IDADE, PRESENTE, MÃE)'}
+                {colMap.name === NONE && <span className="text-red-700"> · coluna CRIANÇA não encontrada</span>}
+              </summary>
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                {([
+                  ['publicId', 'ID (campanha nova)'],
+                  ['name', 'Criança'],
+                  ['birthDate', 'Nascimento'],
+                  ['wantedGift', 'Presente'],
+                  ['motherName', 'Mãe'],
+                ] as const).map(([key, label]) => (
+                  <div key={key}>
+                    <label className="text-xs font-semibold text-gray-600 mb-1 block">{label}</label>
+                    <select
+                      value={colMap[key]}
+                      onChange={(e) => setColMap((m) => ({ ...m, [key]: Number(e.target.value) }))}
+                      className="w-full p-2 border border-gray-300 rounded-lg bg-white text-sm"
+                    >
+                      <option value={NONE}>— nenhuma —</option>
+                      {Array.from({ length: columnCount }, (_, i) => (
+                        <option key={i} value={i}>{columnLabel(i)}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+                <label className="flex items-center gap-2 text-sm text-gray-700 sm:pt-6">
+                  <input type="checkbox" checked={headerRow >= 0} onChange={(e) => toggleHeader(e.target.checked)} className="w-4 h-4" />
+                  Tem cabeçalho
+                </label>
+              </div>
+            </details>
           )}
         </div>
       )}
@@ -674,6 +738,12 @@ export default function PasteMigration({
                   if (r.kind === 'none') problems.push({ tone: 'red', text: 'Nome não encontrado nesta cidade/comunidade — escolha a criança' });
                   if (r.kind === 'ambiguous' && !c) problems.push({ tone: 'red', text: `${r.auto.options.length} crianças com esse nome — escolha qual` });
                   if (r.kind === 'approx') problems.push({ tone: 'amber', text: 'Nome aproximado — confira' });
+                  if (c && r.birthDate && c.birthDate && c.birthDate.slice(0, 10) !== r.birthDate) {
+                    problems.push({ tone: 'amber', text: `Nascimento diferente: cadastro ${formatDate(c.birthDate)}` });
+                  }
+                  if (c && r.motherName && c.motherName && nameScore(nameTokens(r.motherName), nameTokens(c.motherName)) === 0) {
+                    problems.push({ tone: 'amber', text: `Mãe diferente: cadastro “${c.motherName}”` });
+                  }
                   if (r.duplicateChild) problems.push({ tone: 'red', text: 'Mesma criança de outra linha (vale a primeira)' });
                   if (c && sourceCampaignId && !c.inSource) problems.push({ tone: 'amber', text: 'Não está na campanha de origem' });
                   if (c?.alreadyInTarget) problems.push({ tone: 'gray', text: 'Já está na campanha de destino — atualiza ID/presente/foto' });
@@ -697,6 +767,13 @@ export default function PasteMigration({
                       </td>
                       <td className="px-2 py-3 min-w-[150px]">
                         <p className="text-gray-900">{r.name || '—'}</p>
+                        {(r.birthText || r.motherName) && (
+                          <p className="text-xs text-gray-500">
+                            {r.birthText && <>nasc. {r.birthText}</>}
+                            {r.birthText && r.motherName && ' · '}
+                            {r.motherName && <>mãe {r.motherName}</>}
+                          </p>
+                        )}
                         <p className="text-[10px] text-gray-400">linha {r.line}</p>
                       </td>
                       <td className="px-2 py-3 min-w-[220px]">
