@@ -16,6 +16,7 @@ type Candidate = {
   id: string;
   name: string;
   birthDate?: string | null;
+  age?: number | null;
   motherName?: string | null;
   cityName?: string | null;
   city?: { id: string; name: string } | null;
@@ -98,6 +99,21 @@ function parseSheetDate(raw?: string): string | null {
   const date = new Date(Date.UTC(year, Number(m) - 1, Number(d)));
   if (date.getUTCDate() !== Number(d) || date.getUTCMonth() !== Number(m) - 1) return null;
   return date.toISOString().slice(0, 10);
+}
+
+/** Idade da criança no cadastro: pela data de nascimento, senão o campo idade. */
+function ageOf(c: { birthDate?: string | null; age?: number | null }): number | null {
+  if (c.birthDate) {
+    const dob = new Date(c.birthDate);
+    if (!isNaN(dob.getTime())) {
+      const now = new Date();
+      let a = now.getFullYear() - dob.getUTCFullYear();
+      const m = now.getMonth() - dob.getUTCMonth();
+      if (m < 0 || (m === 0 && now.getDate() < dob.getUTCDate())) a--;
+      return Math.max(0, a);
+    }
+  }
+  return typeof c.age === 'number' ? c.age : null;
 }
 
 const formatDate = (iso?: string | null) => (iso ? iso.slice(0, 10).split('-').reverse().join('/') : '—');
@@ -394,42 +410,72 @@ export default function PasteMigration({
     [candidates],
   );
 
-  // ---- casamento automático: nome, com nascimento e mãe para desempatar ----
+  // ---- casamento automático: um para um, nome + nascimento/idade/mãe/ID ----
   const autoMatches = useMemo(() => {
-    const result = new Map<number, { childId: string | null; kind: MatchKind; options: Candidate[] }>();
+    type Pair = { c: Candidate; name: number; total: number };
+    const result = new Map<number, { childId: string | null; kind: MatchKind; options: Candidate[]; lostTo?: Candidate[] }>();
+
+    // crianças escolhidas manualmente ficam reservadas para a linha escolhida
+    const taken = new Set<string>(Object.values(choice).filter((v) => v && v !== NEW_CHILD));
+
+    // todos os pares possíveis (linha × criança), com uma nota
+    const pairsByLine = new Map<number, Pair[]>();
     for (const r of sheetRows) {
       const tokens = nameTokens(r.name);
       const mother = nameTokens(r.motherName);
-      const scored = candidateTokens
-        .map((x) => ({ ...x, score: nameScore(tokens, x.tokens) }))
-        .filter((x) => x.score > 0);
-
-      const sameBirth = (x: (typeof scored)[number]) => !!r.birthDate && x.c.birthDate?.slice(0, 10) === r.birthDate;
-      const sameMother = (x: (typeof scored)[number]) => mother.length > 0 && nameScore(mother, x.mother) > 0;
-
-      // 1) nome parecido + mesmo nascimento é o sinal mais forte
-      let pick = scored.filter(sameBirth);
-      if (pick.length !== 1) {
-        // 2) melhor nota de nome, desempatando por mãe e depois por estar na campanha de origem
-        const best = Math.max(0, ...scored.map((x) => x.score));
-        pick = scored.filter((x) => x.score === best);
-        for (const narrow of [sameMother, (x: (typeof scored)[number]) => x.c.inSource]) {
-          if (pick.length <= 1) break;
-          const narrowed = pick.filter(narrow);
-          if (narrowed.length >= 1) pick = narrowed;
-        }
+      const pairs: Pair[] = [];
+      for (const x of candidateTokens) {
+        const name = nameScore(tokens, x.tokens);
+        if (name === 0) continue;
+        const candAge = ageOf(x.c);
+        const sameBirth = !!r.birthDate && x.c.birthDate?.slice(0, 10) === r.birthDate;
+        const birthConflict = !!r.birthDate && !!x.c.birthDate && !sameBirth;
+        const ageConflict = r.age != null && candAge != null && Math.abs(r.age - candAge) > 1;
+        // nome só parecido + idade/nascimento diferentes = outra criança
+        if (name < 3 && (birthConflict || ageConflict)) continue;
+        const sameMother = mother.length > 0 && nameScore(mother, x.mother) > 0;
+        const sameId = r.sheetId != null && (r.sheetId === x.c.currentPublicId || r.sheetId === x.c.targetPublicId);
+        const total = name
+          + (sameBirth ? 0.6 : 0)
+          + (sameId ? 0.4 : 0)
+          + (sameMother ? 0.3 : 0)
+          + (r.age != null && candAge === r.age ? 0.2 : 0)
+          + (x.c.inSource ? 0.1 : 0);
+        pairs.push({ c: x.c, name, total });
       }
+      pairs.sort((a, b) => b.total - a.total);
+      pairsByLine.set(r.line, pairs);
+    }
 
-      if (pick.length === 1) {
-        result.set(r.line, { childId: pick[0].c.id, kind: pick[0].score === 3 ? 'exact' : 'approx', options: pick.map((x) => x.c) });
-      } else if (pick.length > 1) {
-        result.set(r.line, { childId: null, kind: 'ambiguous', options: pick.map((x) => x.c) });
-      } else {
-        result.set(r.line, { childId: null, kind: 'none', options: [] });
+    // as linhas com o casamento mais forte escolhem primeiro (exato antes de aproximado)
+    const order = [...sheetRows].sort(
+      (a, b) => (pairsByLine.get(b.line)?.[0]?.total ?? 0) - (pairsByLine.get(a.line)?.[0]?.total ?? 0),
+    );
+    for (const r of order) {
+      const all = pairsByLine.get(r.line) ?? [];
+      const free = all.filter((p) => !taken.has(p.c.id));
+      const lostTo = all.filter((p) => taken.has(p.c.id)).map((p) => p.c);
+      if (!free.length) {
+        result.set(r.line, { childId: null, kind: 'none', options: [], lostTo });
+        continue;
       }
+      const best = free[0].total;
+      const top = free.filter((p) => Math.abs(p.total - best) < 0.05);
+      if (top.length > 1) {
+        // empate de verdade (homônimos sem nada que diferencie): pede escolha
+        result.set(r.line, { childId: null, kind: 'ambiguous', options: top.map((p) => p.c), lostTo });
+        continue;
+      }
+      taken.add(free[0].c.id);
+      result.set(r.line, {
+        childId: free[0].c.id,
+        kind: free[0].name === 3 ? 'exact' : 'approx',
+        options: free.slice(0, 5).map((p) => p.c),
+        lostTo,
+      });
     }
     return result;
-  }, [sheetRows, candidateTokens]);
+  }, [sheetRows, candidateTokens, choice]);
 
   const candidatesReady = !!cityId && !loadingCandidates && !candidatesError;
 
@@ -446,7 +492,8 @@ export default function PasteMigration({
       const idText = r.line in idEdits ? idEdits[r.line] : r.sheetId !== null ? String(r.sheetId) : '';
       const newId = isIdCell(idText) ? parseInt(idText, 10) : null;
       const gift = r.line in giftEdits ? giftEdits[r.line] : r.gift;
-      const photoKey = child ? child.id : `${NEW_CHILD}${r.line}`;
+      // a foto pertence à linha da planilha (nunca à criança: duas linhas não disputam a mesma foto)
+      const photoKey = `L${r.line}`;
       return { ...r, auto, kind, isNew, child, idText, newId, gift, photoKey };
     });
 
@@ -895,7 +942,20 @@ export default function PasteMigration({
                   if (r.isNew) problems.push({ tone: 'blue', text: 'Não encontrada no cadastro — será cadastrada como criança nova' });
                   else if (!c && r.kind === 'ambiguous') problems.push({ tone: 'red', text: `${r.auto.options.length} crianças com esse nome — escolha qual` });
                   else if (!c) problems.push({ tone: 'red', text: 'Não vai ser migrada — escolha a criança ou cadastre como nova' });
+                  // nomes parecidos que ficaram com outra linha (ex.: "Ana Júlia da Silva" × "Ana Júlia Silva Santos")
+                  if (!c && r.auto.lostTo?.length) {
+                    const who = r.auto.lostTo
+                      .map((o) => {
+                        const other = rows.find((x) => x.line !== r.line && x.child?.id === o.id);
+                        return `${o.name}${other ? ` (linha ${other.line})` : ''}`;
+                      })
+                      .join(', ');
+                    problems.push({ tone: 'gray', text: `Nome parecido com ${who}, que já está em outra linha` });
+                  }
                   if (c && r.kind === 'approx') problems.push({ tone: 'amber', text: 'Nome aproximado — confira' });
+                  if (c && r.age != null && ageOf(c) != null && ageOf(c) !== r.age) {
+                    problems.push({ tone: 'amber', text: `Idade diferente: cadastro ${ageOf(c)} anos` });
+                  }
                   if (c && r.birthDate && c.birthDate && c.birthDate.slice(0, 10) !== r.birthDate) {
                     problems.push({ tone: 'amber', text: `Nascimento diferente: cadastro ${formatDate(c.birthDate)}` });
                   }
@@ -903,7 +963,7 @@ export default function PasteMigration({
                     problems.push({ tone: 'amber', text: `Mãe diferente: cadastro “${c.motherName}”` });
                   }
                   if (r.isNew && !r.birthDate && r.birthText) problems.push({ tone: 'amber', text: `Data de nascimento não reconhecida: “${r.birthText}”` });
-                  if (r.duplicateChild) problems.push({ tone: 'red', text: 'Mesma criança de outra linha (vale a primeira)' });
+                  if (r.duplicateChild) problems.push({ tone: 'red', text: 'Esta criança já foi escolhida em outra linha — escolha outra ou cadastre como nova' });
                   if (c && sourceCampaignId && !c.inSource) problems.push({ tone: 'amber', text: 'Não está na campanha de origem' });
                   if (c?.alreadyInTarget) problems.push({ tone: 'gray', text: 'Já está na campanha de destino — atualiza ID/presente/foto' });
 
