@@ -96,6 +96,7 @@ type ChildFull = {
 
 type CampaignHistoryItem = {
   campaign: { id: string; name: string; year?: number | null; status?: string | null };
+  publicId: number | null;
   wantedGift: string | null;
   giftFromHistory: boolean;
   photoUrl: string | null;
@@ -933,6 +934,7 @@ export default function EditChildPage() {
                     <p className="font-semibold text-gray-900">
                       {h.campaign.name}
                       {h.campaign.year ? <span className="text-gray-500 font-normal"> · {h.campaign.year}</span> : null}
+                      {h.publicId != null ? <span className="ml-2 font-mono text-xs text-gray-600 bg-gray-100 rounded px-1.5 py-0.5">ID #{h.publicId}</span> : null}
                     </p>
                     <p className="mt-1">
                       <span className="text-gray-500">Presente: </span>

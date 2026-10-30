@@ -4,25 +4,30 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowRight, CheckCircle2, ClipboardPaste, ImagePlus, Loader2, Trash2, X } from 'lucide-react';
 
 type Campaign = { id: string; name: string; slug: string; year?: number | null };
+type City = { id: string; name: string; state?: string | null };
+type CommunityOpt = { id: string; name: string; cityId?: string | null };
 
-type PreviewItem = {
+type Candidate = {
   id: string;
-  publicId: number;
   name: string;
   cityName?: string | null;
   city?: { id: string; name: string } | null;
   community?: { id: string; name: string } | null;
   inSource: boolean;
   alreadyInTarget: boolean;
+  currentPublicId: number | null;
+  targetPublicId: number | null;
   currentGift: string | null;
   targetGift: string | null;
   currentPhotoUrl: string | null;
   targetPhotoUrl: string | null;
 };
 
-type ColumnMap = { publicId: number; name: number; wantedGift: number };
+type UsedId = { publicId: number; childId: string; name: string };
 
-type SheetRow = { line: number; publicId: number | null; name: string; gift: string };
+type ColumnMap = { name: number; publicId: number; wantedGift: number };
+
+type SheetRow = { line: number; name: string; sheetId: number | null; gift: string };
 
 type Frame = { id: string; active?: boolean; config?: unknown };
 
@@ -30,7 +35,10 @@ type Progress = { phase: 'migrando' | 'fotos'; done: number; total: number };
 
 type Summary = { migrated: number; photos: number; errors: string[] };
 
+type MatchKind = 'exact' | 'approx' | 'ambiguous' | 'none' | 'manual';
+
 const NONE = -1;
+const STOPWORDS = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
 
 async function extractError(res: Response, fallback: string) {
   try {
@@ -47,8 +55,24 @@ const normalize = (s?: string | null) =>
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+const nameTokens = (s?: string | null) => normalize(s).split(' ').filter((t) => t.length > 1 && !STOPWORDS.has(t));
+
+/**
+ * Quão bem o nome da planilha bate com o do cadastro:
+ * 3 = igual, 2 = um nome contém todas as palavras do outro (abreviado), 1 = mesmo primeiro e último nome.
+ */
+function nameScore(sheet: string[], cand: string[]) {
+  if (!sheet.length || !cand.length) return 0;
+  if (sheet.join(' ') === cand.join(' ')) return 3;
+  const [short, long] = sheet.length <= cand.length ? [sheet, cand] : [cand, sheet];
+  if (short.length >= 2 && short.every((t) => long.includes(t))) return 2;
+  if (sheet.length >= 2 && cand.length >= 2 && sheet[0] === cand[0] && sheet[sheet.length - 1] === cand[cand.length - 1]) return 1;
+  return 0;
+}
 
 /** Lê o texto copiado do Excel/Google Sheets (TSV, com células entre aspas quando têm quebra de linha). */
 function parseClipboardTable(text: string): string[][] {
@@ -84,31 +108,23 @@ function parseClipboardTable(text: string): string[][] {
 const isIdCell = (s?: string) => /^\d{1,9}$/.test((s ?? '').trim());
 
 function guessColumns(headers: string[] | null, rows: string[][]): ColumnMap {
-  const width = Math.max(...rows.map((r) => r.length), headers?.length ?? 0);
+  const width = Math.max(0, ...rows.map((r) => r.length), headers?.length ?? 0);
   const cols = Array.from({ length: width }, (_, i) => i);
 
   if (headers) {
-    const find = (alts: string[]) => cols.find((i) => alts.includes(normalize(headers[i]).replace(/[^a-z0-9 ]/g, '')));
-    const publicId = find(['id', 'publicid', 'codigo', 'cod', 'numero', 'n', 'no']) ?? NONE;
+    const find = (alts: string[]) => cols.find((i) => alts.includes(normalize(headers[i])));
     const name = find(['nome', 'name', 'crianca', 'nome da crianca', 'child']) ?? NONE;
+    const publicId = find(['id', 'publicid', 'codigo', 'cod', 'numero', 'n', 'no', 'id novo', 'novo id']) ?? NONE;
     const wantedGift = find(['presente', 'presente desejado', 'wantedgift', 'pedido', 'desejo', 'presente novo', 'novo presente']) ?? NONE;
-    if (publicId !== NONE) return { publicId, name, wantedGift };
+    if (name !== NONE) return { name, publicId, wantedGift };
   }
 
   // sem cabeçalho reconhecível: ID = primeira coluna numérica, nome = próxima de texto, presente = a seguinte
   const sample = rows.slice(0, 20);
   const numericShare = (i: number) => sample.filter((r) => isIdCell(r[i])).length / Math.max(sample.length, 1);
-  const publicId = cols.find((i) => numericShare(i) >= 0.6) ?? 0;
+  const publicId = cols.find((i) => numericShare(i) >= 0.6) ?? NONE;
   const textCols = cols.filter((i) => i !== publicId && numericShare(i) < 0.6);
-  return { publicId, name: textCols[0] ?? NONE, wantedGift: textCols[1] ?? NONE };
-}
-
-/** Nome da planilha confere com o cadastro? Aceita abreviações (mesmo primeiro nome ou um contido no outro). */
-function namesMatch(sheet: string, system: string) {
-  const a = normalize(sheet);
-  const b = normalize(system);
-  if (!a || !b) return true;
-  return a === b || a.includes(b) || b.includes(a) || a.split(' ')[0] === b.split(' ')[0];
+  return { name: textCols[0] ?? 0, publicId, wantedGift: textCols[1] ?? NONE };
 }
 
 export default function PasteMigration({
@@ -120,20 +136,32 @@ export default function PasteMigration({
   sourceCampaignId: string;
   onMigrated: () => Promise<void> | void;
 }) {
+  // ---- cidade / comunidade ----
+  const [cities, setCities] = useState<City[]>([]);
+  const [communities, setCommunities] = useState<CommunityOpt[]>([]);
+  const [cityId, setCityId] = useState('');
+  const [communityId, setCommunityId] = useState('');
+
+  // ---- crianças da cidade/comunidade ----
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [usedTargetIds, setUsedTargetIds] = useState<UsedId[]>([]);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [candidatesError, setCandidatesError] = useState<string | null>(null);
+
+  // ---- planilha ----
   const [rawText, setRawText] = useState('');
   const [hasHeader, setHasHeader] = useState(true);
-  const [colMap, setColMap] = useState<ColumnMap>({ publicId: 0, name: NONE, wantedGift: NONE });
+  const [colMap, setColMap] = useState<ColumnMap>({ name: 0, publicId: NONE, wantedGift: NONE });
 
-  const [preview, setPreview] = useState<Map<number, PreviewItem>>(new Map());
-  const [notFound, setNotFound] = useState<Set<number>>(new Set());
-  const [checking, setChecking] = useState(false);
-  const [checkError, setCheckError] = useState<string | null>(null);
-
-  // ajustes feitos na tela, por ID público
+  // ajustes feitos na tela, por linha da planilha
+  const [choice, setChoice] = useState<Record<number, string>>({});
+  const [idEdits, setIdEdits] = useState<Record<number, string>>({});
   const [giftEdits, setGiftEdits] = useState<Record<number, string>>({});
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
-  const [photos, setPhotos] = useState<Record<number, File>>({});
+  const [photos, setPhotos] = useState<Record<string, File>>({}); // por childId
   const [photoIssues, setPhotoIssues] = useState<string[]>([]);
+  const [showMissing, setShowMissing] = useState(false);
+  const [editingChild, setEditingChild] = useState<Set<number>>(new Set()); // linhas com a escolha da criança aberta
 
   const [frame, setFrame] = useState<Frame | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -141,68 +169,64 @@ export default function PasteMigration({
 
   const bulkPhotoInput = useRef<HTMLInputElement>(null);
 
-  // ---- tabela colada ----
-  const table = useMemo(() => parseClipboardTable(rawText), [rawText]);
-  const headers = hasHeader ? table[0] ?? [] : null;
-  const dataRows = useMemo(() => (hasHeader ? table.slice(1) : table), [table, hasHeader]);
-  const columnCount = Math.max(0, ...table.map((r) => r.length));
-  const columnLabel = (i: number) => (headers?.[i] ? `${headers[i]} (col. ${i + 1})` : `Coluna ${i + 1}`);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/cities', { cache: 'no-store', credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          setCities(Array.isArray(data) ? data : (data?.items ?? []));
+        }
+      } catch { /* ignore */ }
+    })();
+  }, []);
 
-  function handleTextChange(text: string) {
-    setRawText(text);
-    setSummary(null);
-    const parsed = parseClipboardTable(text);
-    if (parsed.length === 0) return;
-    // cabeçalho = primeira linha sem nenhuma célula que pareça ID
-    const header = !parsed[0].some(isIdCell);
-    setHasHeader(header);
-    setColMap(guessColumns(header ? parsed[0] : null, header ? parsed.slice(1) : parsed));
+  useEffect(() => {
+    setCommunityId('');
+    if (!cityId) { setCommunities([]); return; }
+    (async () => {
+      try {
+        const url = new URL('/api/admin/communities', window.location.origin);
+        url.searchParams.set('cityId', cityId);
+        const res = await fetch(url.toString(), { cache: 'no-store', credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          setCommunities(Array.isArray(data) ? data : (data?.items ?? []));
+        }
+      } catch {
+        setCommunities([]);
+      }
+    })();
+  }, [cityId]);
+
+  async function loadCandidates() {
+    if (!cityId) { setCandidates([]); setUsedTargetIds([]); return; }
+    setLoadingCandidates(true);
+    setCandidatesError(null);
+    try {
+      const qs = new URLSearchParams({ cityId });
+      if (communityId) qs.set('communityId', communityId);
+      if (sourceCampaignId) qs.set('sourceCampaignId', sourceCampaignId);
+      const res = await fetch(`/api/admin/campaigns/${targetCampaign.id}/migration-candidates?${qs.toString()}`, {
+        cache: 'no-store',
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error(await extractError(res, 'Falha ao carregar as crianças.'));
+      const json: { items: Candidate[]; usedTargetIds: UsedId[] } = await res.json();
+      setCandidates(json.items ?? []);
+      setUsedTargetIds(json.usedTargetIds ?? []);
+    } catch (e) {
+      setCandidatesError(e instanceof Error ? e.message : 'Falha ao carregar as crianças.');
+    } finally {
+      setLoadingCandidates(false);
+    }
   }
 
-  const sheetRows: SheetRow[] = useMemo(
-    () =>
-      dataRows.map((r, idx) => {
-        const rawId = colMap.publicId === NONE ? '' : r[colMap.publicId] ?? '';
-        return {
-          line: idx + 1 + (hasHeader ? 1 : 0),
-          publicId: isIdCell(rawId) ? parseInt(rawId, 10) : null,
-          name: colMap.name === NONE ? '' : r[colMap.name] ?? '',
-          gift: colMap.wantedGift === NONE ? '' : r[colMap.wantedGift] ?? '',
-        };
-      }),
-    [dataRows, colMap, hasHeader],
-  );
-
-  const publicIds = useMemo(
-    () => Array.from(new Set(sheetRows.map((r) => r.publicId).filter((n): n is number => n !== null))),
-    [sheetRows],
-  );
-
-  // ---- confere os IDs na base (com debounce) ----
   useEffect(() => {
-    if (publicIds.length === 0) { setPreview(new Map()); setNotFound(new Set()); return; }
-    const t = window.setTimeout(async () => {
-      setChecking(true);
-      setCheckError(null);
-      try {
-        const res = await fetch(`/api/admin/campaigns/${targetCampaign.id}/migration-preview`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ publicIds, sourceCampaignId: sourceCampaignId || undefined }),
-        });
-        if (!res.ok) throw new Error(await extractError(res, 'Falha ao conferir as crianças.'));
-        const json: { items: PreviewItem[]; notFound: number[] } = await res.json();
-        setPreview(new Map(json.items.map((i) => [i.publicId, i])));
-        setNotFound(new Set(json.notFound));
-      } catch (e) {
-        setCheckError(e instanceof Error ? e.message : 'Falha ao conferir as crianças.');
-      } finally {
-        setChecking(false);
-      }
-    }, 400);
-    return () => window.clearTimeout(t);
-  }, [publicIds, targetCampaign.id, sourceCampaignId]);
+    setChoice({});
+    loadCandidates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cityId, communityId, sourceCampaignId, targetCampaign.id]);
 
   // ---- layout ativo da campanha de destino (a foto nova é composta com ele) ----
   useEffect(() => {
@@ -218,74 +242,185 @@ export default function PasteMigration({
     })();
   }, [targetCampaign.id]);
 
-  // ---- linhas finais (planilha + cadastro) ----
+  // ---- tabela colada ----
+  const table = useMemo(() => parseClipboardTable(rawText), [rawText]);
+  const headers = hasHeader ? table[0] ?? [] : null;
+  const dataRows = useMemo(() => (hasHeader ? table.slice(1) : table), [table, hasHeader]);
+  const columnCount = Math.max(0, ...table.map((r) => r.length));
+  const columnLabel = (i: number) => (headers?.[i] ? `${headers[i]} (col. ${i + 1})` : `Coluna ${i + 1}`);
+
+  function handleTextChange(text: string) {
+    setRawText(text);
+    setSummary(null);
+    setChoice({});
+    setIdEdits({});
+    setGiftEdits({});
+    setExcluded(new Set());
+    const parsed = parseClipboardTable(text);
+    if (parsed.length === 0) return;
+    // cabeçalho = primeira linha sem nenhuma célula que pareça ID
+    const header = !parsed[0].some(isIdCell);
+    setHasHeader(header);
+    setColMap(guessColumns(header ? parsed[0] : null, header ? parsed.slice(1) : parsed));
+  }
+
+  const sheetRows: SheetRow[] = useMemo(
+    () =>
+      dataRows.map((r, idx) => {
+        const rawId = colMap.publicId === NONE ? '' : r[colMap.publicId] ?? '';
+        return {
+          line: idx + 1 + (hasHeader ? 1 : 0),
+          name: colMap.name === NONE ? '' : r[colMap.name] ?? '',
+          sheetId: isIdCell(rawId) ? parseInt(rawId, 10) : null,
+          gift: colMap.wantedGift === NONE ? '' : r[colMap.wantedGift] ?? '',
+        };
+      }),
+    [dataRows, colMap, hasHeader],
+  );
+
+  const candidateById = useMemo(() => new Map(candidates.map((c) => [c.id, c])), [candidates]);
+  const candidateTokens = useMemo(() => candidates.map((c) => ({ c, tokens: nameTokens(c.name) })), [candidates]);
+
+  // ---- casamento automático pelo nome ----
+  const autoMatches = useMemo(() => {
+    const result = new Map<number, { childId: string | null; kind: MatchKind; options: Candidate[] }>();
+    for (const r of sheetRows) {
+      const tokens = nameTokens(r.name);
+      let best = 0;
+      let found: Candidate[] = [];
+      for (const { c, tokens: ct } of candidateTokens) {
+        const s = nameScore(tokens, ct);
+        if (s > best) { best = s; found = [c]; }
+        else if (s === best && s > 0) found.push(c);
+      }
+      // homônimos: prefere quem está na campanha de origem
+      if (found.length > 1) {
+        const inSource = found.filter((c) => c.inSource);
+        if (inSource.length === 1) found = inSource;
+      }
+      if (found.length === 1) result.set(r.line, { childId: found[0].id, kind: best === 3 ? 'exact' : 'approx', options: found });
+      else if (found.length > 1) result.set(r.line, { childId: null, kind: 'ambiguous', options: found });
+      else result.set(r.line, { childId: null, kind: 'none', options: [] });
+    }
+    return result;
+  }, [sheetRows, candidateTokens]);
+
+  // ---- linhas finais (planilha + cadastro + ajustes) ----
   const rows = useMemo(() => {
-    const seen = new Set<number>();
-    return sheetRows.map((r) => {
-      const duplicate = r.publicId !== null && seen.has(r.publicId);
-      if (r.publicId !== null) seen.add(r.publicId);
-      const match = r.publicId !== null && !duplicate ? preview.get(r.publicId) ?? null : null;
-      const gift = r.publicId !== null && r.publicId in giftEdits ? giftEdits[r.publicId] : r.gift;
-      const selectable = !!match;
-      const selected = selectable && !excluded.has(r.publicId!);
-      return { ...r, duplicate, match, gift, selectable, selected };
+    const base = sheetRows.map((r) => {
+      const auto = autoMatches.get(r.line)!;
+      const manual = r.line in choice;
+      const childId = manual ? choice[r.line] || null : auto.childId;
+      const child = childId ? candidateById.get(childId) ?? null : null;
+      const kind: MatchKind = manual ? (childId ? 'manual' : 'none') : auto.kind;
+      const idText = r.line in idEdits ? idEdits[r.line] : r.sheetId !== null ? String(r.sheetId) : '';
+      const newId = isIdCell(idText) ? parseInt(idText, 10) : null;
+      const gift = r.line in giftEdits ? giftEdits[r.line] : r.gift;
+      return { ...r, auto, kind, child, idText, newId, gift };
     });
-  }, [sheetRows, preview, giftEdits, excluded]);
+
+    // mesma criança em duas linhas: vale a primeira
+    const firstLineByChild = new Map<string, number>();
+    base.forEach((r) => { if (r.child && !firstLineByChild.has(r.child.id)) firstLineByChild.set(r.child.id, r.line); });
+
+    const withState = base.map((r) => {
+      const duplicateChild = !!r.child && firstLineByChild.get(r.child.id) !== r.line;
+      const selected = !!r.child && !duplicateChild && !excluded.has(r.line);
+      return { ...r, duplicateChild, selected };
+    });
+
+    // conflitos de ID: repetido entre as linhas marcadas, ou já usado por criança fora do lote
+    const batchChildIds = new Set(withState.filter((r) => r.selected).map((r) => r.child!.id));
+    const idCount = new Map<number, number>();
+    withState.forEach((r) => { if (r.selected && r.newId !== null) idCount.set(r.newId, (idCount.get(r.newId) ?? 0) + 1); });
+
+    return withState.map((r) => {
+      let idProblem: string | null = null;
+      if (r.selected && r.newId !== null) {
+        const owner = usedTargetIds.find((u) => u.publicId === r.newId && !batchChildIds.has(u.childId));
+        if ((idCount.get(r.newId) ?? 0) > 1) idProblem = 'ID repetido em outra linha';
+        else if (owner) idProblem = `ID já usado nesta campanha por ${owner.name}`;
+      } else if (r.selected && r.idText.trim()) {
+        idProblem = 'ID inválido';
+      }
+      return { ...r, idProblem };
+    });
+  }, [sheetRows, autoMatches, choice, candidateById, idEdits, giftEdits, excluded, usedTargetIds]);
 
   const selectedRows = rows.filter((r) => r.selected);
-  const selectedWithPhoto = selectedRows.filter((r) => photos[r.publicId!]);
+  const blockingRows = selectedRows.filter((r) => r.idProblem);
+  const selectedWithPhoto = selectedRows.filter((r) => photos[r.child!.id]);
+
+  // crianças da origem nesta cidade/comunidade que não estão na planilha
+  const missingFromSheet = useMemo(() => {
+    if (!rawText) return [];
+    const matched = new Set(rows.filter((r) => r.child).map((r) => r.child!.id));
+    return candidates.filter((c) => c.inSource && !matched.has(c.id));
+  }, [rows, candidates, rawText]);
+
+  const counts = {
+    exact: rows.filter((r) => r.kind === 'exact' || r.kind === 'manual').length,
+    approx: rows.filter((r) => r.kind === 'approx').length,
+    pending: rows.filter((r) => r.kind === 'ambiguous' || r.kind === 'none').length,
+  };
 
   // ---- fotos ----
   const photoUrls = useMemo(() => {
-    const urls: Record<number, string> = {};
-    for (const [pid, file] of Object.entries(photos)) urls[Number(pid)] = URL.createObjectURL(file);
+    const urls: Record<string, string> = {};
+    for (const [childId, file] of Object.entries(photos)) urls[childId] = URL.createObjectURL(file);
     return urls;
   }, [photos]);
   useEffect(() => () => Object.values(photoUrls).forEach((u) => URL.revokeObjectURL(u)), [photoUrls]);
 
   function addPhotos(files: FileList | null) {
     if (!files?.length) return;
-    const byName = new Map<string, number>();
+    const byId = new Map<number, string>();
+    const byName = new Map<string, string>();
     rows.forEach((r) => {
-      if (r.match) byName.set(normalize(r.match.name), r.match.publicId);
-      if (r.publicId !== null && r.name) byName.set(normalize(r.name), r.publicId);
+      if (!r.child) return;
+      if (r.newId !== null) byId.set(r.newId, r.child.id);
+      byName.set(normalize(r.child.name), r.child.id);
+      if (r.name) byName.set(normalize(r.name), r.child.id);
     });
-    const known = new Set(rows.filter((r) => r.match).map((r) => r.publicId!));
+    // ID antigo como último recurso
+    rows.forEach((r) => {
+      if (r.child?.currentPublicId != null && !byId.has(r.child.currentPublicId)) byId.set(r.child.currentPublicId, r.child.id);
+    });
 
     const next = { ...photos };
     const issues: string[] = [];
     Array.from(files).forEach((f) => {
       const base = f.name.replace(/\.[^.]+$/, '');
       const pid = base.match(/^(\d{1,9})/)?.[1];
-      if (pid && known.has(Number(pid))) { next[Number(pid)] = f; return; }
-      const byNamePid = byName.get(normalize(base));
-      if (byNamePid !== undefined) { next[byNamePid] = f; return; }
-      issues.push(f.name);
+      const childId = (pid ? byId.get(Number(pid)) : undefined) ?? byName.get(normalize(base));
+      if (childId) next[childId] = f;
+      else issues.push(f.name);
     });
     setPhotos(next);
     setPhotoIssues(issues);
   }
 
-  function setRowPhoto(pid: number, file: File | null) {
+  function setRowPhoto(childId: string, file: File | null) {
     setPhotos((prev) => {
       const next = { ...prev };
-      if (file) next[pid] = file; else delete next[pid];
+      if (file) next[childId] = file; else delete next[childId];
       return next;
     });
   }
 
-  function toggleRow(pid: number) {
+  function toggleRow(line: number) {
     setExcluded((prev) => {
       const next = new Set(prev);
-      if (next.has(pid)) next.delete(pid); else next.add(pid);
+      if (next.has(line)) next.delete(line); else next.add(line);
       return next;
     });
   }
 
   function reset() {
     setRawText('');
-    setPreview(new Map());
-    setNotFound(new Set());
+    setChoice({});
+    setEditingChild(new Set());
+    setIdEdits({});
     setGiftEdits({});
     setExcluded(new Set());
     setPhotos({});
@@ -294,7 +429,7 @@ export default function PasteMigration({
 
   // ---- migrar ----
   async function submit() {
-    if (selectedRows.length === 0) return;
+    if (selectedRows.length === 0 || blockingRows.length > 0) return;
     const errors: string[] = [];
     let uploaded = 0;
 
@@ -306,7 +441,7 @@ export default function PasteMigration({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           sourceCampaignId: sourceCampaignId || undefined,
-          items: selectedRows.map((r) => ({ childId: r.match!.id, wantedGift: r.gift.trim() || null })),
+          items: selectedRows.map((r) => ({ childId: r.child!.id, publicId: r.newId, wantedGift: r.gift.trim() || null })),
         }),
       });
       if (!res.ok) {
@@ -314,16 +449,17 @@ export default function PasteMigration({
         return;
       }
 
-      // fotos depois da migração, para a arte já sair com o presente novo
+      // fotos depois da migração, para a arte já sair com o ID e o presente novos
       setProgress({ phase: 'fotos', done: 0, total: selectedWithPhoto.length });
       for (const [idx, r] of selectedWithPhoto.entries()) {
+        const child = r.child!;
         const fd = new FormData();
-        fd.append('file', photos[r.publicId!]);
+        fd.append('file', photos[child.id]);
         if (frame?.config) fd.append('Config', JSON.stringify(frame.config));
         const qs = new URLSearchParams({ campaignId: targetCampaign.id });
         if (frame?.id) qs.set('layoutId', frame.id);
         try {
-          const up = await fetch(`/api/admin/children/${r.publicId}/photo?${qs.toString()}`, {
+          const up = await fetch(`/api/admin/children/${child.id}/photo?${qs.toString()}`, {
             method: 'POST',
             credentials: 'include',
             body: fd,
@@ -331,21 +467,25 @@ export default function PasteMigration({
           if (!up.ok) throw new Error(await extractError(up, 'falha no envio'));
           uploaded += 1;
         } catch (e) {
-          errors.push(`Foto de #${r.publicId} (${r.match!.name}): ${e instanceof Error ? e.message : 'falha no envio'}`);
+          errors.push(`Foto de ${child.name}: ${e instanceof Error ? e.message : 'falha no envio'}`);
         }
         setProgress({ phase: 'fotos', done: idx + 1, total: selectedWithPhoto.length });
       }
 
       setSummary({ migrated: selectedRows.length, photos: uploaded, errors });
       reset();
-      await onMigrated();
+      await Promise.all([onMigrated(), loadCandidates()]);
     } finally {
       setProgress(null);
     }
   }
 
-  const missingIdRows = rows.filter((r) => r.publicId === null).length;
-  const notFoundRows = rows.filter((r) => r.publicId !== null && notFound.has(r.publicId)).length;
+  const childOption = (o: Candidate) => (
+    <option key={o.id} value={o.id}>
+      {o.name}{o.currentPublicId != null ? ` (#${o.currentPublicId})` : ''}
+      {!communityId && o.community?.name ? ` · ${o.community.name}` : ''}
+    </option>
+  );
 
   return (
     <div className="space-y-6 mb-8">
@@ -371,64 +511,104 @@ export default function PasteMigration({
         </div>
       )}
 
-      {/* Colar */}
+      {/* Cidade / comunidade */}
       <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6">
-        <div className="flex items-center justify-between gap-3 mb-2">
-          <label className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-            <ClipboardPaste className="w-4 h-4" /> Cole aqui as linhas da planilha (Ctrl+V)
-          </label>
-          {rawText && (
-            <button onClick={reset} className="text-xs text-gray-500 hover:text-gray-800 inline-flex items-center gap-1">
-              <Trash2 className="w-3.5 h-3.5" /> Limpar
-            </button>
-          )}
-        </div>
-        <textarea
-          value={rawText}
-          onChange={(e) => handleTextChange(e.target.value)}
-          placeholder={'Selecione as colunas na planilha (ID, Nome, Presente), copie e cole aqui.\n\nID\tNome\tPresente\n898\tMaria Silva\tBoneca\n912\tJoão Souza\tBola'}
-          className="w-full min-h-[140px] p-3 border border-gray-300 rounded-lg font-mono text-xs"
-        />
-
-        {table.length > 0 && (
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {([
-              ['publicId', 'Coluna do ID'],
-              ['name', 'Coluna do nome (conferência)'],
-              ['wantedGift', 'Coluna do presente novo'],
-            ] as const).map(([key, label]) => (
-              <div key={key}>
-                <label className="text-xs font-semibold text-gray-600 mb-1 block">{label}</label>
-                <select
-                  value={colMap[key]}
-                  onChange={(e) => setColMap((m) => ({ ...m, [key]: Number(e.target.value) }))}
-                  className="w-full p-2 border border-gray-300 rounded-lg bg-white text-sm"
-                >
-                  {key !== 'publicId' && <option value={NONE}>— nenhuma —</option>}
-                  {Array.from({ length: columnCount }, (_, i) => (
-                    <option key={i} value={i}>{columnLabel(i)}</option>
-                  ))}
-                </select>
-              </div>
-            ))}
-            <label className="flex items-center gap-2 text-sm text-gray-700 sm:pt-6">
-              <input type="checkbox" checked={hasHeader} onChange={(e) => setHasHeader(e.target.checked)} className="w-4 h-4" />
-              Primeira linha é cabeçalho
-            </label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-semibold text-gray-600 mb-1 block">Cidade</label>
+            <select
+              value={cityId}
+              onChange={(e) => setCityId(e.target.value)}
+              className="w-full p-2 border border-gray-300 rounded-lg bg-white"
+            >
+              <option value="">Selecione…</option>
+              {cities.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
+            </select>
           </div>
-        )}
+          <div>
+            <label className="text-xs font-semibold text-gray-600 mb-1 block">Comunidade</label>
+            <select
+              value={communityId}
+              onChange={(e) => setCommunityId(e.target.value)}
+              className="w-full p-2 border border-gray-300 rounded-lg bg-white"
+              disabled={!cityId || communities.length === 0}
+            >
+              <option value="">Todas as comunidades da cidade</option>
+              {communities.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
+            </select>
+          </div>
+        </div>
+        <p className="text-xs text-gray-500 mt-2">
+          {!cityId
+            ? 'A busca na planilha é feita pelo nome, só entre as crianças da cidade/comunidade escolhida.'
+            : loadingCandidates
+              ? 'Carregando crianças…'
+              : `${candidates.length} criança${candidates.length === 1 ? '' : 's'} nesta ${communityId ? 'comunidade' : 'cidade'}` +
+                (sourceCampaignId ? ` · ${candidates.filter((c) => c.inSource).length} na campanha de origem` : '')}
+        </p>
+        {candidatesError && <div className="mt-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3">{candidatesError}</div>}
       </div>
 
+      {/* Colar */}
+      {cityId && (
+        <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <label className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+              <ClipboardPaste className="w-4 h-4" /> Cole aqui as linhas da planilha (Ctrl+V)
+            </label>
+            {rawText && (
+              <button onClick={reset} className="text-xs text-gray-500 hover:text-gray-800 inline-flex items-center gap-1">
+                <Trash2 className="w-3.5 h-3.5" /> Limpar
+              </button>
+            )}
+          </div>
+          <textarea
+            value={rawText}
+            onChange={(e) => handleTextChange(e.target.value)}
+            placeholder={'Selecione as colunas na planilha (Nome, ID novo, Presente), copie e cole aqui.\n\nNome\tID\tPresente\nMaria Silva\t15\tBoneca\nJoão Souza\t16\tBola'}
+            className="w-full min-h-[140px] p-3 border border-gray-300 rounded-lg font-mono text-xs"
+          />
+
+          {table.length > 0 && (
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {([
+                ['name', 'Coluna do nome'],
+                ['publicId', 'Coluna do ID na campanha nova'],
+                ['wantedGift', 'Coluna do presente novo'],
+              ] as const).map(([key, label]) => (
+                <div key={key}>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">{label}</label>
+                  <select
+                    value={colMap[key]}
+                    onChange={(e) => setColMap((m) => ({ ...m, [key]: Number(e.target.value) }))}
+                    className="w-full p-2 border border-gray-300 rounded-lg bg-white text-sm"
+                  >
+                    {key !== 'name' && <option value={NONE}>— nenhuma —</option>}
+                    {Array.from({ length: columnCount }, (_, i) => (
+                      <option key={i} value={i}>{columnLabel(i)}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+              <label className="flex items-center gap-2 text-sm text-gray-700 sm:pt-6">
+                <input type="checkbox" checked={hasHeader} onChange={(e) => setHasHeader(e.target.checked)} className="w-4 h-4" />
+                Primeira linha é cabeçalho
+              </label>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Conferência */}
-      {rows.length > 0 && (
+      {cityId && rows.length > 0 && (
         <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-            <div className="text-sm text-gray-700 space-x-3">
+            <div className="text-sm text-gray-700 flex flex-wrap gap-x-3 gap-y-1">
               <span><strong>{rows.length}</strong> linha{rows.length === 1 ? '' : 's'}</span>
-              <span className="text-emerald-700"><strong>{selectedRows.length}</strong> para migrar</span>
-              {notFoundRows > 0 && <span className="text-red-700"><strong>{notFoundRows}</strong> não encontrada{notFoundRows === 1 ? '' : 's'}</span>}
-              {missingIdRows > 0 && <span className="text-red-700"><strong>{missingIdRows}</strong> sem ID</span>}
-              {checking && <span className="inline-flex items-center gap-1 text-gray-500"><Loader2 className="w-3.5 h-3.5 animate-spin" /> conferindo…</span>}
+              <span className="text-emerald-700"><strong>{counts.exact}</strong> encontrada{counts.exact === 1 ? '' : 's'}</span>
+              {counts.approx > 0 && <span className="text-amber-700"><strong>{counts.approx}</strong> por nome aproximado</span>}
+              {counts.pending > 0 && <span className="text-red-700"><strong>{counts.pending}</strong> para escolher</span>}
+              {blockingRows.length > 0 && <span className="text-red-700"><strong>{blockingRows.length}</strong> com problema de ID</span>}
             </div>
             <div className="flex flex-wrap gap-2">
               <input
@@ -442,13 +622,13 @@ export default function PasteMigration({
               <button
                 onClick={() => bulkPhotoInput.current?.click()}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
-                title="Os arquivos são associados pelo ID no início do nome (ex.: 898.jpg) ou pelo nome da criança"
+                title="Os arquivos são associados pelo ID no início do nome (ex.: 15.jpg) ou pelo nome da criança"
               >
                 <ImagePlus className="w-4 h-4" /> Adicionar fotos novas
               </button>
               <button
                 onClick={submit}
-                disabled={!!progress || checking || selectedRows.length === 0}
+                disabled={!!progress || loadingCandidates || selectedRows.length === 0 || blockingRows.length > 0}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold disabled:opacity-60"
               >
                 {progress ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
@@ -459,11 +639,10 @@ export default function PasteMigration({
             </div>
           </div>
 
-          {checkError && <div className="mb-3 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3">{checkError}</div>}
           {photoIssues.length > 0 && (
             <div className="mb-3 text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-xl p-3">
               Não consegui associar {photoIssues.length} foto{photoIssues.length === 1 ? '' : 's'} a nenhuma linha: {photoIssues.join(', ')}.
-              Use o ID da criança no início do nome do arquivo (ex.: <code>898.jpg</code>) ou escolha a foto na linha.
+              Use o ID da criança no início do nome do arquivo (ex.: <code>15.jpg</code>) ou escolha a foto na linha.
             </div>
           )}
           {!frame && (
@@ -477,59 +656,80 @@ export default function PasteMigration({
               <thead className="text-xs text-gray-500 border-b">
                 <tr>
                   <th className="px-2 py-2 w-8" />
-                  <th className="px-2 py-2 text-left">ID</th>
-                  <th className="px-2 py-2 text-left">Criança</th>
+                  <th className="px-2 py-2 text-left">Planilha</th>
+                  <th className="px-2 py-2 text-left">Criança no cadastro</th>
+                  <th className="px-2 py-2 text-left">ID novo</th>
                   <th className="px-2 py-2 text-left">Presente</th>
                   <th className="px-2 py-2 text-left">Foto</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => {
-                  const m = r.match;
-                  const pid = r.publicId;
-                  const newPhoto = pid !== null ? photoUrls[pid] : undefined;
-                  const shownPhoto = newPhoto ?? m?.targetPhotoUrl ?? m?.currentPhotoUrl ?? null;
-                  const pending = pid !== null && !r.duplicate && !m && !notFound.has(pid);
+                  const c = r.child;
+                  const newPhoto = c ? photoUrls[c.id] : undefined;
+                  const shownPhoto = newPhoto ?? c?.targetPhotoUrl ?? c?.currentPhotoUrl ?? null;
+                  const showPicker = !c || r.kind === 'ambiguous' || editingChild.has(r.line);
 
                   const problems: { tone: 'red' | 'amber' | 'gray'; text: string }[] = [];
-                  if (pid === null) problems.push({ tone: 'red', text: 'Linha sem ID válido' });
-                  else if (r.duplicate) problems.push({ tone: 'red', text: 'ID repetido na planilha (vale a primeira linha)' });
-                  else if (notFound.has(pid)) problems.push({ tone: 'red', text: 'ID não encontrado no cadastro' });
-                  if (m && !namesMatch(r.name, m.name)) problems.push({ tone: 'amber', text: `Nome na planilha: “${r.name}”` });
-                  if (m && sourceCampaignId && !m.inSource) problems.push({ tone: 'amber', text: 'Não está na campanha de origem' });
-                  if (m?.alreadyInTarget) problems.push({ tone: 'gray', text: 'Já está na campanha de destino — atualiza presente/foto' });
+                  if (r.kind === 'none') problems.push({ tone: 'red', text: 'Nome não encontrado nesta cidade/comunidade — escolha a criança' });
+                  if (r.kind === 'ambiguous' && !c) problems.push({ tone: 'red', text: `${r.auto.options.length} crianças com esse nome — escolha qual` });
+                  if (r.kind === 'approx') problems.push({ tone: 'amber', text: 'Nome aproximado — confira' });
+                  if (r.duplicateChild) problems.push({ tone: 'red', text: 'Mesma criança de outra linha (vale a primeira)' });
+                  if (c && sourceCampaignId && !c.inSource) problems.push({ tone: 'amber', text: 'Não está na campanha de origem' });
+                  if (c?.alreadyInTarget) problems.push({ tone: 'gray', text: 'Já está na campanha de destino — atualiza ID/presente/foto' });
 
                   return (
                     <tr
-                      key={`${r.line}-${pid ?? 'x'}`}
+                      key={r.line}
                       className={[
                         'border-b last:border-0 align-top',
-                        !r.selectable && !pending ? 'bg-red-50/40' : r.selected ? '' : 'opacity-50',
+                        !c || r.duplicateChild ? 'bg-red-50/40' : r.selected ? '' : 'opacity-50',
                       ].join(' ')}
                     >
                       <td className="px-2 py-3">
                         <input
                           type="checkbox"
                           checked={r.selected}
-                          disabled={!r.selectable}
-                          onChange={() => toggleRow(pid!)}
+                          disabled={!c || r.duplicateChild}
+                          onChange={() => toggleRow(r.line)}
                           className="w-4 h-4"
                         />
                       </td>
-                      <td className="px-2 py-3 font-mono text-gray-700 whitespace-nowrap">
-                        {pid ?? '—'}
-                        <div className="text-[10px] text-gray-400 font-sans">linha {r.line}</div>
+                      <td className="px-2 py-3 min-w-[150px]">
+                        <p className="text-gray-900">{r.name || '—'}</p>
+                        <p className="text-[10px] text-gray-400">linha {r.line}</p>
                       </td>
-                      <td className="px-2 py-3 min-w-[180px]">
-                        {m ? (
-                          <>
-                            <p className="font-semibold text-gray-900">{m.name}</p>
-                            <p className="text-xs text-gray-500">{m.community?.name ?? '—'} · {m.city?.name ?? m.cityName ?? '—'}</p>
-                          </>
+                      <td className="px-2 py-3 min-w-[220px]">
+                        {showPicker ? (
+                          <select
+                            value={c?.id ?? ''}
+                            onChange={(e) => setChoice((prev) => ({ ...prev, [r.line]: e.target.value }))}
+                            className={`w-full px-2 py-1.5 border rounded-lg bg-white text-sm ${c ? 'border-gray-300' : 'border-red-300'}`}
+                          >
+                            <option value="">— escolher criança —</option>
+                            {r.auto.options.length > 0 && (
+                              <optgroup label="Nomes parecidos">{r.auto.options.map(childOption)}</optgroup>
+                            )}
+                            <optgroup label="Todas">
+                              {candidates.filter((o) => !r.auto.options.includes(o)).map(childOption)}
+                            </optgroup>
+                          </select>
                         ) : (
-                          <p className="text-gray-500">{r.name || '—'}</p>
+                          <p className="font-semibold text-gray-900">
+                            {c?.name}{' '}
+                            <button
+                              onClick={() => setEditingChild((prev) => new Set(prev).add(r.line))}
+                              className="text-xs font-normal text-blue-700 hover:underline"
+                            >
+                              trocar
+                            </button>
+                          </p>
                         )}
-                        {pending && <p className="text-xs text-gray-400 mt-1">conferindo…</p>}
+                        {c && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            {c.community?.name ?? '—'} · ID anterior #{c.currentPublicId ?? '—'}
+                          </p>
+                        )}
                         {problems.map((p) => (
                           <p
                             key={p.text}
@@ -543,17 +743,31 @@ export default function PasteMigration({
                           </p>
                         ))}
                       </td>
-                      <td className="px-2 py-3 min-w-[220px]">
-                        {m ? (
+                      <td className="px-2 py-3 w-28">
+                        {c && (
+                          <>
+                            <input
+                              value={r.idText}
+                              onChange={(e) => setIdEdits((prev) => ({ ...prev, [r.line]: e.target.value }))}
+                              placeholder={c.targetPublicId != null ? String(c.targetPublicId) : 'mantém'}
+                              inputMode="numeric"
+                              className={`w-24 px-2 py-1.5 border rounded-lg text-sm font-mono ${r.idProblem ? 'border-red-400 bg-red-50' : 'border-gray-300'}`}
+                            />
+                            {r.idProblem && <p className="text-xs text-red-700 mt-1">{r.idProblem}</p>}
+                          </>
+                        )}
+                      </td>
+                      <td className="px-2 py-3 min-w-[200px]">
+                        {c ? (
                           <>
                             <p className="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                              <span className="truncate max-w-[200px]" title={m.currentGift ?? ''}>{m.currentGift || 'sem presente'}</span>
+                              <span className="truncate max-w-[180px]" title={c.currentGift ?? ''}>{c.currentGift || 'sem presente'}</span>
                               <ArrowRight className="w-3 h-3 shrink-0" />
                             </p>
                             <input
                               value={r.gift}
-                              onChange={(e) => setGiftEdits((g) => ({ ...g, [pid!]: e.target.value }))}
-                              placeholder={m.targetGift ?? 'mantém o presente atual'}
+                              onChange={(e) => setGiftEdits((g) => ({ ...g, [r.line]: e.target.value }))}
+                              placeholder={c.targetGift ?? 'mantém o presente atual'}
                               className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm"
                             />
                           </>
@@ -562,13 +776,13 @@ export default function PasteMigration({
                         )}
                       </td>
                       <td className="px-2 py-3">
-                        {m && (
+                        {c && (
                           <div className="flex items-center gap-2">
                             {shownPhoto ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 src={shownPhoto}
-                                alt={m.name}
+                                alt={c.name}
                                 className={`w-12 h-16 object-cover rounded-md border ${newPhoto ? 'ring-2 ring-emerald-500' : 'opacity-70'}`}
                               />
                             ) : (
@@ -581,13 +795,13 @@ export default function PasteMigration({
                                   type="file"
                                   accept="image/*"
                                   className="hidden"
-                                  onChange={(e) => { setRowPhoto(pid!, e.target.files?.[0] ?? null); e.target.value = ''; }}
+                                  onChange={(e) => { setRowPhoto(c.id, e.target.files?.[0] ?? null); e.target.value = ''; }}
                                 />
                               </label>
                               {newPhoto ? (
-                                <button onClick={() => setRowPhoto(pid!, null)} className="text-left text-red-600 hover:underline">Remover</button>
+                                <button onClick={() => setRowPhoto(c.id, null)} className="text-left text-red-600 hover:underline">Remover</button>
                               ) : (
-                                <span className="text-gray-400 whitespace-nowrap">{m.targetPhotoUrl ? 'foto da campanha' : 'foto atual'}</span>
+                                <span className="text-gray-400 whitespace-nowrap">{c.targetPhotoUrl ? 'foto da campanha' : 'foto atual'}</span>
                               )}
                             </div>
                           </div>
@@ -599,6 +813,23 @@ export default function PasteMigration({
               </tbody>
             </table>
           </div>
+
+          {sourceCampaignId && missingFromSheet.length > 0 && (
+            <div className="mt-4 text-sm text-gray-700 bg-gray-50 border rounded-xl p-3">
+              <button onClick={() => setShowMissing((v) => !v)} className="font-medium hover:underline">
+                {missingFromSheet.length} criança{missingFromSheet.length === 1 ? '' : 's'} da campanha de origem
+                {communityId ? ' nesta comunidade' : ' nesta cidade'} não {missingFromSheet.length === 1 ? 'está' : 'estão'} na planilha
+                {showMissing ? ' ▲' : ' ▼'}
+              </button>
+              {showMissing && (
+                <ul className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-0.5 text-xs text-gray-600">
+                  {missingFromSheet.map((c) => (
+                    <li key={c.id}>{c.name} <span className="text-gray-400">#{c.currentPublicId ?? '—'}</span></li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
