@@ -46,7 +46,7 @@ type SheetRow = {
   motherName: string;
 };
 
-type Frame = { id: string; name?: string | null; active?: boolean; config?: unknown };
+type Frame = { id: string; url: string; name?: string | null; active?: boolean; config?: unknown };
 
 type Progress = { phase: 'migrando' | 'fotos'; done: number; total: number };
 
