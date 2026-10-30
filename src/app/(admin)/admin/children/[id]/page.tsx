@@ -1,71 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import {
-  ArrowLeft,
-  Loader2,
-  Save,
-  ExternalLink,
-  CheckCircle2,
-  AlertCircle,
-  PencilRuler,
-} from 'lucide-react';
-
-// ajuste o alias conforme seu projeto:
-import ComposedImage, { ComposeConfig } from '@/components/media/ComposedImage';
+import { AlertCircle, ArrowLeft, Baby, CheckCircle2, Loader2, MapPin, Save, Undo2 } from 'lucide-react';
+import ChildCampaigns from './ChildCampaigns';
 
 /* ===================== Tipos ===================== */
 type City = { id: string; publicId?: number | null; name: string; state?: string | null };
-type Community = {
-  id: string;
-  publicId?: number | null;
-  cityId: string;
-  name: string;
-  slug?: string | null;
-  description?: string | null;
-  deletedAt?: string | null;
-};
-type School = {
-  id: string;
-  publicId?: number | null;
-  cityId: string;
-  communityId?: string | null;
-  name: string;
-  slug?: string | null;
-  address?: string | null;
-};
-
-type ImageItem = {
-  id: string;
-  childId: string;
-  campaignId: string;
-  originalKey?: string | null;
-  originalUrl?: string | null;
-  processedKey?: string | null;
-  processedUrl?: string | null;
-  framedKey?: string | null;
-  framedUrl?: string | null;
-  layoutKey?: string | null;
-  layoutUrl?: string | null;
-  Config?: ComposeConfig | any | string | null;
-  width?: number | null;
-  height?: number | null;
-  status?: string | null;
-  notes?: string | null;
-  version?: number | null;
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-type Sponsorship = {
-  id: string;
-  status: 'PENDING' | 'COMPLETED' | 'IN_PROGRESS' | 'ENDED' | 'CANCELLED';
-  campaignId: string;
-  createdAt?: string;
-  updatedAt?: string;
-};
+type Community = { id: string; cityId: string; name: string };
+type School = { id: string; cityId: string; communityId?: string | null; name: string };
 
 type ChildFull = {
   id: string;
@@ -82,7 +26,6 @@ type ChildFull = {
   category?: string | null;
   wantedGift?: string | null;
   photoUrl?: string | null;
-  photoKey?: string | null;
   description?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -90,58 +33,23 @@ type ChildFull = {
   city?: City | null;
   community?: Community | null;
   school?: School | null;
-  sponsorships?: Sponsorship[];
-  images?: ImageItem[];
 };
 
-type CampaignHistoryItem = {
-  campaign: { id: string; name: string; year?: number | null; status?: string | null };
-  publicId: number | null;
-  wantedGift: string | null;
-  giftFromHistory: boolean;
-  photoUrl: string | null;
-  hasPhoto: boolean;
-  migratedFrom: { id: string | null; name: string | null; at: string } | null;
-  sponsorships: {
-    id: string;
-    status: string;
-    method?: string | null;
-    createdAt?: string;
-    sponsor?: { id: string; name: string; email?: string | null } | null;
-  }[];
-};
-
-const SPONSORSHIP_STATUS_LABEL: Record<string, string> = {
-  PENDING: 'Pendente',
-  IN_PROGRESS: 'Em andamento',
-  IN_PURCHASE: 'Em compra',
-  PACKED: 'Embalado',
-  BOXED: 'Encaixotado',
-  AWAITING_DELIVERY: 'Aguardando entrega',
-  COMPLETED: 'Concluído',
-  ENDED: 'Encerrado',
-  CANCELLED: 'Cancelado',
-};
-
-type ComposeSample = {
-  name?: string;
-  publicId?: string | number;
-  ageText?: string;
-  wantedGift?: string;
-  cityName?: string;
-  communityName?: string;
-};
+// campos que o formulário edita (e que vão no PATCH)
+const EDITABLE = [
+  'publicId', 'name', 'birthDate', 'age', 'motherName', 'cityId', 'communityId', 'schoolId',
+  'schoolLegacy', 'category', 'wantedGift', 'description',
+] as const;
+type Editable = Pick<ChildFull, (typeof EDITABLE)[number]>;
 
 /* ===================== Helpers ===================== */
 function toInputDate(iso?: string | null) {
   if (!iso) return '';
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
-  return d.toISOString().slice(0, 10);
+  return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
 function fromInputDate(d: string) {
-  if (!d) return null;
-  return new Date(d + 'T00:00:00.000Z').toISOString();
+  return d ? new Date(d + 'T00:00:00.000Z').toISOString() : null;
 }
 function calcAgeFromBirth(dateIso?: string | null) {
   if (!dateIso) return null;
@@ -153,81 +61,33 @@ function calcAgeFromBirth(dateIso?: string | null) {
   if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age--;
   return age < 0 ? 0 : age;
 }
+const pickEditable = (c: ChildFull): Editable =>
+  Object.fromEntries(EDITABLE.map((k) => [k, c[k] ?? null])) as Editable;
+const listOf = <T,>(j: any): T[] => (Array.isArray(j?.items) ? j.items : Array.isArray(j) ? j : []);
 
-const DEFAULT_CFG: ComposeConfig = {
-  version: 2,
-  canvas: { width: 1080, height: 1920, background: null },
-  layout: { resizeToCanvas: true, opacity: 1, onTop: true },
-  photoRect: {
-    x: 110, y: 410, width: 850, height: 1400,
-    fit: 'cover', gravity: 'center', cornerRadius: 0,
-    scale: 1, offsetX: 0, offsetY: 0,
-  },
-  texts: [],
-};
-
-/* ===================== Helpers extra ===================== */
-function bestImageUrl(img?: ImageItem | null) {
-  if (!img) return '';
-  return img.framedUrl || img.processedUrl || img.originalUrl || '';
-}
-
-function parseComposeConfig(cfg: unknown): ComposeConfig {
-  try {
-    const raw = typeof cfg === 'string' ? JSON.parse(cfg) : (cfg ?? {});
-    const base = (raw || {}) as Partial<ComposeConfig>;
-    const layout = base.layout ?? {} as Partial<ComposeConfig['layout']>;
-    return {
-      version: base.version ?? 2,
-      canvas: base.canvas ?? { width: 1080, height: 1920, background: null },
-      layout: {
-        onTop: layout.onTop ?? true,
-        opacity: layout.opacity ?? 1,
-        resizeToCanvas: layout.resizeToCanvas ?? true,
-      },
-      photoRect: { ...DEFAULT_CFG.photoRect, ...(base.photoRect ?? {}) },
-      texts: Array.isArray(base.texts) ? base.texts : [],
-    };
-  } catch {
-    return DEFAULT_CFG;
-  }
-}
+const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 mt-1 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none';
 
 /* ===================== Página ===================== */
 export default function EditChildPage() {
-  const router = useRouter();
   const params = useParams();
   const id = (params?.id as string) || '';
-  // vai alimentar o modal (sem proxy)
-  const api = process.env.NEXT_PUBLIC_NEST_API_URL as string;
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const [child, setChild] = useState<ChildFull | null>(null);
-  const [history, setHistory] = useState<CampaignHistoryItem[] | null>(null);
+  const [saved, setSaved] = useState<Editable | null>(null); // último estado salvo, para saber se há alterações
 
-  // Combos
   const [cities, setCities] = useState<City[]>([]);
   const [communities, setCommunities] = useState<Community[]>([]);
   const [schools, setSchools] = useState<School[]>([]);
   const [loadingLoc, setLoadingLoc] = useState(false);
 
-  // Mídia / composição
-  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
-  const [composeQuality, setComposeQuality] = useState<number>(0.9);
-
-  // Editor
-  const [showEditor, setShowEditor] = useState(false);
-
-  // Upload / troca de foto
-  const [uploading, setUploading] = useState(false);
-  const [newPhotoUrl, setNewPhotoUrl] = useState<string>('');
-
   /* ---- Carregar registro e listas ---- */
   useEffect(() => {
-    const load = async () => {
+    if (!id) return;
+    (async () => {
       setLoading(true);
       try {
         const [resChild, resCities] = await Promise.all([
@@ -237,135 +97,79 @@ export default function EditChildPage() {
         if (!resChild.ok) throw new Error('Erro ao carregar a criança.');
         const data: ChildFull = await resChild.json();
         setChild(data);
-
-        if (resCities.ok) {
-          const cJson = await resCities.json();
-          setCities(Array.isArray(cJson?.items) ? cJson.items : cJson ?? []);
-        }
-
-        if (data.cityId) {
-          await reloadCommunities(data.cityId);
-          await reloadSchools(data.cityId, data.communityId ?? undefined);
-        }
+        setSaved(pickEditable(data));
+        if (resCities.ok) setCities(listOf<City>(await resCities.json()));
+        if (data.cityId) await reloadLocation(data.cityId, data.communityId ?? undefined);
       } catch (e) {
         console.error(e);
         setMsg({ type: 'err', text: 'Não foi possível carregar os dados.' });
       } finally {
         setLoading(false);
       }
-    };
-    if (id) load();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  useEffect(() => {
-    if (!id) return;
-    (async () => {
-      try {
-        const r = await fetch(`/api/admin/children/${id}/campaigns`, { cache: 'no-store' });
-        setHistory(r.ok ? await r.json() : []);
-      } catch {
-        setHistory([]);
-      }
-    })();
-  }, [id]);
-
-  useEffect(() => {
-    if (child?.images?.length && !selectedImageId) {
-      setSelectedImageId(child.images[0].id);
-    }
-  }, [child, selectedImageId]);
-
-  const reloadCommunities = async (cityId: string) => {
+  async function reloadLocation(cityId?: string, communityId?: string) {
     setLoadingLoc(true);
     try {
-      const r = await fetch(`/api/admin/communities?cityId=${cityId}&limit=1000`, { cache: 'no-store' });
-      const j = r.ok ? await r.json() : [];
-      setCommunities(Array.isArray(j?.items) ? j.items : j ?? []);
+      const qsSchools = new URLSearchParams({ limit: '1000' });
+      if (cityId) qsSchools.set('cityId', cityId);
+      if (communityId) qsSchools.set('communityId', communityId);
+      const [rc, rs] = await Promise.all([
+        cityId ? fetch(`/api/admin/communities?cityId=${cityId}&limit=1000`, { cache: 'no-store' }) : null,
+        fetch(`/api/admin/schools?${qsSchools.toString()}`, { cache: 'no-store' }),
+      ]);
+      setCommunities(rc?.ok ? listOf<Community>(await rc.json()) : []);
+      setSchools(rs.ok ? listOf<School>(await rs.json()) : []);
     } finally {
       setLoadingLoc(false);
     }
-  };
+  }
 
-  const reloadSchools = async (cityId?: string, communityId?: string) => {
-    setLoadingLoc(true);
-    try {
-      const qs = new URLSearchParams();
-      if (cityId) qs.set('cityId', cityId);
-      if (communityId) qs.set('communityId', communityId);
-      qs.set('limit', '1000');
-      const r = await fetch(`/api/admin/schools?${qs.toString()}`, { cache: 'no-store' });
-      const j = r.ok ? await r.json() : [];
-      setSchools(Array.isArray(j?.items) ? j.items : j ?? []);
-    } finally {
-      setLoadingLoc(false);
-    }
-  };
-
-  /* ---- Helpers de formulário ---- */
-  const setField = <K extends keyof ChildFull>(key: K, value: ChildFull[K]) => {
-    if (!child) return;
-    setChild({ ...child, [key]: value });
-  };
+  /* ---- Formulário ---- */
+  const update = (patch: Partial<ChildFull>) => setChild((c) => (c ? { ...c, ...patch } : c));
 
   const handleBirthChange = (v: string) => {
     const iso = fromInputDate(v);
-    const newAge = calcAgeFromBirth(iso);
-    setChild((c) => (c ? { ...c, birthDate: iso, age: newAge } : c));
-  };
-
-  const handleAgeChange = (v: string) => {
-    const n = v === '' ? null : parseInt(v) || 0;
-    setChild((c) => {
-      if (!c) return c;
-      if (c.birthDate) return { ...c, age: calcAgeFromBirth(c.birthDate) };
-      return { ...c, age: n };
-    });
+    update({ birthDate: iso, age: calcAgeFromBirth(iso) });
   };
 
   const handleCityChange = async (cityId: string) => {
-    setField('cityId', cityId || null);
-    setField('communityId', null);
-    setField('schoolId', null);
-    await reloadCommunities(cityId);
-    await reloadSchools(cityId, undefined);
+    update({ cityId: cityId || null, communityId: null, schoolId: null });
+    await reloadLocation(cityId || undefined);
   };
 
   const handleCommunityChange = async (communityId: string) => {
-    setField('communityId', communityId || null);
-    await reloadSchools(child?.cityId ?? undefined, communityId || undefined);
-    setField('schoolId', null);
+    update({ communityId: communityId || null, schoolId: null });
+    await reloadLocation(child?.cityId ?? undefined, communityId || undefined);
   };
 
-  /* ---- Salvar ---- */
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const dirty = useMemo(
+    () => !!child && !!saved && JSON.stringify(pickEditable(child)) !== JSON.stringify(saved),
+    [child, saved],
+  );
+
+  const discard = () => {
+    if (!saved) return;
+    update(saved);
+    reloadLocation(saved.cityId ?? undefined, saved.communityId ?? undefined);
+  };
+
+  const handleSave = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!child) return;
     setSaving(true);
     setMsg(null);
     try {
-      const payload: Partial<ChildFull> = {
-        publicId: child.publicId ?? null,
-        name: child.name,
-        birthDate: child.birthDate ?? null,
-        age: child.age ?? null,
-        motherName: child.motherName ?? null,
-        cityId: child.cityId ?? null,
-        communityId: child.communityId ?? null,
-        schoolId: child.schoolId ?? null,
-        schoolLegacy: child.schoolLegacy ?? null,
-        category: child.category ?? null,
-        wantedGift: child.wantedGift ?? null,
-        photoUrl: child.photoUrl ?? null,
-        description: child.description ?? null,
-      };
-
+      const payload = pickEditable(child);
       const res = await fetch(`/api/admin/children/${child.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error(`Erro ${res.status}`);
+      setSaved(payload);
       setMsg({ type: 'ok', text: 'Dados atualizados com sucesso!' });
     } catch (err) {
       console.error(err);
@@ -375,50 +179,23 @@ export default function EditChildPage() {
     }
   };
 
-  /* ---- Derivados para ComposedImage ---- */
-  const selectedImage = useMemo(() => {
-    if (!child?.images) return null;
-    return child.images.find((i) => i.id === selectedImageId) ?? child.images[0] ?? null;
-  }, [child, selectedImageId]);
-
-  const ageText = useMemo(() => {
-    const a = child?.age ?? null;
-    if (a === null || a === undefined) return '';
-    return `${a} ${a === 1 ? 'ano' : 'anos'}`;
-  }, [child?.age]);
-
-  const sample: ComposeSample = useMemo(
-    () => ({
-      name: child?.name ?? '',
-      publicId: child?.publicId ?? '',
-      ageText,
-      wantedGift: child?.wantedGift ?? '',
-      cityName: child?.city?.name ?? child?.cityName ?? '',
-      communityName: child?.community?.name ?? '',
-    }),
-    [child, ageText]
-  );
-
-  const selectedConfig = useMemo(
-    () => parseComposeConfig(selectedImage?.Config),
-    [selectedImage?.Config]
-  );
+  /* ---- Derivados ---- */
+  const cityName = cities.find((c) => c.id === child?.cityId)?.name ?? child?.city?.name ?? child?.cityName ?? '';
+  const communityName = communities.find((c) => c.id === child?.communityId)?.name ?? child?.community?.name ?? '';
+  const ageText = child?.age != null ? `${child.age} ${child.age === 1 ? 'ano' : 'anos'}` : '';
 
   /* ---- UI ---- */
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto p-8">
-        <div className="flex items-center gap-3 text-gray-600">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          Carregando dados da criança…
-        </div>
+      <div className="max-w-6xl mx-auto p-8 flex items-center gap-3 text-gray-600">
+        <Loader2 className="w-5 h-5 animate-spin" /> Carregando dados da criança…
       </div>
     );
   }
 
   if (!child) {
     return (
-      <div className="max-w-5xl mx-auto p-8">
+      <div className="max-w-6xl mx-auto p-8">
         <p className="text-gray-600">Criança não encontrada.</p>
         <Link href="/admin/children" className="inline-flex items-center gap-2 mt-4 text-blue-700 hover:underline">
           <ArrowLeft className="w-4 h-4" /> Voltar
@@ -428,21 +205,37 @@ export default function EditChildPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto p-6">
-      <div className="flex items-center justify-between mb-6">
-        <Link href="/admin/children" className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-800">
-          <ArrowLeft className="w-4 h-4" /> Voltar
-        </Link>
-        <h1 className="text-xl font-semibold text-gray-900">Editar Criança #{child.publicId ?? '—'}</h1>
-      </div>
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-28">
+      <Link href="/admin/children" className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 mb-4">
+        <ArrowLeft className="w-4 h-4" /> Crianças
+      </Link>
 
-      {/* Alertas */}
+      {/* Cabeçalho */}
+      <header className="bg-white rounded-2xl border shadow-sm p-5 mb-6 flex items-center gap-4">
+        {child.photoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={child.photoUrl} alt={child.name} className="w-16 h-16 rounded-xl object-cover border shrink-0" />
+        ) : (
+          <div className="w-16 h-16 rounded-xl bg-blue-50 grid place-content-center shrink-0"><Baby className="w-7 h-7 text-blue-500" /></div>
+        )}
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold text-gray-900 truncate">{child.name || 'Sem nome'}</h1>
+          <p className="text-sm text-gray-600 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-mono">#{child.publicId ?? '—'}</span>
+            {ageText && <span>{ageText}</span>}
+            {(cityName || communityName) && (
+              <span className="inline-flex items-center gap-1">
+                <MapPin className="w-3.5 h-3.5" /> {[communityName, cityName].filter(Boolean).join(' · ')}
+              </span>
+            )}
+          </p>
+        </div>
+      </header>
+
       {msg && (
         <div
           className={`mb-4 rounded-lg border px-4 py-3 text-sm flex items-center gap-2 ${
-            msg.type === 'ok'
-              ? 'bg-green-50 border-green-200 text-green-800'
-              : 'bg-red-50 border-red-200 text-red-800'
+            msg.type === 'ok' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'
           }`}
         >
           {msg.type === 'ok' ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
@@ -450,960 +243,156 @@ export default function EditChildPage() {
         </div>
       )}
 
-      <form onSubmit={handleSave} className="space-y-8">
-        {/* Seção: Dados Gerais */}
-        <section className="bg-white rounded-xl border p-5 shadow-sm">
-          <h2 className="font-semibold text-gray-800 mb-4">Dados Gerais</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm text-gray-700">ID público</label>
-              <input
-                type="number"
-                value={child.publicId ?? ''}
-                onChange={(e) => setField('publicId', e.target.value === '' ? null : parseInt(e.target.value))}
-                className="w-full border rounded-lg px-3 py-2 mt-1"
-                placeholder="ex.: 898"
-              />
+      <form onSubmit={handleSave} className="space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* Dados da criança */}
+          <section className="lg:col-span-3 bg-white rounded-2xl border p-5 shadow-sm">
+            <h2 className="font-semibold text-gray-900 mb-4">Dados da criança</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-6 gap-4">
+              <label className="sm:col-span-4 text-sm text-gray-700">
+                Nome
+                <input type="text" value={child.name || ''} onChange={(e) => update({ name: e.target.value })} className={inputCls} />
+              </label>
+              <label className="sm:col-span-2 text-sm text-gray-700">
+                ID principal
+                <input
+                  type="number"
+                  value={child.publicId ?? ''}
+                  onChange={(e) => update({ publicId: e.target.value === '' ? null : parseInt(e.target.value) })}
+                  className={`${inputCls} font-mono`}
+                />
+              </label>
+              <label className="sm:col-span-3 text-sm text-gray-700">
+                Data de nascimento
+                <input type="date" value={toInputDate(child.birthDate)} onChange={(e) => handleBirthChange(e.target.value)} className={inputCls} />
+              </label>
+              <label className="sm:col-span-3 text-sm text-gray-700">
+                Idade (anos)
+                <input
+                  type="number"
+                  value={child.age ?? ''}
+                  disabled={!!child.birthDate}
+                  onChange={(e) => update({ age: e.target.value === '' ? null : parseInt(e.target.value) || 0 })}
+                  className={`${inputCls} disabled:bg-gray-50 disabled:text-gray-500`}
+                  title={child.birthDate ? 'Calculada pela data de nascimento' : undefined}
+                />
+              </label>
+              <label className="sm:col-span-6 text-sm text-gray-700">
+                Nome da mãe
+                <input type="text" value={child.motherName ?? ''} onChange={(e) => update({ motherName: e.target.value || null })} className={inputCls} />
+              </label>
+              <label className="sm:col-span-2 text-sm text-gray-700">
+                Categoria
+                <input type="text" value={child.category ?? ''} onChange={(e) => update({ category: e.target.value || null })} className={inputCls} placeholder="Ex.: ROUPAS" />
+              </label>
+              <label className="sm:col-span-4 text-sm text-gray-700">
+                Presente atual
+                <input type="text" value={child.wantedGift ?? ''} onChange={(e) => update({ wantedGift: e.target.value || null })} className={inputCls} placeholder="Ex.: VESTIDO" />
+                <span className="block text-[11px] text-gray-500 mt-1">O presente de cada campanha fica na seção Campanhas.</span>
+              </label>
+              <label className="sm:col-span-6 text-sm text-gray-700">
+                Observações
+                <textarea
+                  value={child.description ?? ''}
+                  onChange={(e) => update({ description: e.target.value || null })}
+                  className={`${inputCls} min-h-[80px]`}
+                  placeholder="Informações adicionais da criança…"
+                />
+              </label>
             </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm text-gray-700">Nome</label>
-              <input
-                type="text"
-                value={child.name || ''}
-                onChange={(e) => setField('name', e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 mt-1"
-              />
-            </div>
+          </section>
 
-            <div>
-              <label className="block text-sm text-gray-700">Data de Nascimento</label>
-              <input
-                type="date"
-                value={toInputDate(child.birthDate)}
-                onChange={(e) => handleBirthChange(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 mt-1"
-              />
+          {/* Localização */}
+          <section className="lg:col-span-2 bg-white rounded-2xl border p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold text-gray-900">Localização</h2>
+              {loadingLoc && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
             </div>
-            <div>
-              <label className="block text-sm text-gray-700">Idade (anos)</label>
-              <input
-                type="number"
-                value={child.age ?? ''}
-                onChange={(e) => handleAgeChange(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 mt-1"
-                placeholder="Se DN preenchida, calculamos automático"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-700">Nome da mãe</label>
-              <input
-                type="text"
-                value={child.motherName ?? ''}
-                onChange={(e) => setField('motherName', e.target.value || null)}
-                className="w-full border rounded-lg px-3 py-2 mt-1"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm text-gray-700">Categoria</label>
-              <input
-                type="text"
-                value={child.category ?? ''}
-                onChange={(e) => setField('category', e.target.value || null)}
-                className="w-full border rounded-lg px-3 py-2 mt-1"
-                placeholder="Ex.: ROUPAS"
-              />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm text-gray-700">Presente desejado</label>
-              <input
-                type="text"
-                value={child.wantedGift ?? ''}
-                onChange={(e) => setField('wantedGift', e.target.value || null)}
-                className="w-full border rounded-lg px-3 py-2 mt-1"
-                placeholder="Ex.: VESTIDO"
-              />
-            </div>
-
-            <div className="md:col-span-3">
-              <label className="block text-sm text-gray-700">Descrição / Observações</label>
-              <textarea
-                value={child.description ?? ''}
-                onChange={(e) => setField('description', e.target.value || null)}
-                className="w-full border rounded-lg px-3 py-2 mt-1 min-h-[90px]"
-                placeholder="Informações adicionais da criança…"
-              />
-            </div>
-          </div>
-        </section>
-
-        {/* Seção: Localização */}
-        <section className="bg-white rounded-xl border p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-800">Localização</h2>
-            {loadingLoc && (
-              <span className="text-xs text-gray-500 inline-flex items-center gap-2">
-                <Loader2 className="w-3 h-3 animate-spin" /> Atualizando listas…
-              </span>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm text-gray-700">Cidade</label>
-              <select
-                value={child.cityId ?? ''}
-                onChange={(e) => handleCityChange(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 mt-1 bg-white"
-              >
-                <option value="">Selecione…</option>
-                {cities.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}{c.state ? `/${c.state}` : ''}
-                  </option>
-                ))}
-              </select>
-              {!!child.cityName && !child.cityId && (
-                <p className="mt-1 text-xs text-gray-500">Cidade legada: {child.cityName}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm text-gray-700">Comunidade</label>
-              <select
-                value={child.communityId ?? ''}
-                onChange={(e) => handleCommunityChange(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 mt-1 bg-white"
-                disabled={!child.cityId}
-              >
-                <option value="">Selecione…</option>
-                {communities.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm text-gray-700">Escola</label>
-              <select
-                value={child.schoolId ?? ''}
-                onChange={(e) => setField('schoolId', e.target.value || null)}
-                className="w-full border rounded-lg px-3 py-2 mt-1 bg-white"
-                disabled={!child.cityId}
-              >
-                <option value="">Selecione…</option>
-                {schools.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-              <div className="mt-2">
-                <label className="block text-xs text-gray-500">Escola (legado / texto livre)</label>
+            <div className="space-y-4">
+              <label className="block text-sm text-gray-700">
+                Cidade
+                <select value={child.cityId ?? ''} onChange={(e) => handleCityChange(e.target.value)} className={`${inputCls} bg-white`}>
+                  <option value="">Selecione…</option>
+                  {cities.map((c) => (<option key={c.id} value={c.id}>{c.name}{c.state ? `/${c.state}` : ''}</option>))}
+                </select>
+                {!!child.cityName && !child.cityId && <span className="block mt-1 text-xs text-gray-500">Cidade antiga: {child.cityName}</span>}
+              </label>
+              <label className="block text-sm text-gray-700">
+                Comunidade
+                <select value={child.communityId ?? ''} onChange={(e) => handleCommunityChange(e.target.value)} disabled={!child.cityId} className={`${inputCls} bg-white disabled:bg-gray-50`}>
+                  <option value="">Selecione…</option>
+                  {communities.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                </select>
+              </label>
+              <label className="block text-sm text-gray-700">
+                Escola
+                <select value={child.schoolId ?? ''} onChange={(e) => update({ schoolId: e.target.value || null })} disabled={!child.cityId} className={`${inputCls} bg-white disabled:bg-gray-50`}>
+                  <option value="">Selecione…</option>
+                  {schools.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
+                </select>
+              </label>
+              <label className="block text-sm text-gray-700">
+                Escola (texto livre)
                 <input
                   type="text"
                   value={child.schoolLegacy ?? ''}
-                  onChange={(e) => setField('schoolLegacy', e.target.value || null)}
-                  className="w-full border rounded-lg px-3 py-2 mt-1"
-                  placeholder="Preencha quando não houver escola cadastrada"
+                  onChange={(e) => update({ schoolLegacy: e.target.value || null })}
+                  className={inputCls}
+                  placeholder="Quando a escola não estiver cadastrada"
                 />
-              </div>
+              </label>
             </div>
-          </div>
-        </section>
-
-        {/* Seção: Mídia com ComposedImage + Editor */}
-        <section className="bg-white rounded-xl border p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-gray-800">Mídia (Composição)</h2>
-            {selectedImage && (
-              <span className="text-xs text-gray-500">
-                Imagem selecionada: <code className="font-mono">{selectedImage.id}</code>
-              </span>
-            )}
-          </div>
-
-          {/* Controles */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-            <div>
-              <label className="block text-sm text-gray-700">Imagem vinculada</label>
-              <select
-                value={selectedImageId ?? ''}
-                onChange={(e) => setSelectedImageId(e.target.value || null)}
-                className="w-full border rounded-lg px-3 py-2 mt-1 bg-white"
-              >
-                {(child.images ?? []).map((img) => {
-                  const label =
-                    (img.framedUrl && 'framed') ||
-                    (img.processedUrl && 'processed') ||
-                    (img.originalUrl && 'original') || '—';
-                  return (
-                    <option key={img.id} value={img.id}>
-                      {img.id.slice(0, 10)}… · {label}
-                    </option>
-                  );
-                })}
-              </select>
-              {(child.images ?? []).length === 0 && (
-                <p className="mt-1 text-xs text-gray-500">Nenhuma imagem vinculada a este registro.</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm text-gray-700">Qualidade da composição</label>
-              <input
-                type="range"
-                min={0.6}
-                max={1}
-                step={0.05}
-                value={composeQuality}
-                onChange={(e) => setComposeQuality(parseFloat(e.target.value))}
-                className="w-full mt-3"
-              />
-              <div className="text-xs text-gray-500 mt-1">JPEG {Math.round(composeQuality * 100)}%</div>
-            </div>
-
-            <div>
-              <label className="block text-sm text-gray-700">URL da foto principal (photoUrl)</label>
-              <input
-                type="text"
-                value={child.photoUrl ?? ''}
-                onChange={(e) => setField('photoUrl', e.target.value || null)}
-                className="w-full border rounded-lg px-3 py-2 mt-1"
-                placeholder="https://… (persistido no registro)"
-              />
-              <div className="flex gap-2 mt-2 flex-wrap">
-                {selectedImage?.framedUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setField('photoUrl', selectedImage.framedUrl!)}
-                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
-                  >
-                    Usar framedUrl
-                  </button>
-                )}
-                {selectedImage?.processedUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setField('photoUrl', selectedImage.processedUrl!)}
-                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
-                  >
-                    Usar processedUrl
-                  </button>
-                )}
-                {selectedImage?.originalUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setField('photoUrl', selectedImage.originalUrl!)}
-                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
-                  >
-                    Usar originalUrl
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Trocar/editar foto (arquivo ou URL) */}
-            <div>
-              <label className="block text-sm text-gray-700">Trocar foto da criança</label>
-
-              {/* Definir rapidamente a foto principal a partir da selecionada */}
-              <div className="mt-2 flex gap-2 flex-wrap">
-                <button
-                  type="button"
-                  disabled={!selectedImage}
-                  onClick={() => setField('photoUrl', bestImageUrl(selectedImage) || null)}
-                  className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50 disabled:opacity-50"
-                  title="Usar a melhor versão da imagem selecionada (framed > processed > original)"
-                >
-                  Usar imagem selecionada como foto
-                </button>
-
-                {selectedImage?.originalUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setField('photoUrl', selectedImage.originalUrl!)}
-                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
-                  >
-                    Usar original
-                  </button>
-                )}
-                {selectedImage?.processedUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setField('photoUrl', selectedImage.processedUrl!)}
-                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
-                  >
-                    Usar processada
-                  </button>
-                )}
-                {selectedImage?.framedUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setField('photoUrl', selectedImage.framedUrl!)}
-                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
-                  >
-                    Usar enquadrada
-                  </button>
-                )}
-              </div>
-
-              {/* Colar uma URL manualmente */}
-              <input
-                type="text"
-                value={newPhotoUrl}
-                onChange={(e) => setNewPhotoUrl(e.target.value)}
-                placeholder="Cole uma URL de imagem (https://...)"
-                className="w-full border rounded-lg px-3 py-2 mt-2"
-              />
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!newPhotoUrl) return;
-                    setField('photoUrl', newPhotoUrl);
-                    setNewPhotoUrl('');
-                  }}
-                  className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
-                >
-                  Definir URL como foto
-                </button>
-                {child.photoUrl && (
-                  <a
-                    href={child.photoUrl}
-                    target="_blank"
-                    className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50"
-                  >
-                    Abrir foto atual <ExternalLink className="inline-block w-3 h-3" />
-                  </a>
-                )}
-              </div>
-
-              {/* Upload de arquivo (multipart) */}
-              <label className="block text-xs mt-3 text-gray-600">Enviar nova imagem (JPEG/PNG)</label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  setUploading(true);
-                  try {
-                    // EXEMPLO de endpoint (ajuste pro seu Nest):
-                    // POST /api/admin/images/upload  (form-data: file, childId, campaignId)
-                    const fd = new FormData();
-                    fd.append('file', file);
-                    fd.append('childId', child.id);
-                    if (selectedImage?.campaignId) fd.append('campaignId', selectedImage.campaignId);
-
-                    const res = await fetch('/api/admin/images/upload', { method: 'POST', body: fd });
-                    if (!res.ok) throw new Error('Falha no upload');
-
-                    const created: ImageItem = await res.json();
-
-                    // 1) adiciona a imagem à lista local
-                    setChild((c) => (c ? { ...c, images: [created, ...(c.images ?? [])] } : c));
-                    // 2) seleciona a nova
-                    setSelectedImageId(created.id);
-                    // 3) define como foto principal
-                    setField('photoUrl', bestImageUrl(created) || null);
-                  } catch (err) {
-                    console.error(err);
-                    alert('Não foi possível enviar a imagem.');
-                  } finally {
-                    setUploading(false);
-                    if (e.target) e.target.value = '';
-                  }
-                }}
-                className="mt-1"
-              />
-              {uploading && (
-                <div className="text-xs text-gray-500 mt-1 inline-flex items-center gap-2">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Enviando…
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Preview + thumbs */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Preview composto */}
-            <div className="border rounded-xl overflow-hidden">
-              <div className="bg-gray-50 border-b px-3 py-2 text-sm text-gray-600 flex items-center justify-between">
-                <span>Pré-visualização (frontend)</span>
-                <button
-                  type="button"
-                  disabled={!selectedImage}
-                  onClick={() => setShowEditor(true)}
-                  className="inline-flex items-center gap-2 text-xs px-2 py-1.5 rounded-md border bg-white hover:bg-gray-50 disabled:opacity-50"
-                >
-                  <PencilRuler className="w-4 h-4" /> Editar composição
-                </button>
-              </div>
-              <div className="p-3">
-                {selectedImage ? (
-                  <ComposedImage
-                    photoUrl={selectedImage.processedUrl || selectedImage.originalUrl || ''}
-                    layoutUrl={selectedImage.layoutUrl || ''}
-                    config={selectedConfig}
-                    sample={{
-                      name: sample.name,
-                      publicId: sample.publicId,
-                      ageText: sample.ageText,
-                      wantedGift: sample.wantedGift,
-                      cityName: sample.cityName,
-                      communityName: sample.communityName,
-                    }}
-                    fallbackUrl={selectedImage.framedUrl || child.photoUrl || null}
-                    alt={`Pré-visualização ${child.name}`}
-                    className="w-full max-w-md mx-auto aspect-[9/16]"
-                    imgClassName="rounded-lg shadow"
-                    quality={composeQuality}
-                  />
-                ) : (
-                  <div className="h-80 grid place-content-center text-gray-400">Nenhuma imagem selecionada</div>
-                )}
-              </div>
-            </div>
-
-            {/* Thumbs / ações rápidas */}
-            <div className="bg-gray-50 border rounded-xl">
-              <div className="px-3 py-2 border-b text-sm text-gray-600">Arquivos vinculados</div>
-              <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {(child.images ?? []).map((img) => {
-                  const best = bestImageUrl(img);
-                  const tag =
-                    (img.framedUrl && 'framed') ||
-                    (img.processedUrl && 'processed') ||
-                    (img.originalUrl && 'original') || '';
-                  return (
-                    <button
-                      type="button"
-                      key={img.id}
-                      onClick={() => setSelectedImageId(img.id)}
-                      className={`border rounded-lg overflow-hidden text-left hover:ring-2 hover:ring-blue-400 ${
-                        selectedImageId === img.id ? 'ring-2 ring-blue-500' : ''
-                      }`}
-                      title={img.id}
-                    >
-                      {best ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={best} alt={img.id} className="w-full h-36 object-cover" />
-                      ) : (
-                        <div className="h-36 grid place-content-center text-gray-400">—</div>
-                      )}
-                      <div className="p-2 text-xs flex items-center justify-between">
-                        <span className="text-gray-600">{tag}</span>
-                        {best && (
-                          <a href={best} target="_blank" className="text-blue-700 hover:underline">
-                            abrir <ExternalLink className="inline-block w-3 h-3" />
-                          </a>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-                {(child.images ?? []).length === 0 && (
-                  <div className="text-sm text-gray-500">Nenhuma imagem vinculada.</div>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Seção: Histórico de campanhas */}
-        <section className="bg-white rounded-xl border p-5 shadow-sm">
-          <h2 className="font-semibold text-gray-800 mb-4">Histórico de campanhas</h2>
-          {history === null ? (
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <Loader2 className="w-4 h-4 animate-spin" /> Carregando histórico…
-            </div>
-          ) : history.length === 0 ? (
-            <p className="text-sm text-gray-500">Esta criança ainda não participou de nenhuma campanha.</p>
-          ) : (
-            <ol className="space-y-3">
-              {history.map((h) => (
-                <li key={h.campaign.id} className="flex gap-4 border rounded-lg p-3">
-                  {h.photoUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={h.photoUrl} alt={h.campaign.name} className="w-16 h-24 object-cover rounded-md border shrink-0" />
-                  ) : (
-                    <div className="w-16 h-24 rounded-md border border-dashed grid place-content-center text-[10px] text-gray-400 shrink-0">
-                      sem foto
-                    </div>
-                  )}
-                  <div className="min-w-0 flex-1 text-sm">
-                    <p className="font-semibold text-gray-900">
-                      {h.campaign.name}
-                      {h.campaign.year ? <span className="text-gray-500 font-normal"> · {h.campaign.year}</span> : null}
-                      {h.publicId != null ? <span className="ml-2 font-mono text-xs text-gray-600 bg-gray-100 rounded px-1.5 py-0.5">ID #{h.publicId}</span> : null}
-                    </p>
-                    <p className="mt-1">
-                      <span className="text-gray-500">Presente: </span>
-                      {h.wantedGift ? (
-                        <span className="text-gray-900">{h.wantedGift}</span>
-                      ) : (
-                        <span className="text-gray-400">não registrado</span>
-                      )}
-                    </p>
-                    {h.migratedFrom && (
-                      <p className="text-xs text-gray-500 mt-1">
-                        Migrada{h.migratedFrom.name ? ` de ${h.migratedFrom.name}` : ''} em{' '}
-                        {new Date(h.migratedFrom.at).toLocaleDateString()}
-                      </p>
-                    )}
-                    {h.sponsorships.length > 0 ? (
-                      <ul className="mt-1 space-y-0.5">
-                        {h.sponsorships.map((s) => (
-                          <li key={s.id} className="text-xs text-gray-600">
-                            Apadrinhamento: <strong>{SPONSORSHIP_STATUS_LABEL[s.status] ?? s.status}</strong>
-                            {s.sponsor?.name ? ` · ${s.sponsor.name}` : ''}
-                            {s.createdAt ? ` · ${new Date(s.createdAt).toLocaleDateString()}` : ''}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-xs text-gray-400 mt-1">Sem apadrinhamento nesta campanha.</p>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
-
-        {/* Seção: Patrocínios */}
-        <section className="bg-white rounded-xl border p-5 shadow-sm">
-          <h2 className="font-semibold text-gray-800 mb-4">Patrocínios</h2>
-          <div className="overflow-x-auto border rounded-lg">
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50 text-gray-600">
-                <tr>
-                  <th className="text-left px-3 py-2">ID</th>
-                  <th className="text-left px-3 py-2">Status</th>
-                  <th className="text-left px-3 py-2">Campanha</th>
-                  <th className="text-left px-3 py-2">Criado em</th>
-                  <th className="text-left px-3 py-2">Atualizado em</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(child.sponsorships ?? []).map((s) => (
-                  <tr key={s.id} className="border-t">
-                    <td className="px-3 py-2">{s.id}</td>
-                    <td className="px-3 py-2">{s.status}</td>
-                    <td className="px-3 py-2">{s.campaignId}</td>
-                    <td className="px-3 py-2">{s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}</td>
-                    <td className="px-3 py-2">{s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '—'}</td>
-                  </tr>
-                ))}
-                {(child.sponsorships ?? []).length === 0 && (
-                  <tr>
-                    <td className="px-3 py-3 text-gray-500" colSpan={5}>Sem patrocínios vinculados.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        {/* Seção: Metadados */}
-        <section className="bg-white rounded-xl border p-5 shadow-sm">
-          <h2 className="font-semibold text-gray-800 mb-4">Metadados</h2>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
-            <div>
-              <span className="block text-gray-500">ID</span>
-              <span className="font-mono break-all">{child.id}</span>
-            </div>
-            <div>
-              <span className="block text-gray-500">Criado em</span>
-              <span>{child.createdAt ? new Date(child.createdAt).toLocaleString() : '—'}</span>
-            </div>
-            <div>
-              <span className="block text-gray-500">Atualizado em</span>
-              <span>{child.updatedAt ? new Date(child.updatedAt).toLocaleString() : '—'}</span>
-            </div>
-            <div>
-              <span className="block text-gray-500">Excluído em</span>
-              <span>{child.deletedAt ? new Date(child.deletedAt).toLocaleString() : '—'}</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Ações */}
-        <div className="flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={() => router.push('/admin/children')}
-            className="px-4 py-2 rounded-lg border bg-white hover:bg-gray-50"
-          >
-            Cancelar
-          </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            {saving ? 'Salvando…' : 'Salvar alterações'}
-          </button>
+          </section>
         </div>
       </form>
 
-      {/* MODAL: Editor de Foto/Composição (sem proxy; usa apiBase) */}
-      {showEditor && selectedImage && (
-        <EditorComposicaoModal
-          image={selectedImage}
-          sample={sample}
-          onClose={() => setShowEditor(false)}
-          onSaved={(updatedCfg) => {
-            // atualiza no estado local
-            setChild((c) => {
-              if (!c) return c;
-              const imgs = (c.images ?? []).map((im) =>
-                im.id === selectedImage.id ? { ...im, Config: updatedCfg } : im
-              );
-              return { ...c, images: imgs };
-            });
-          }}
-          apiBase={api}
+      {/* Campanhas: arte, layout, ID/presente e apadrinhamentos por campanha */}
+      <section className="mt-6 bg-white rounded-2xl border p-5 shadow-sm">
+        <h2 className="font-semibold text-gray-900">Campanhas</h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Cada campanha tem sua foto, layout (da cidade ou padrão), ID, presente e apadrinhamentos. A arte é mostrada como no site de apadrinhamento.
+        </p>
+        <ChildCampaigns
+          childId={child.id}
+          currentGift={child.wantedGift}
+          fallbackPublicId={child.publicId}
+          baseSample={{ name: child.name, ageText, cityName, communityName }}
         />
-      )}
-    </div>
-  );
-}
+      </section>
 
-/* ============================================================
-   MODAL: Editor de Composição (foco em photoRect / scale / offsets)
-   >>> Mantido sem proxy, usando apiBase direto
-============================================================ */
-function EditorComposicaoModal({
-  image,
-  sample,
-  onClose,
-  onSaved,
-  apiBase,
-}: {
-  image: ImageItem;
-  sample: ComposeSample;
-  onClose: () => void;
-  onSaved: (cfg: ComposeConfig) => void;
-  apiBase: string;
-}) {
-  const [saving, setSaving] = useState(false);
-  const [local, setLocal] = useState<ComposeConfig>(() => parseComposeConfig(image?.Config));
-  const [customPhotoUrl, setCustomPhotoUrl] = useState<string>('');
+      {/* Detalhes técnicos */}
+      <details className="mt-6 bg-white rounded-2xl border p-5 shadow-sm text-sm">
+        <summary className="cursor-pointer font-semibold text-gray-900">Detalhes do registro</summary>
+        <dl className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div><dt className="text-gray-500">ID interno</dt><dd className="font-mono break-all">{child.id}</dd></div>
+          <div><dt className="text-gray-500">Criado em</dt><dd>{child.createdAt ? new Date(child.createdAt).toLocaleString('pt-BR') : '—'}</dd></div>
+          <div><dt className="text-gray-500">Atualizado em</dt><dd>{child.updatedAt ? new Date(child.updatedAt).toLocaleString('pt-BR') : '—'}</dd></div>
+          <div><dt className="text-gray-500">Excluído em</dt><dd>{child.deletedAt ? new Date(child.deletedAt).toLocaleString('pt-BR') : '—'}</dd></div>
+        </dl>
+      </details>
 
-  const pr = local.photoRect;
-  const layoutUrl = image.layoutUrl || '';
-  const fotoPreviewUrl = customPhotoUrl || image.processedUrl || image.originalUrl || '';
-  const [scale, setScale] = useState(1);
-  const hostRef = useRef<HTMLDivElement>(null);
-
-  // auto-scale do viewport
-  useEffect(() => {
-    const recompute = () => {
-      const el = hostRef.current;
-      if (!el) return;
-      const pad = 16;
-      const availW = el.clientWidth - pad;
-      const availH = el.clientHeight - pad;
-      const s = Math.min(availW / local.canvas.width, availH / local.canvas.height, 1);
-      setScale(isFinite(s) && s > 0 ? s : 1);
-    };
-    recompute();
-    let ro: ResizeObserver | null = null;
-
-    if (typeof window !== 'undefined' && 'ResizeObserver' in window) {
-      ro = new ResizeObserver(() => recompute());
-      if (hostRef.current) ro.observe(hostRef.current);
-    }
-
-    window.addEventListener('resize', recompute);
-    return () => {
-      if (ro && hostRef.current) ro.unobserve(hostRef.current);
-      window.removeEventListener('resize', recompute);
-    };
-  }, [local.canvas.width, local.canvas.height]);
-
-  const setPhoto = (p: Partial<ComposeConfig['photoRect']>) =>
-    setLocal((prev) => ({ ...prev, photoRect: { ...prev.photoRect, ...p } }));
-
-  const startDrag = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const sx = e.clientX, sy = e.clientY;
-    const base = { x: pr.x, y: pr.y };
-    const onMove = (ev: MouseEvent) => {
-      const dx = (ev.clientX - sx) / scale;
-      const dy = (ev.clientY - sy) / scale;
-      setPhoto({
-        x: Math.max(0, Math.min(local.canvas.width - pr.width, base.x + dx)),
-        y: Math.max(0, Math.min(local.canvas.height - pr.height, base.y + dy)),
-      });
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
-  const startResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const sx = e.clientX, sy = e.clientY;
-    const base = { w: pr.width, h: pr.height };
-    const onMove = (ev: MouseEvent) => {
-      const dx = (ev.clientX - sx) / scale;
-      const dy = (ev.clientY - sy) / scale;
-      setPhoto({
-        width: Math.max(60, Math.min(local.canvas.width - pr.x, base.w + dx)),
-        height: Math.max(60, Math.min(local.canvas.height - pr.y, base.h + dy)),
-      });
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      // atualiza o Config no backend (sem proxy)
-      const res = await fetch(`${apiBase.replace(/\/+$/,'')}/images/${image.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ Config: local }),
-      });
-      if (!res.ok) throw new Error(`Erro ${res.status}`);
-      onSaved(local);
-      onClose();
-    } catch (e) {
-      alert('Falha ao salvar configuração da imagem.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3 sm:p-4">
-      <div
-        className="bg-white w-full max-w-6xl h-[90vh] lg:h-[86vh] rounded-2xl overflow-hidden shadow-2xl flex flex-col"
-        role="dialog"
-        aria-modal="true"
-      >
-        <div className="p-4 border-b flex items-center justify-between shrink-0 bg-white">
-          <h3 className="font-semibold text-lg">Editor de Composição</h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="px-3 py-1.5 rounded-lg bg-blue-600 text-white disabled:opacity-50"
-            >
-              {saving ? 'Salvando…' : 'Salvar'}
-            </button>
-            <button onClick={onClose} className="px-3 py-1.5 rounded-lg border">Fechar</button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 flex-1 min-h-0">
-          {/* Canvas/guia */}
-          <div className="lg:col-span-2 p-4">
-            <div
-              ref={hostRef}
-              className="relative mx-auto border rounded-xl bg-gray-100"
-              style={{ maxHeight: '75vh', overflow: 'auto', padding: 8 }}
-            >
-              <div
-                className="relative mx-auto overflow-hidden rounded-xl shadow"
-                style={{ width: local.canvas.width * 1, height: local.canvas.height * 1, transform: `scale(${Math.min(1, scale)})`, transformOrigin: 'top left' }}
-              >
-                <div
-                  className="absolute top-0 left-0"
-                  style={{
-                    width: local.canvas.width,
-                    height: local.canvas.height,
-                    backgroundImage: `url(${layoutUrl})`,
-                    backgroundRepeat: 'no-repeat',
-                    backgroundPosition: 'center',
-                    backgroundSize: local.layout?.resizeToCanvas ? '100% 100%' : 'contain',
-                    opacity: local.layout?.opacity ?? 1,
-                  }}
-                >
-                  {/* área de foto (arrastar/redimensionar) */}
-                  <div
-                    className="absolute border-2 border-blue-500/80 bg-blue-300/10 cursor-move"
-                    style={{ left: pr.x, top: pr.y, width: pr.width, height: pr.height }}
-                    onMouseDown={startDrag}
-                    title="Área da foto"
-                  >
-                    <div
-                      className="absolute w-3 h-3 bg-blue-600 right-[-6px] bottom-[-6px] cursor-se-resize"
-                      onMouseDown={startResize}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Prévia renderizada com seu ComposedImage (lado a lado) */}
-            <div className="mt-4 border rounded-xl overflow-hidden">
-              <div className="bg-gray-50 border-b px-3 py-2 text-sm text-gray-600">Prévia</div>
-              <div className="p-3">
-                <ComposedImage
-                  photoUrl={fotoPreviewUrl}
-                  layoutUrl={layoutUrl}
-                  config={local}
-                  sample={{
-                    name: sample.name,
-                    publicId: sample.publicId,
-                    ageText: sample.ageText,
-                    wantedGift: sample.wantedGift,
-                    cityName: sample.cityName,
-                    communityName: sample.communityName,
-                  }}
-                  fallbackUrl={image.framedUrl || null}
-                  alt="Preview composição"
-                  className="w-full max-w-md mx-auto aspect-[9/16]"
-                  imgClassName="rounded-lg shadow"
-                  quality={0.9}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Painel de propriedades */}
-          <div className="p-4 border-l bg-gray-50 space-y-6 max-h-[80vh] overflow-auto">
-            <div className="space-y-2">
-              <div className="font-semibold">Canvas / Layout</div>
-              <div className="grid grid-cols-2 gap-2">
-                <NumberInput
-                  label="Largura"
-                  value={local.canvas.width}
-                  onChange={(v) => setLocal((c) => ({ ...c, canvas: { ...c.canvas, width: v } }))}
-                />
-                <NumberInput
-                  label="Altura"
-                  value={local.canvas.height}
-                  onChange={(v) => setLocal((c) => ({ ...c, canvas: { ...c.canvas, height: v } }))}
-                />
-              </div>
-              <label className="inline-flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={!!local.layout?.resizeToCanvas}
-                  onChange={(e) => setLocal((c) => ({ ...c, layout: { ...c.layout, resizeToCanvas: e.target.checked } }))}
-                />
-                Redimensionar layout para o canvas
-              </label>
-              <label className="text-sm block">
-                Opacidade do layout
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={local.layout?.opacity ?? 1}
-                  onChange={(e) => setLocal((c) => ({ ...c, layout: { ...c.layout, opacity: parseFloat(e.target.value) } }))}
-                />
-              </label>
-            </div>
-
-            <div className="space-y-2">
-              <div className="font-semibold">Foto (photoRect)</div>
-              <div className="grid grid-cols-2 gap-2">
-                <NumberInput label="X" value={pr.x} onChange={(v) => setPhoto({ x: v })} />
-                <NumberInput label="Y" value={pr.y} onChange={(v) => setPhoto({ y: v })} />
-                <NumberInput label="Largura" value={pr.width} onChange={(v) => setPhoto({ width: v })} />
-                <NumberInput label="Altura" value={pr.height} onChange={(v) => setPhoto({ height: v })} />
-                <NumberInput label="Scale" step={0.05} value={pr.scale ?? 1} onChange={(v) => setPhoto({ scale: v })} />
-                <NumberInput label="Cantos" value={pr.cornerRadius ?? 0} onChange={(v) => setPhoto({ cornerRadius: v })} />
-                <NumberInput label="offX" value={pr.offsetX ?? 0} onChange={(v) => setPhoto({ offsetX: v })} />
-                <NumberInput label="offY" value={pr.offsetY ?? 0} onChange={(v) => setPhoto({ offsetY: v })} />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="text-xs">
-                  Fit
-                  <select
-                    className="w-full border rounded px-2 py-1 text-sm"
-                    value={pr.fit}
-                    onChange={(e) => setPhoto({ fit: e.target.value as ComposeConfig['photoRect']['fit'] })}
-                  >
-                    {['cover', 'contain', 'fill', 'inside', 'outside'].map((x) => (
-                      <option key={x} value={x}>
-                        {x}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs">
-                  Gravity
-                  <select
-                    className="w-full border rounded px-2 py-1 text-sm"
-                    value={pr.gravity}
-                    onChange={(e) => setPhoto({ gravity: e.target.value as any })}
-                  >
-                    {['north','northeast','east','southeast','south','southwest','west','northwest','center'].map((g) => (
-                      <option key={g} value={g}>
-                        {g}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="font-semibold">Foto de prévia</div>
-              <input
-                type="text"
-                placeholder="Cole uma URL para prévia (opcional)"
-                value={customPhotoUrl}
-                onChange={(e) => setCustomPhotoUrl(e.target.value)}
-                className="w-full border rounded px-2 py-1 text-sm"
-              />
-              <div className="text-xs text-gray-500">
-                Se vazio, usamos processed/original da imagem vinculada.
-              </div>
-            </div>
-
-            <div className="pt-2 border-t">
+      {/* Barra de salvar: só aparece com alterações nos dados */}
+      {dirty && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 backdrop-blur">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+            <span className="text-sm text-gray-700">Alterações não salvas nos dados da criança</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={discard} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm hover:bg-gray-50">
+                <Undo2 className="w-4 h-4" /> Descartar
+              </button>
               <button
-                onClick={() => setLocal((c) => ({ ...c }))}
-                className="px-3 py-1.5 rounded-lg border"
+                type="button"
+                onClick={() => handleSave()}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
               >
-                Aplicar no preview
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {saving ? 'Salvando…' : 'Salvar alterações'}
               </button>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
-  );
-}
-
-/* ===================== UI helpers ===================== */
-function NumberInput({
-  label,
-  value,
-  onChange,
-  step = 1,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  step?: number;
-}) {
-  return (
-    <label className="text-sm text-gray-600 block">
-      {label}
-      <input
-        type="number"
-        step={step}
-        value={Number.isFinite(value) ? value : 0}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full border rounded px-2 py-1"
-      />
-    </label>
   );
 }
