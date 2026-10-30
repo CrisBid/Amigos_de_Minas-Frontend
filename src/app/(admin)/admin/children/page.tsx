@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Edit, Trash2, Upload, Users, Heart, Baby, MapPin, Gift, ChevronLeft, ChevronRight, Camera } from 'lucide-react';
+import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 
 type Sponsorship = {
   id: string;
@@ -41,6 +42,7 @@ const PAGE_SIZE = 20;
 export default function AdminChildrenPage() {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
+  const { campaigns, campaignId, setCampaignId, ready } = useAdminCampaign();
   const [data, setData] = useState<PageResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState<{ total: number; active: number; pending: number; available: number; sponsorshipRate: number }>({
@@ -68,7 +70,11 @@ export default function AdminChildrenPage() {
       const url = new URL('/api/admin/children', window.location.origin);
       url.searchParams.set('page', String(page));
       url.searchParams.set('pageSize', String(PAGE_SIZE));
+      // o backend pagina por skip/take
+      url.searchParams.set('skip', String((page - 1) * PAGE_SIZE));
+      url.searchParams.set('take', String(PAGE_SIZE));
       if (q.trim()) url.searchParams.set('q', q.trim());
+      if (campaignId) url.searchParams.set('campaignId', campaignId);
 
       const res = await fetch(url.toString(), {
         cache: 'no-store',
@@ -91,7 +97,7 @@ export default function AdminChildrenPage() {
 
   const loadStats = async () => {
     try {
-      const res = await fetch('/api/admin/children/stats', {
+      const res = await fetch(`/api/admin/children/stats${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ''}`, {
         cache: 'no-store',
         credentials: 'include',
         headers: { accept: 'application/json' },
@@ -115,10 +121,11 @@ export default function AdminChildrenPage() {
 
 
   useEffect(() => {
+    if (!ready) return;
     load();
     loadStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, page]);
+  }, [q, page, campaignId, ready]);
 
   const getStatusConfig = (s?: Sponsorship['status']) => {
     switch (s) {
@@ -278,10 +285,12 @@ export default function AdminChildrenPage() {
                 onChange={(e) => { setPage(1); setQ(e.target.value); }}
               />
             </div>
-            {/* Espaço para filtros futuros */}
-            <div className="text-sm text-gray-500 flex items-center gap-2 px-3">
-              <span>Filtros adicionais em breve</span>
-            </div>
+            <CampaignFilter
+              campaigns={campaigns}
+              value={campaignId}
+              onChange={(id) => { setPage(1); setCampaignId(id); }}
+              className="lg:w-96"
+            />
           </div>
         </div>
 

@@ -24,6 +24,7 @@ import {
 
 // >>> PDF exporter
 import { exportSponsorshipsPdf } from '@/lib/pdf/exportSponsorshipsPdf';
+import { campaignLabel, useAdminCampaign } from '@/components/Admin/CampaignFilter';
 
 // >>> Status unificado
 import {
@@ -254,7 +255,8 @@ async function enrichItemsForSponsor(items: Sponsorship[]): Promise<PdfItem[]> {
 export default function AdminSponsorshipsPage() {
   // filtros
   const [q, setQ] = useState('');
-  const [campaignId, setCampaignId] = useState<string>('');
+  // campanha: começa com a única ativa (se houver) e é lembrada entre as telas do admin
+  const { campaigns, campaignId, setCampaignId, ready: campaignReady } = useAdminCampaign();
   const [activeTab, setActiveTab] = useState<TabKey>('PENDING');
 
   // NOVO: filtros extras por mais status
@@ -279,7 +281,6 @@ export default function AdminSponsorshipsPage() {
   const isFilteringMethods = methodFilters.length > 0;
 
   // dados
-  const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
   const [allRows, setAllRows] = useState<Sponsorship[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -327,27 +328,6 @@ export default function AdminSponsorshipsPage() {
   const [destQuery, setDestQuery] = useState('');
   const [destResults, setDestResults] = useState<SponsorLite[]>([]);
   const [destSponsor, setDestSponsor] = useState<SponsorLite | null>(null);
-
-  // Carrega campanhas
-  useEffect(() => {
-    (async () => {
-      try {
-        const url = new URL('/api/admin/campaigns', window.location.origin);
-        url.searchParams.set('pageSize', '10000');
-        const r = await fetch(url.toString(), { cache: 'no-store', credentials: 'include' });
-        if (!r.ok) return;
-        const raw = await r.json();
-        const items: CampaignLite[] = Array.isArray(raw?.items)
-          ? raw.items
-          : Array.isArray(raw?.data)
-          ? raw.data
-          : Array.isArray(raw)
-          ? raw
-          : [];
-        setCampaigns(items);
-      } catch {}
-    })();
-  }, []);
 
   // Carrega pontos de coleta
   useEffect(() => {
@@ -398,9 +378,10 @@ export default function AdminSponsorshipsPage() {
     }
   }
   useEffect(() => {
+    if (!campaignReady) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, campaignId]);
+  }, [q, campaignId, campaignReady]);
 
   // ===== Export PDF helper (abre o modal padrão com as opções)
   function openExportModal(items: Sponsorship[], label: string, sponsorId?: string) {
@@ -923,7 +904,7 @@ export default function AdminSponsorshipsPage() {
                 <option value="">Todas as campanhas</option>
                 {campaigns.map(c => (
                   <option key={c.id} value={c.id}>
-                    {c.name}{c.year ? ` (${c.year})` : ''}
+                    {campaignLabel(c)}
                   </option>
                 ))}
               </select>

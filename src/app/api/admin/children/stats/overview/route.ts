@@ -8,7 +8,9 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   try {
     const token = await getToken({ req });
-    const res = await fetch(`${API}/children/stats/overview`, {
+    const campaignId = req.nextUrl.searchParams.get('campaignId');
+    const qs = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : '';
+    const res = await fetch(`${API}/children/stats/overview${qs}`, {
       method: 'GET',
       headers: {
         accept: 'application/json',

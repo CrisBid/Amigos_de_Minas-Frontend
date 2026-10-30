@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { FileSpreadsheet, Download, SlidersHorizontal, RefreshCw } from 'lucide-react';
+import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 
 type Option = { id: string; name: string };
 
@@ -23,6 +24,8 @@ const METHOD_OPTIONS = [
 
 export default function ExportSponsorshipsPage() {
   const [level, setLevel] = useState<Level>('general');
+  // campanha: começa com a única ativa (se houver) e é lembrada entre as telas do admin
+  const { campaigns, campaignId, setCampaignId } = useAdminCampaign();
 
   const [cities, setCities] = useState<Option[]>([]);
   const [communities, setCommunities] = useState<Option[]>([]);
@@ -117,8 +120,10 @@ export default function ExportSponsorshipsPage() {
       if (normalized) p.set('ids', normalized);
     }
 
+    if (campaignId) p.set('campaignId', campaignId);
+
     return p.toString();
-  }, [level, canPickCity, canPickCommunity, canPickSponsor, canPickIds, cityId, communityId, sponsorId, status, method, ids]);
+  }, [level, canPickCity, canPickCommunity, canPickSponsor, canPickIds, cityId, communityId, sponsorId, status, method, ids, campaignId]);
 
   async function handleExport() {
     setLoading(true);
@@ -172,6 +177,8 @@ export default function ExportSponsorshipsPage() {
           <SlidersHorizontal className="w-4 h-4" />
           <span className="font-medium">Filtros</span>
         </div>
+
+        <CampaignFilter campaigns={campaigns} value={campaignId} onChange={setCampaignId} className="w-full mb-4" />
 
         {/* Linha 1: Level */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

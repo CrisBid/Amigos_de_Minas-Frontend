@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { apiPath, apiFetch } from '@/lib/api';
+import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 import {
   Heart, Users, Calendar, Baby, MapPin, TrendingUp, Clock,
   UserCheck, Building2, ArrowUp, Activity, Target
@@ -32,6 +33,8 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
   const [loading, setLoading] = useState(true);
+  // campanha: começa com a única ativa (se houver) e é lembrada entre as telas do admin
+  const { campaigns, campaignId, setCampaignId, ready: campaignReady } = useAdminCampaign();
 
   // Extrai lista e contadores de respostas que podem vir como { items }, { data } ou array puro
   const extract = (raw: any) => {
@@ -118,7 +121,7 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || !campaignReady) return;
 
     const ac = new AbortController();
     const { signal } = ac;
@@ -127,17 +130,25 @@ export default function AdminDashboard() {
       try {
         setLoading(true);
 
+        // campanha selecionada: crianças e apadrinhamentos só dela
+        const campaignQs = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : '';
+        const getJson = async (path: string) => {
+          const res = await apiFetch(apiPath(path), {
+            cache: 'no-store',
+            credentials: 'include',
+            headers: { accept: 'application/json' },
+            signal,
+          }, token);
+          return res.ok ? res.json() : null;
+        };
+
         const [
-          totalChildren, totalSponsorships, totalCampaigns,
-          activeSponsorships, pendingSponsorships, endedSponsorships,
+          childStats, sponsorshipsRaw, totalCampaigns,
           activeCampaigns, finishedCampaigns, draftCampaigns,
         ] = await Promise.all([
-          getTotal('/children', signal),
-          getTotal('/sponsorships', signal),
+          getJson(`/children/stats/all${campaignQs}`),
+          getJson(`/sponsorships${campaignQs}`),
           getTotal('/campaigns', signal),
-          getTotalByStatus('/sponsorships', 'ACTIVE', signal),
-          getTotalByStatus('/sponsorships', 'PENDING', signal),
-          getTotalByStatus('/sponsorships', 'ENDED', signal),
           getTotalByStatus('/campaigns', 'ACTIVE', signal),
           getTotalByStatus('/campaigns', 'FINISHED', signal),
           getTotalByStatus('/campaigns', 'DRAFT', signal),
@@ -145,45 +156,43 @@ export default function AdminDashboard() {
 
         const { total: citiesTotal, states: statesCount } = await getAllCitiesStatesCount(signal);
 
-        const sponsorshipRate = totalChildren > 0 ? (activeSponsorships / totalChildren) * 100 : 0;
-        const availableChildren = Math.max(0, totalChildren - activeSponsorships);
+        // apadrinhamentos: "ativos" = em andamento até concluído; "finalizados" = encerrados/cancelados
+        const sponsorshipsList: any[] = sponsorshipsRaw ? extract(sponsorshipsRaw).items : [];
+        const ACTIVE_STATUSES = ['IN_PROGRESS', 'IN_PURCHASE', 'PACKED', 'BOXED', 'AWAITING_DELIVERY', 'COMPLETED'];
+        const activeSponsorships = sponsorshipsList.filter((s) => ACTIVE_STATUSES.includes(s.status)).length;
+        const pendingSponsorships = sponsorshipsList.filter((s) => s.status === 'PENDING').length;
+        const endedSponsorships = sponsorshipsList.filter((s) => s.status === 'ENDED' || s.status === 'CANCELLED').length;
+
+        // crianças: estatística por criança (último vínculo), da campanha quando selecionada
+        const totalChildren = Number(childStats?.total ?? 0);
+        const sponsoredChildren = Number(childStats?.active ?? 0) + Number(childStats?.in_progress ?? 0);
+        const availableChildren = Number(childStats?.available ?? Math.max(0, totalChildren - sponsoredChildren));
+        const sponsorshipRate = totalChildren > 0 ? (sponsoredChildren / totalChildren) * 100 : 0;
 
         setStats({
-          children: { total: totalChildren, sponsored: activeSponsorships, available: availableChildren, pending: pendingSponsorships },
+          children: { total: totalChildren, sponsored: sponsoredChildren, available: availableChildren, pending: Number(childStats?.pending ?? 0) },
           campaigns: { total: totalCampaigns, active: activeCampaigns, finished: finishedCampaigns, draft: draftCampaigns },
-          sponsorships: { total: totalSponsorships, active: activeSponsorships, pending: pendingSponsorships, ended: endedSponsorships },
+          sponsorships: { total: sponsorshipsList.length, active: activeSponsorships, pending: pendingSponsorships, ended: endedSponsorships },
           cities: { total: citiesTotal, states: statesCount },
           trends: { childrenGrowth: 0, sponsorshipRate: Math.round(sponsorshipRate * 10) / 10, activeCampaigns },
         });
 
         // Atividade recente
         const recentChildrenUrl = new URL(apiPath('/children'));
-        recentChildrenUrl.searchParams.set('pageSize', '5');
-        recentChildrenUrl.searchParams.set('orderBy', 'createdAt');
-        recentChildrenUrl.searchParams.set('order', 'desc');
+        recentChildrenUrl.searchParams.set('take', '5');
+        if (campaignId) recentChildrenUrl.searchParams.set('campaignId', campaignId);
 
-        const recentSponsorshipsUrl = new URL(apiPath('/sponsorships'));
-        recentSponsorshipsUrl.searchParams.set('pageSize', '5');
-        recentSponsorshipsUrl.searchParams.set('orderBy', 'createdAt');
-        recentSponsorshipsUrl.searchParams.set('order', 'desc');
-
-        const [recentChildrenRes, recentSponsorshipsRes] = await Promise.all([
-          apiFetch(recentChildrenUrl.toString(), {
-            cache: 'no-store',
-            credentials: 'include',
-            headers: { accept: 'application/json' },
-            signal,
-          }, token),
-          apiFetch(recentSponsorshipsUrl.toString(), {
-            cache: 'no-store',
-            credentials: 'include',
-            headers: { accept: 'application/json' },
-            signal,
-          }, token),
-        ]);
+        const recentChildrenRes = await apiFetch(recentChildrenUrl.toString(), {
+          cache: 'no-store',
+          credentials: 'include',
+          headers: { accept: 'application/json' },
+          signal,
+        }, token);
 
         const rc = recentChildrenRes.ok ? extract(await recentChildrenRes.json()).items : [];
-        const rs = recentSponsorshipsRes.ok ? extract(await recentSponsorshipsRes.json()).items : [];
+        const rs = [...sponsorshipsList].sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        );
 
         const acts: RecentActivity[] = [];
         rc.slice(0, 2).forEach((child: any) => {
@@ -196,14 +205,15 @@ export default function AdminDashboard() {
           });
         });
         rs.slice(0, 3).forEach((s: any) => {
+          const confirmed = ACTIVE_STATUSES.includes(s.status);
           acts.push({
             id: `sponsorship-${s.id}`,
             type: 'sponsorship',
-            message: s.status === 'ACTIVE'
+            message: confirmed
               ? `Apadrinhamento confirmado: ${s.sponsor?.name || 'Padrinho'} ↔ ${s.child?.name || 'Criança'}`
               : `Nova solicitação de apadrinhamento para ${s.child?.name || 'Criança'}`,
             timestamp: s.createdAt,
-            status: s.status === 'ACTIVE' ? 'success' : 'pending',
+            status: confirmed ? 'success' : 'pending',
           });
         });
 
@@ -226,7 +236,8 @@ export default function AdminDashboard() {
     })();
 
     return () => ac.abort();
-  }, [ready, token]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, token, campaignReady, campaignId]);
 
   // UI helpers
   const formatDate = (ts: string) => {
@@ -267,9 +278,12 @@ export default function AdminDashboard() {
           <h1 className="text-3xl font-bold text-gray-900 mb-2">
             Dashboard dos Amigos de Minas
           </h1>
-          <p className="text-gray-600 text-lg">
-            Bem-vindo ao painel administrativo - Visão geral dos apadrinhamentos
-          </p>
+          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+            <p className="text-gray-600 text-lg">
+              Bem-vindo ao painel administrativo - Visão geral dos apadrinhamentos
+            </p>
+            <CampaignFilter campaigns={campaigns} value={campaignId} onChange={setCampaignId} className="w-full lg:w-96" />
+          </div>
         </div>
 
         {/* Main Stats Grid */}

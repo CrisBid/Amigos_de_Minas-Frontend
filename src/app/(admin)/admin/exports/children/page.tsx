@@ -7,6 +7,7 @@ import {
   SlidersHorizontal,
   RefreshCw,
 } from 'lucide-react';
+import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 
 type Option = { id: string; name: string };
 type Level = 'general' | 'city' | 'community' | 'selection';
@@ -27,6 +28,8 @@ const BIND_OPTIONS: { id: Bind; name: string }[] = [
 
 export default function ExportChildrenPage() {
   const [level, setLevel] = useState<Level>('general');
+  // campanha: começa com a única ativa (se houver) e é lembrada entre as telas do admin
+  const { campaigns, campaignId, setCampaignId } = useAdminCampaign();
   const [bind, setBind] = useState<Bind>('all');
 
   const [cities, setCities] = useState<Option[]>([]);
@@ -91,8 +94,10 @@ export default function ExportChildrenPage() {
       if (normalized) p.set('ids', normalized);
     }
 
+    if (campaignId) p.set('campaignId', campaignId);
+
     return p.toString();
-  }, [level, bind, canPickCity, canPickCommunity, canPickIds, cityId, communityId, ids]);
+  }, [level, bind, canPickCity, canPickCommunity, canPickIds, cityId, communityId, ids, campaignId]);
 
   // Exportar
   async function handleExport() {
@@ -148,6 +153,8 @@ export default function ExportChildrenPage() {
           <SlidersHorizontal className="w-4 h-4" />
           <span className="font-medium">Filtros</span>
         </div>
+
+        <CampaignFilter campaigns={campaigns} value={campaignId} onChange={setCampaignId} className="w-full mb-4" />
 
         {/* Linha 1: Bind + Level */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -13,6 +13,7 @@ import {
   RefreshCcw,
   Download
 } from 'lucide-react';
+import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 
 /* ====== Tipos ====== */
 type Totals = {
@@ -59,6 +60,7 @@ type Overview = {
 export default function ConferenciaStatsPage() {
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(false);
+  const { campaigns, campaignId, setCampaignId, campaign, ready } = useAdminCampaign();
   const [qCity, setQCity] = useState('');
   const [qComm, setQComm] = useState('');
 
@@ -66,7 +68,8 @@ export default function ConferenciaStatsPage() {
     setLoading(true);
     try {
       // >>> usando o proxy do Next
-      const res = await fetch(`/api/admin/children/stats/overview`, {
+      const qs = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : '';
+      const res = await fetch(`/api/admin/children/stats/overview${qs}`, {
         method: 'GET',
         cache: 'no-store',
         credentials: 'include',
@@ -83,9 +86,10 @@ export default function ConferenciaStatsPage() {
   };
 
   useEffect(() => {
+    if (!ready) return;
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [campaignId, ready]);
 
   const filteredCities = useMemo(() => {
     if (!data) return [];
@@ -140,7 +144,7 @@ export default function ConferenciaStatsPage() {
 
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'conferencia-estatisticas.csv';
+    a.href = url; a.download = `conferencia-estatisticas${campaign ? `-${campaign.slug ?? campaign.id}` : ''}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   };
@@ -162,7 +166,8 @@ export default function ConferenciaStatsPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <CampaignFilter campaigns={campaigns} value={campaignId} onChange={setCampaignId} className="w-full sm:w-80" />
             <button
               className="inline-flex items-center gap-2 px-4 py-3 bg-white/70 border border-white/20 rounded-xl text-gray-700 hover:bg-white hover:shadow-lg transition-all"
               onClick={fetchData}
