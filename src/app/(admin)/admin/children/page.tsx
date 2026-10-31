@@ -74,6 +74,11 @@ export default function AdminChildrenPage() {
   const [page, setPage] = useState(1);
   const { campaigns, campaignId, setCampaignId, ready } = useAdminCampaign();
   const [photoFilter, setPhotoFilter] = useState<'' | 'without' | 'with'>('');
+  // ?photo=without (link do dashboard) já abre filtrado
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('photo');
+    if (p === 'without' || p === 'with') setPhotoFilter(p);
+  }, []);
   const [missingPhotos, setMissingPhotos] = useState<number | null>(null);
 
   // layouts da campanha selecionada (o da cidade da criança, senão o padrão) para enviar foto pela listagem

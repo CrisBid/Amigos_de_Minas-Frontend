@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ADMIN_ROUTES, AdminRoute } from "@/config/adminNav";
 import { Settings, Users, Calendar, BarChart3, Home } from "lucide-react";
+import NotificationBell from "./NotificationBell";
 
 // Mapeamento de ícones para as rotas (ajuste conforme suas rotas)
 const ROUTE_ICONS: Record<string, any> = {
@@ -66,11 +67,9 @@ export default function AdminTopNav() {
             })}
           </div>
 
-          {/* User Menu (opcional) */}
+          {/* Notificações (apadrinhamentos pendentes) */}
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-gradient-to-br from-gray-200 to-gray-300 rounded-full flex items-center justify-center">
-              <span className="text-gray-700 text-sm font-medium">U</span>
-            </div>
+            <NotificationBell />
           </div>
         </div>
       </div>
