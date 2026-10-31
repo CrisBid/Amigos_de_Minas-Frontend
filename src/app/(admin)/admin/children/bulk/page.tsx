@@ -62,6 +62,9 @@ type ColumnMap = {
 
 type Option = { id: string; name: string; state?: string | null };
 
+/** ID da planilha que já era ID principal de outra criança (resposta do envio) */
+type Renumbered = { publicId: number; newMainId: number; existingName: string; sameIdInCampaign?: boolean };
+
 // ADAPTADO: adiciona Step 6 (Confirmação)
 type Step = 1 | 2 | 3 | 4 | 5 | 6;
 
@@ -198,6 +201,7 @@ export default function BulkChildrenWizardPage() {
     uploaded: number;
     failed: number;
     errors: string[];
+    renumbered?: (Renumbered & { childId?: string })[];
   } | null>(null);
 
   /* =====================
@@ -964,13 +968,9 @@ export default function BulkChildrenWizardPage() {
         updated: Number(result?.updated?.length || 0),
         uploaded: uploadedCount,
         failed: uploadErrors.length,
-        errors: [
-          // ID da planilha que era de outra criança no cadastro: virou cadastro novo
-          ...((result?.renumbered ?? []) as { publicId: number; newMainId: number; existingName: string }[]).map(
-            (r) => `ID ${r.publicId}: já era de "${r.existingName}" no cadastro; a criança foi cadastrada como nova (ID principal ${r.newMainId}) e usa o ID ${r.publicId} nesta campanha.`,
-          ),
-          ...uploadErrors,
-        ],
+        errors: uploadErrors,
+        // ID da planilha que já era ID principal de outra criança: virou cadastro novo (informativo)
+        renumbered: (result?.renumbered ?? []).map((r: Renumbered) => ({ ...r, childId: childIds[String(r.publicId)] })),
       }));
       setStep(6);
     } catch (e: any) {
@@ -1777,8 +1777,8 @@ export default function BulkChildrenWizardPage() {
                     </div>
 
                     {finalSummary.errors.length > 0 && (
-                      <div className="mt-6 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900">
-                        <div className="font-semibold mb-2">Ocorreram erros:</div>
+                      <div className="mt-6 rounded-lg border border-red-300 bg-red-50 p-3 text-red-900">
+                        <div className="font-semibold mb-2">Falhas:</div>
                         <ul className="list-disc ml-5 text-sm">
                           {finalSummary.errors.map((e, i) => (
                             <li key={i} className="mb-1">{e}</li>
@@ -1786,6 +1786,51 @@ export default function BulkChildrenWizardPage() {
                         </ul>
                       </div>
                     )}
+
+                    {/* mesmo número aparecendo para duas crianças nesta campanha: precisa ajustar */}
+                    {(() => {
+                      const clashes = (finalSummary.renumbered ?? []).filter((r) => r.sameIdInCampaign);
+                      return clashes.length > 0 ? (
+                        <div className="mt-6 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900">
+                          <div className="font-semibold mb-1">Precisa de atenção: ID repetido nesta campanha ({clashes.length})</div>
+                          <p className="text-sm mb-2">
+                            A criança antiga também está nesta campanha e aparece com o mesmo número. Dê outro ID na campanha
+                            para uma delas (no cadastro da criança → aba da campanha → “ID na campanha”).
+                          </p>
+                          <ul className="list-disc ml-5 text-sm space-y-0.5">
+                            {clashes.map((r) => (
+                              <li key={r.publicId}>
+                                ID {r.publicId}: nova criança
+                                {r.childId ? <> (<a href={`/admin/children/${r.childId}`} className="underline" target="_blank" rel="noreferrer">abrir</a>)</> : null}
+                                {' '}e “{r.existingName}”
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null;
+                    })()}
+
+                    {/* informativo: o número da planilha já era ID principal de outra criança (comum quando a numeração recomeça) */}
+                    {(() => {
+                      const info = (finalSummary.renumbered ?? []).filter((r) => !r.sameIdInCampaign);
+                      return info.length > 0 ? (
+                        <details className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-3 text-blue-900">
+                          <summary className="cursor-pointer text-sm">
+                            <strong>{info.length}</strong> criança{info.length === 1 ? '' : 's'} nova{info.length === 1 ? '' : 's'} ganh{info.length === 1 ? 'ou' : 'aram'} outro ID principal (só interno).
+                            Nesta campanha {info.length === 1 ? 'ela usa' : 'elas usam'} o ID da planilha — nada a fazer.
+                          </summary>
+                          <p className="text-xs mt-2 mb-1">
+                            O número da planilha já era o ID principal de outra criança de campanhas anteriores (nome diferente),
+                            então foi criado um cadastro novo. A criança antiga não foi alterada.
+                          </p>
+                          <ul className="text-xs grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-0.5">
+                            {info.map((r) => (
+                              <li key={r.publicId}>ID {r.publicId} → principal {r.newMainId} <span className="text-blue-700/70">(o {r.publicId} principal é de {r.existingName})</span></li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : null;
+                    })()}
 
                     <div className="mt-6 flex items-center gap-3">
                       <button
