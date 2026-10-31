@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Edit, Trash2, Users, Layers, MapPin, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { slugify } from '@/lib/slugify';
 
 /* ===================== Tipos ===================== */
 type CityMin = { id: string; name: string; state?: string | null };
@@ -353,13 +354,17 @@ function CommunityDialog({
   const [cityId, setCityId] = useState<string>(initial?.cityId ?? '');
   const [name, setName] = useState(initial?.name ?? '');
   const [slug, setSlug] = useState(initial?.slug ?? '');
+  // o slug segue o nome até ser editado à mão (num registro existente, só se ainda era o gerado do nome)
+  const [slugAuto, setSlugAuto] = useState(() => !initial?.slug || initial.slug === slugify(initial?.name ?? ''));
+  const changeName = (v: string) => { setName(v); if (slugAuto) setSlug(slugify(v)); };
   const [description, setDescription] = useState(initial?.description ?? '');
 
   const submit = async () => {
     if (!cityId) { alert('Selecione a cidade'); return; }
     if (name.trim().length < 2) { alert('Nome deve ter pelo menos 2 caracteres'); return; }
     const payload: any = { cityId, name: name.trim() };
-    if (slug) payload.slug = slug.trim();
+    const finalSlug = slugify(slug) || slugify(name);
+    if (finalSlug) payload.slug = finalSlug;
     if (description) payload.description = description.trim();
     if (publicId !== '') payload.publicId = Number(publicId);
     await onSubmit(payload);
@@ -379,10 +384,18 @@ function CommunityDialog({
           </select>
         </Field>
         <Field label="Nome *">
-          <input className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex: Vila Esperança" />
+          <input className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500" value={name} onChange={(e) => changeName(e.target.value)} placeholder="Ex: Vila Esperança" />
         </Field>
         <Field label="Slug">
-          <input className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500" value={slug ?? ''} onChange={(e) => setSlug(e.target.value)} placeholder="ex: vila-esperanca" />
+          <input className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500" value={slug ?? ''} onChange={(e) => { setSlug(e.target.value); setSlugAuto(false); }} placeholder="ex: vila-esperanca" />
+          <p className="mt-1 text-xs text-gray-500 flex items-center gap-2">
+            {slugAuto ? 'Gerado automaticamente a partir do nome.' : 'Editado manualmente.'}
+            {!slugAuto && (
+              <button type="button" onClick={() => { setSlugAuto(true); setSlug(slugify(name)); }} className="text-blue-700 hover:underline">
+                gerar do nome
+              </button>
+            )}
+          </p>
         </Field>
         <Field label="Descrição">
           <textarea className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500" rows={3} value={description ?? ''} onChange={(e) => setDescription(e.target.value)} />
