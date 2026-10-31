@@ -23,7 +23,7 @@ import {
 import { composeConfigForFrame } from '@/components/media/composeConfig';
 import ComposerModal from '@/components/media/ComposerModal';
 import {
-  autoMapColumns, CategoryGuess, CategoryHints, inferCategoryFromGift, matchCategory, normalizeText, parseSheetDate,
+  autoMapColumns, CategoryGuess, CategoryHints, inferCategoryFromGift, matchCategory, normalizeText, parseClipboardTable, parseSheetDate,
 } from '@/lib/sheetImport';
 import { apiPath } from '@/lib/api';
 import { placeholderPhoto, SAMPLE_CHILD } from '@/components/media/LayoutComposer';
@@ -108,6 +108,7 @@ export default function BulkChildrenWizardPage() {
   const [colMap, setColMap] = useState<ColumnMap>({});
   const [drafts, setDrafts] = useState<DraftChild[]>([]);
   const [localErrors, setLocalErrors] = useState<string[]>([]);
+  const [localNotices, setLocalNotices] = useState<string[]>([]); // avisos que não bloqueiam (ex.: linha repetida ignorada)
 
   // categorias do site (para conferir/sugerir) e escolhas feitas na tela, por grupo
   const [catHints, setCatHints] = useState<CategoryHints | null>(null);
@@ -217,33 +218,20 @@ export default function BulkChildrenWizardPage() {
       .trim();
 
   const parsePastedTable = (text: string) => {
-    const lines = text
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      .split('\n')
-      .filter((l) => l.trim().length > 0);
-
-    if (lines.length === 0) return { headers: [], rows: [] };
-
-    const guessSep = (s: string): string => {
-      if (s.includes('\t')) return '\t';
-      if ((s.match(/;/g) || []).length >= (s.match(/,/g) || []).length) return ';';
-      return ',';
-    };
-
-    const sep = guessSep(lines[0]);
-    const split = (s: string) => s.split(sep).map((c) => c.trim());
+    // células com quebra de linha (entre aspas, como o Excel copia) não partem a linha em duas
+    const table = parseClipboardTable(text);
+    if (table.length === 0) return { headers: [], rows: [] };
 
     // cabeçalhos vazios ou repetidos (colunas em branco da planilha) ganham nome único,
     // senão o mapeamento por nome de coluna pega a coluna errada
     const seenHdr = new Map<string, number>();
-    const hdr = split(lines[0]).map((h, i) => {
+    const hdr = table[0].map((h, i) => {
       const base = h || `Coluna ${i + 1}`;
       const n = (seenHdr.get(base) ?? 0) + 1;
       seenHdr.set(base, n);
       return n > 1 ? `${base} (${n})` : base;
     });
-    const data = lines.slice(1).map(split);
+    const data = table.slice(1);
 
     return { headers: hdr, rows: data };
   };
@@ -457,6 +445,7 @@ export default function BulkChildrenWizardPage() {
       setColMap({});
       setDrafts([]);
       setLocalErrors([]);
+      setLocalNotices([]);
       return;
     }
     const { headers: hdr, rows: dataRows } = parsePastedTable(rawText);
@@ -468,6 +457,7 @@ export default function BulkChildrenWizardPage() {
     const built = buildDrafts(hdr, dataRows, auto);
     setDrafts(applyCity(built.drafts));
     setLocalErrors(built.errors);
+    setLocalNotices(built.notices);
   }, [rawText]);
 
   useEffect(() => {
@@ -475,6 +465,7 @@ export default function BulkChildrenWizardPage() {
     const built = buildDrafts(headers, rows, colMap);
     setDrafts(applyCity(built.drafts));
     setLocalErrors(built.errors);
+    setLocalNotices(built.notices);
   }, [colMap]);
 
   useEffect(() => {
@@ -581,7 +572,7 @@ export default function BulkChildrenWizardPage() {
     hdrs: string[],
     data: string[][],
     map: ColumnMap
-  ): { drafts: DraftChild[]; errors: string[] } => {
+  ): { drafts: DraftChild[]; errors: string[]; notices: string[] } => {
     const errs: string[] = [];
     const get = (row: string[], key?: string) => {
       if (!key) return undefined;
@@ -638,14 +629,27 @@ export default function BulkChildrenWizardPage() {
       return d;
     });
 
-    const seen = new Set<string>();
+    // ID repetido na planilha: a mesma criança colada duas vezes é ignorada (aviso);
+    // crianças diferentes com o mesmo ID bloqueiam, mostrando as duas linhas
+    const notices: string[] = [];
+    const firstById = new Map<string, { line: number; name: string }>();
+    const unique: DraftChild[] = [];
     ds.forEach((d, idx) => {
       const pid = String(d.publicId).trim();
-      if (seen.has(pid)) errs.push(`Duplicidade de publicId: "${pid}" (linha ${idx + 2}).`);
-      seen.add(pid);
+      const line = idx + 2;
+      if (!pid) { unique.push(d); return; }
+      const first = firstById.get(pid);
+      if (!first) {
+        firstById.set(pid, { line, name: d.name });
+        unique.push(d);
+      } else if (normalizeText(first.name) === normalizeText(d.name)) {
+        notices.push(`Linha ${line} repete a linha ${first.line} (ID ${pid}, ${d.name}) — ignorada.`);
+      } else {
+        errs.push(`ID ${pid} aparece em duas crianças diferentes: linha ${first.line} (${first.name}) e linha ${line} (${d.name}). Corrija o ID de uma delas na planilha.`);
+      }
     });
 
-    return { drafts: ds, errors: errs };
+    return { drafts: unique, errors: errs, notices };
   };
 
   /* =====================
@@ -1227,8 +1231,7 @@ export default function BulkChildrenWizardPage() {
                       <div className="flex items-center gap-2 font-semibold">
                         <AlertTriangle className="w-4 h-4" /> Problemas encontrados
                       </div>
-                      <ul className="mt-2 list-disc ml-5 text-xs">{localErrors.slice(0, 8).map((e, idx) => <li key={idx}>{e}</li>)}</ul>
-                      {localErrors.length > 8 && <p className="text-xs mt-1">…e mais {localErrors.length - 8}.</p>}
+                      <ul className="mt-2 list-disc ml-5 text-xs max-h-48 overflow-auto">{localErrors.map((e, idx) => <li key={idx}>{e}</li>)}</ul>
                     </div>
                   ) : (
                     drafts.length > 0 && (
@@ -1236,6 +1239,15 @@ export default function BulkChildrenWizardPage() {
                         <CheckCircle2 className="w-4 h-4" /> {drafts.length} linhas válidas para importação.
                       </div>
                     )
+                  )}
+
+                  {localNotices.length > 0 && (
+                    <details className="mt-3 p-3 rounded-lg border border-blue-200 bg-blue-50 text-blue-900">
+                      <summary className="cursor-pointer text-sm">
+                        {localNotices.length} linha{localNotices.length === 1 ? '' : 's'} repetida{localNotices.length === 1 ? '' : 's'} na planilha (mesma criança) — ignorada{localNotices.length === 1 ? '' : 's'}
+                      </summary>
+                      <ul className="mt-2 list-disc ml-5 text-xs max-h-40 overflow-auto">{localNotices.map((n, i) => <li key={i}>{n}</li>)}</ul>
+                    </details>
                   )}
 
                   {/* Categorias: as da planilha conferidas com as do site; sem categoria, sugeridas pelo presente */}
@@ -1853,6 +1865,7 @@ export default function BulkChildrenWizardPage() {
                           setColMap({});
                           setDrafts([]);
                           setLocalErrors([]);
+                          setLocalNotices([]);
                           setFiles([]);
                           setPhotoMap({});
                           setPhotoIssues([]);

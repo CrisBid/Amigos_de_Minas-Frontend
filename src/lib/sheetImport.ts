@@ -11,6 +11,42 @@ export function normalizeText(s?: string | null) {
 }
 
 /**
+ * Texto copiado do Excel/Google Sheets → linhas e células. Entende células entre aspas
+ * (o Excel faz isso quando a célula tem quebra de linha), então um "Enter" dentro de uma
+ * observação não parte a linha em duas. Ignora linhas vazias.
+ */
+export function parseClipboardTable(text: string): string[][] {
+  const src = (text ?? '').replace(/\r\n?/g, '\n');
+  const first = src.split('\n')[0] ?? '';
+  const sep = first.includes('\t') ? '\t' : (first.match(/;/g)?.length ?? 0) >= (first.match(/,/g)?.length ?? 0) ? ';' : ',';
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"' && cell === '') {
+      quoted = true;
+    } else if (ch === sep) {
+      row.push(cell.trim()); cell = '';
+    } else if (ch === '\n') {
+      row.push(cell.trim()); cell = '';
+      rows.push(row); row = [];
+    } else {
+      cell += ch;
+    }
+  }
+  row.push(cell.trim());
+  rows.push(row);
+  return rows.filter((r) => r.some((c) => c.length > 0));
+}
+
+/**
  * Data da planilha → "yyyy-mm-dd". Aceita 27/12/2024, 27/12/24, 27-12-24, 27.12.2024 e 2024-12-27.
  * Ano com 2 dígitos: até o ano atual vira 20xx, acima disso 19xx.
  */
