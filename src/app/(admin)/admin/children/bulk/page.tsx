@@ -62,6 +62,36 @@ type ColumnMap = {
 
 type Option = { id: string; name: string; state?: string | null };
 
+const FIELD_LABEL: Record<string, string> = {
+  birthDate: 'nascimento', age: 'idade', category: 'categoria', wantedGift: 'presente', description: 'observações', motherName: 'mãe',
+};
+
+/** Distância de edição entre duas palavras (para "KAIKI" × "KAYKY"). */
+function editDistance(a: string, b: string) {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return dp[a.length][b.length];
+}
+
+/**
+ * Provavelmente a mesma criança: nome igual; um nome contido no outro ("NICOLLY JÉSSICA SOARES" ⊂
+ * "NICOLLY JÉSSICA SOARES VIANA AGUIAR"); ou mesmos sobrenomes e primeiro nome quase igual ("KAIKI" × "KAYKY").
+ */
+function likelySameChild(nameA: string, nameB: string) {
+  const stop = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
+  const tok = (s: string) => normalizeText(s).split(' ').filter((t) => t && !stop.has(t));
+  const a = tok(nameA), b = tok(nameB);
+  if (a.length < 2 || b.length < 2) return false;
+  if (a.join(' ') === b.join(' ')) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length >= 3 && short[0] === long[0] && short.every((t) => long.includes(t))) return true;
+  const sameSurnames = a.slice(1).join(' ') === b.slice(1).join(' ');
+  return sameSurnames && a[0] !== b[0] && editDistance(a[0], b[0]) <= 2;
+}
+
 /** ID da planilha que já era ID principal de outra criança (resposta do envio) */
 type Renumbered = { publicId: number; newMainId: number; existingName: string; sameIdInCampaign?: boolean };
 
@@ -108,7 +138,8 @@ export default function BulkChildrenWizardPage() {
   const [colMap, setColMap] = useState<ColumnMap>({});
   const [drafts, setDrafts] = useState<DraftChild[]>([]);
   const [localErrors, setLocalErrors] = useState<string[]>([]);
-  const [localNotices, setLocalNotices] = useState<string[]>([]); // avisos que não bloqueiam (ex.: linha repetida ignorada)
+  const [localNotices, setLocalNotices] = useState<string[]>([]); // avisos que não bloqueiam (ex.: linha repetida juntada)
+  const [possibleDuplicates, setPossibleDuplicates] = useState<string[]>([]); // mesma criança com IDs diferentes?
 
   // categorias do site (para conferir/sugerir) e escolhas feitas na tela, por grupo
   const [catHints, setCatHints] = useState<CategoryHints | null>(null);
@@ -446,6 +477,7 @@ export default function BulkChildrenWizardPage() {
       setDrafts([]);
       setLocalErrors([]);
       setLocalNotices([]);
+      setPossibleDuplicates([]);
       return;
     }
     const { headers: hdr, rows: dataRows } = parsePastedTable(rawText);
@@ -458,6 +490,7 @@ export default function BulkChildrenWizardPage() {
     setDrafts(applyCity(built.drafts));
     setLocalErrors(built.errors);
     setLocalNotices(built.notices);
+    setPossibleDuplicates(built.possibleDuplicates);
   }, [rawText]);
 
   useEffect(() => {
@@ -466,6 +499,7 @@ export default function BulkChildrenWizardPage() {
     setDrafts(applyCity(built.drafts));
     setLocalErrors(built.errors);
     setLocalNotices(built.notices);
+    setPossibleDuplicates(built.possibleDuplicates);
   }, [colMap]);
 
   useEffect(() => {
@@ -572,7 +606,7 @@ export default function BulkChildrenWizardPage() {
     hdrs: string[],
     data: string[][],
     map: ColumnMap
-  ): { drafts: DraftChild[]; errors: string[]; notices: string[] } => {
+  ): { drafts: DraftChild[]; errors: string[]; notices: string[]; possibleDuplicates: string[] } => {
     const errs: string[] = [];
     const get = (row: string[], key?: string) => {
       if (!key) return undefined;
@@ -629,27 +663,48 @@ export default function BulkChildrenWizardPage() {
       return d;
     });
 
-    // ID repetido na planilha: a mesma criança colada duas vezes é ignorada (aviso);
-    // crianças diferentes com o mesmo ID bloqueiam, mostrando as duas linhas
+    // ID repetido na planilha: a mesma criança colada duas vezes vira uma só (os campos vazios
+    // da primeira são completados com a repetida); crianças diferentes com o mesmo ID bloqueiam
     const notices: string[] = [];
-    const firstById = new Map<string, { line: number; name: string }>();
+    const firstById = new Map<string, { line: number; draft: DraftChild }>();
     const unique: DraftChild[] = [];
+    const FILLABLE = ['birthDate', 'age', 'category', 'wantedGift', 'description', 'motherName'] as const;
     ds.forEach((d, idx) => {
       const pid = String(d.publicId).trim();
       const line = idx + 2;
       if (!pid) { unique.push(d); return; }
       const first = firstById.get(pid);
       if (!first) {
-        firstById.set(pid, { line, name: d.name });
+        firstById.set(pid, { line, draft: d });
         unique.push(d);
-      } else if (normalizeText(first.name) === normalizeText(d.name)) {
-        notices.push(`Linha ${line} repete a linha ${first.line} (ID ${pid}, ${d.name}) — ignorada.`);
+      } else if (normalizeText(first.draft.name) === normalizeText(d.name)) {
+        const filled = FILLABLE.filter((k) => (first.draft[k] == null || first.draft[k] === '') && d[k] != null && d[k] !== '');
+        filled.forEach((k) => { (first.draft as any)[k] = d[k]; });
+        notices.push(
+          `Linha ${line} repete a linha ${first.line} (ID ${pid}, ${d.name}) — juntadas` +
+          (filled.length ? `; completado: ${filled.map((k) => FIELD_LABEL[k]).join(', ')}.` : '.'),
+        );
       } else {
-        errs.push(`ID ${pid} aparece em duas crianças diferentes: linha ${first.line} (${first.name}) e linha ${line} (${d.name}). Corrija o ID de uma delas na planilha.`);
+        errs.push(`ID ${pid} aparece em duas crianças diferentes: linha ${first.line} (${first.draft.name}) e linha ${line} (${d.name}). Corrija o ID de uma delas na planilha.`);
       }
     });
 
-    return { drafts: unique, errors: errs, notices };
+    // mesma criança com IDs diferentes? (nome igual ou muito parecido e mesma idade) — só avisa
+    const possibleDuplicates: string[] = [];
+    const ageOfDraft = (d: DraftChild) => (d.birthDate ? Number(calcAgeFromISO(d.birthDate).split(' ')[0]) : d.age ?? null);
+    for (let i = 0; i < unique.length; i++) {
+      for (let j = i + 1; j < unique.length; j++) {
+        const a = unique[i], b = unique[j];
+        if (String(a.publicId) === String(b.publicId)) continue;
+        const ageA = ageOfDraft(a), ageB = ageOfDraft(b);
+        if (ageA != null && ageB != null && Math.abs(ageA - ageB) > 1) continue;
+        if (likelySameChild(a.name, b.name)) {
+          possibleDuplicates.push(`ID ${a.publicId} ${a.name} × ID ${b.publicId} ${b.name}`);
+        }
+      }
+    }
+
+    return { drafts: unique, errors: errs, notices, possibleDuplicates };
   };
 
   /* =====================
@@ -1241,10 +1296,20 @@ export default function BulkChildrenWizardPage() {
                     )
                   )}
 
+                  {possibleDuplicates.length > 0 && (
+                    <div className="mt-3 p-3 rounded-lg border border-amber-300 bg-amber-50 text-amber-900">
+                      <div className="flex items-center gap-2 font-semibold text-sm">
+                        <AlertTriangle className="w-4 h-4" /> Possível mesma criança com IDs diferentes ({possibleDuplicates.length})
+                      </div>
+                      <p className="text-xs mt-1">Nome igual ou muito parecido e mesma idade. Se for a mesma criança, apague uma das linhas na planilha; senão, pode seguir.</p>
+                      <ul className="mt-2 list-disc ml-5 text-xs max-h-40 overflow-auto">{possibleDuplicates.map((d, i) => <li key={i}>{d}</li>)}</ul>
+                    </div>
+                  )}
+
                   {localNotices.length > 0 && (
                     <details className="mt-3 p-3 rounded-lg border border-blue-200 bg-blue-50 text-blue-900">
                       <summary className="cursor-pointer text-sm">
-                        {localNotices.length} linha{localNotices.length === 1 ? '' : 's'} repetida{localNotices.length === 1 ? '' : 's'} na planilha (mesma criança) — ignorada{localNotices.length === 1 ? '' : 's'}
+                        {localNotices.length} linha{localNotices.length === 1 ? '' : 's'} repetida{localNotices.length === 1 ? '' : 's'} na planilha (mesma criança) — juntada{localNotices.length === 1 ? '' : 's'} à primeira
                       </summary>
                       <ul className="mt-2 list-disc ml-5 text-xs max-h-40 overflow-auto">{localNotices.map((n, i) => <li key={i}>{n}</li>)}</ul>
                     </details>
@@ -1866,6 +1931,7 @@ export default function BulkChildrenWizardPage() {
                           setDrafts([]);
                           setLocalErrors([]);
                           setLocalNotices([]);
+                          setPossibleDuplicates([]);
                           setFiles([]);
                           setPhotoMap({});
                           setPhotoIssues([]);
