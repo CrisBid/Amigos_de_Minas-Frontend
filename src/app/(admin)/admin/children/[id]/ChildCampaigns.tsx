@@ -128,7 +128,7 @@ export default function ChildCampaigns({
     publicId: item?.publicId ?? fallbackPublicId ?? '',
     wantedGift: item?.wantedGift ?? currentGift ?? '',
   };
-  const display = item?.display ?? null;
+  const display = item?.display ?? null; // sem foto: vem só o layout (placeholder) para mostrar a área vazia
   const displayPhoto = display?.processedUrl || display?.originalUrl || '';
   const displayConfig = composeConfigForFrame(display?.Config ?? item?.layout?.config);
   const layoutConfig = composeConfigForFrame(item?.layout?.config ?? display?.Config);
@@ -219,7 +219,8 @@ export default function ChildCampaigns({
         <div className="mt-3 grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] gap-6">
           {/* arte, como o apadrinhamento mostra */}
           <div>
-            {displayPhoto && display?.layoutUrl ? (
+            {/* com layout: arte montada (sem foto, a área da foto fica vazia, como no site) */}
+            {display?.layoutUrl ? (
               <ComposedImage
                 photoUrl={displayPhoto}
                 layoutUrl={display.layoutUrl}

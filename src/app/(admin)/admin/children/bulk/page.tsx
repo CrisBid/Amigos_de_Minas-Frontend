@@ -22,6 +22,10 @@ import {
 } from '@/components/media/composeConfig';
 import { composeConfigForFrame } from '@/components/media/composeConfig';
 import ComposerModal from '@/components/media/ComposerModal';
+import {
+  autoMapColumns, CategoryGuess, CategoryHints, inferCategoryFromGift, matchCategory, normalizeText, parseSheetDate,
+} from '@/lib/sheetImport';
+import { apiPath } from '@/lib/api';
 import { placeholderPhoto, SAMPLE_CHILD } from '@/components/media/LayoutComposer';
 
 /* =====================
@@ -101,6 +105,43 @@ export default function BulkChildrenWizardPage() {
   const [colMap, setColMap] = useState<ColumnMap>({});
   const [drafts, setDrafts] = useState<DraftChild[]>([]);
   const [localErrors, setLocalErrors] = useState<string[]>([]);
+
+  // categorias do site (para conferir/sugerir) e escolhas feitas na tela, por grupo
+  const [catHints, setCatHints] = useState<CategoryHints | null>(null);
+  const [catOverrides, setCatOverrides] = useState<Record<string, string>>({});
+  useEffect(() => {
+    fetch(apiPath('/children/category-hints'), { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setCatHints(j))
+      .catch(() => setCatHints(null));
+  }, []);
+
+  // grupo de categoria da linha: a categoria da planilha ou, sem ela, o presente
+  const catKey = (d: DraftChild) =>
+    d.category?.trim() ? `cat:${normalizeText(d.category)}` : d.wantedGift?.trim() ? `gift:${normalizeText(d.wantedGift)}` : '';
+  const catGuess = (d: DraftChild): CategoryGuess | null =>
+    d.category?.trim() ? matchCategory(d.category, catHints) : inferCategoryFromGift(d.wantedGift, catHints);
+  /** Categoria que vai para o cadastro: escolha da tela > a do site equivalente/sugerida > a da planilha. */
+  const finalCategory = (d: DraftChild): string | undefined => {
+    const key = catKey(d);
+    if (key && key in catOverrides) return catOverrides[key] || undefined;
+    return catGuess(d)?.category ?? (d.category?.trim() || undefined);
+  };
+
+  const categoryGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; raw: string; fromSheet: boolean; count: number; guess: CategoryGuess | null }>();
+    for (const d of drafts) {
+      const key = catKey(d);
+      if (!key) continue;
+      const g = groups.get(key);
+      if (g) { g.count++; continue; }
+      const fromSheet = !!d.category?.trim();
+      groups.set(key, { key, raw: (fromSheet ? d.category : d.wantedGift)!.trim(), fromSheet, count: 1, guess: catGuess(d) });
+    }
+    // as que já batem exatamente com o site vêm por último (não precisam de atenção)
+    return [...groups.values()].sort((a, b) => Number(a.guess?.source === 'exact') - Number(b.guess?.source === 'exact') || b.count - a.count);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafts, catHints]);
 
   // Step 3: layouts e config
   const [layoutFile, setLayoutFile] = useState<File | null>(null);
@@ -222,38 +263,25 @@ export default function BulkChildrenWizardPage() {
     return undefined;
   };
 
+  // reconhece os cabeçalhos mesmo com acento, pontuação, abreviação ("NASCIM", "Nº", "MÃE:") e em qualquer ordem
   const tryAutoMap = (hdrs: string[]): ColumnMap => {
-    const key = (h: string) => normalizeName(h);
-    const find = (alts: string[]) => hdrs.find((h) => alts.includes(key(h)));
-
-    const m: ColumnMap = {};
-    m.publicId = find(['id', '#', 'publicid', 'codigo', 'cod', 'numero', 'nº']) ?? hdrs[0];
-    m.name = find(['nome', 'name', 'crianca', 'child']);
-    m.birthDate = find(['nascimento', 'data de nascimento', 'datanascimento', 'birthdate', 'dn']);
-    m.category = find(['categoria', 'category', 'grupo']);
-    m.wantedGift = find(['presente', 'presentedesejado', 'wantedgift', 'pedido', 'desejo']);
-    m.description = find(['descricao', 'description', 'obs', 'observacao']);
-
-    // NOVOS MAPEAMENTOS
-    m.motherName = find(['nomedamae', 'mae', 'mãe', 'mother', 'mothername', 'nome da mae', 'nome da mãe']);
-    m.age = find(['idade', 'age', 'anos']);
-
+    const m: ColumnMap = autoMapColumns(hdrs, {
+      publicId: ['id', 'publicid', 'codigo', 'cod', 'numero', 'num', 'n', 'no', 'id crianca', 'n crianca'],
+      name: ['crianca', 'nome', 'nome da crianca', 'nome crianca', 'name', 'child', 'aluno'],
+      birthDate: ['nascim', 'nasc', 'nascimento', 'data de nascimento', 'data nascimento', 'data nasc', 'dt nasc', 'datanascimento', 'birthdate', 'dn'],
+      category: ['categoria', 'category', 'grupo', 'tipo'],
+      wantedGift: ['presente', 'presente desejado', 'presentedesejado', 'wantedgift', 'pedido', 'desejo', 'brinquedo'],
+      description: ['descricao', 'description', 'obs', 'observacao', 'observacoes'],
+      motherName: ['mae', 'nome da mae', 'nomedamae', 'mother', 'mothername', 'responsavel'],
+      age: ['idade', 'age', 'anos'],
+    });
+    // sem coluna de ID reconhecida, a primeira costuma ser o ID
+    if (!m.publicId && hdrs.length) m.publicId = hdrs[0];
     return m;
   };
 
-  const parseBrazilianDate = (s: string): string | null => {
-    const parts = s.split('/');
-    if (parts.length !== 3) return null;
-    const [ddStr, mmStr, yyyyStr] = parts;
-    const dd = parseInt(ddStr, 10);
-    const mm = parseInt(mmStr, 10);
-    const yyyy = parseInt(yyyyStr, 10);
-    if (!dd || !mm || !yyyy) return null;
-    const date = new Date(yyyy, mm - 1, dd);
-    if (isNaN(date.getTime())) return null;
-    if (date.getFullYear() !== yyyy || date.getMonth() + 1 !== mm || date.getDate() !== dd) return null;
-    return date.toISOString().split('T')[0];
-  };
+  // 27/12/2024, 27/12/24 (ano com 2 dígitos), 27-12-24, 27.12.2024 ou 2024-12-27
+  const parseBrazilianDate = (s: string): string | null => parseSheetDate(s);
 
   const formatBrazilianDate = (iso?: string | null) => {
     if (!iso) return '—';
@@ -853,7 +881,8 @@ export default function BulkChildrenWizardPage() {
     try {
       // 1) salvar/atualizar crianças
       // OBS: enviamos motherName e age junto (rest)
-      const childrenForApi = drafts.map(({ cityName, state, ...rest }) => rest);
+      // categoria conferida com as do site (ou escolhida no passo 2)
+      const childrenForApi = drafts.map(({ cityName, state, ...rest }) => ({ ...rest, category: finalCategory(rest) }));
       const res = await fetch('/api/admin/children/bulk/commit', {
         method: 'POST',
         credentials: 'include',
@@ -1207,6 +1236,70 @@ export default function BulkChildrenWizardPage() {
                         <CheckCircle2 className="w-4 h-4" /> {drafts.length} linhas válidas para importação.
                       </div>
                     )
+                  )}
+
+                  {/* Categorias: as da planilha conferidas com as do site; sem categoria, sugeridas pelo presente */}
+                  {categoryGroups.length > 0 && (
+                    <div className="mt-4 rounded-lg border border-gray-200 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <h4 className="font-semibold text-gray-900 text-sm">Categorias</h4>
+                        <span className="text-xs text-gray-500">
+                          {catHints ? `${catHints.categories.length} categorias no site` : 'carregando categorias do site…'}
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full text-sm">
+                          <thead>
+                            <tr className="text-xs text-gray-500 border-b">
+                              <th className="px-2 py-1.5 text-left">Na planilha</th>
+                              <th className="px-2 py-1.5 text-left">Crianças</th>
+                              <th className="px-2 py-1.5 text-left">Categoria no site</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {categoryGroups.map((g) => {
+                              const value = g.key in catOverrides ? catOverrides[g.key] : g.guess?.category ?? (g.fromSheet ? g.raw : '');
+                              const tone = g.key in catOverrides
+                                ? 'text-gray-700'
+                                : g.guess?.source === 'exact' ? 'text-emerald-700'
+                                : g.guess ? 'text-blue-700' : g.fromSheet ? 'text-amber-700' : 'text-gray-400';
+                              const hint = g.key in catOverrides
+                                ? 'escolhida por você'
+                                : g.guess?.source === 'exact' ? 'já existe'
+                                : g.guess?.source === 'similar' ? 'grafia diferente — ajustada'
+                                : g.guess?.source === 'gift' ? 'sugerida pelo presente'
+                                : g.fromSheet ? 'categoria nova' : 'sem sugestão';
+                              return (
+                                <tr key={g.key}>
+                                  <td className="px-2 py-1.5">
+                                    {g.fromSheet ? <span className="font-medium">{g.raw}</span> : <span className="text-gray-500">Presente: {g.raw}</span>}
+                                  </td>
+                                  <td className="px-2 py-1.5 text-gray-500">{g.count}</td>
+                                  <td className="px-2 py-1.5">
+                                    <div className="flex items-center gap-2">
+                                      <select
+                                        value={value}
+                                        onChange={(e) => setCatOverrides((o) => ({ ...o, [g.key]: e.target.value }))}
+                                        className="rounded border border-gray-300 p-1 text-sm max-w-[240px]"
+                                      >
+                                        <option value="">(sem categoria)</option>
+                                        {g.fromSheet && !catHints?.categories.some((c) => c.category === g.raw) && (
+                                          <option value={g.raw}>Criar “{g.raw}”</option>
+                                        )}
+                                        {(catHints?.categories ?? []).map((c) => (
+                                          <option key={c.category} value={c.category}>{c.category}</option>
+                                        ))}
+                                      </select>
+                                      <span className={`text-xs ${tone}`}>{hint}</span>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   )}
 
                   <div className="mt-6 flex items-center justify-between">
@@ -1615,7 +1708,7 @@ export default function BulkChildrenWizardPage() {
                           <div className="text-xs text-gray-500">Nasc.: {formatBrazilianDate(d.birthDate)}</div>
                           {typeof d.age === 'number' && <div className="text-xs text-gray-500">Idade (planilha): {d.age}</div>}
                           {d.motherName && <div className="text-xs text-gray-500">Mãe: {d.motherName}</div>}
-                          {d.category && <div className="text-xs text-gray-500">Categoria: {d.category}</div>}
+                          {finalCategory(d) && <div className="text-xs text-gray-500">Categoria: {finalCategory(d)}</div>}
                           {d.wantedGift && <div className="text-xs text-gray-500">Desejo: {d.wantedGift}</div>}
                           <div className="text-xs text-gray-500">
                             Cidade/UF: {d.cityName || '—'}{d.state ? `/${d.state}` : ''}

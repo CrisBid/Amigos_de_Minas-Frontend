@@ -1,3 +1,5 @@
+import { composeConfigForFrame } from './composeConfig';
+
 export type ChildImage = {
   originalUrl?: string|null;
   processedUrl?: string|null;
@@ -28,6 +30,11 @@ export function pickComposeInputsFromImages(images?: ChildImage[] | null) {
   const layoutUrl = best.layoutUrl || null;
   const config    = best.Config || null;
   const fallback  = best.framedUrl || null;
+
+  // criança ainda sem foto: só o layout, com a área da foto vazia (photoUrl vazio)
+  if (!photoUrl && layoutUrl) {
+    return { photoUrl: '', layoutUrl, config: composeConfigForFrame(config), fallbackUrl: fallback };
+  }
 
   if (!photoUrl || !layoutUrl || !config) {
     // ainda assim devolve fallback se existir

@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Plus, Edit, Trash2, Upload, Users, Heart, Baby, MapPin, Gift, ChevronLeft, ChevronRight, Camera } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, Upload, Users, Heart, Baby, MapPin, Gift, ChevronLeft, ChevronRight, Camera, Loader2 } from 'lucide-react';
 import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 import { apiPath } from '@/lib/api';
+import { composeConfigForFrame } from '@/components/media/composeConfig';
 import { STATUS_PT, type SponsorshipStatus } from '@/lib/sponsorship-status';
 
 type Sponsorship = {
@@ -12,7 +13,7 @@ type Sponsorship = {
   status: SponsorshipStatus;
 };
 
-type ChildImageLite = { id: string; campaignId?: string | null; createdAt?: string };
+type ChildImageLite = { id: string | null; campaignId?: string | null; createdAt?: string; placeholder?: boolean };
 
 const STATUS_STYLE: Partial<Record<SponsorshipStatus, { className: string; dot: string }>> = {
   PENDING: { className: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' },
@@ -24,12 +25,14 @@ const STATUS_STYLE: Partial<Record<SponsorshipStatus, { className: string; dot: 
 const IN_PROGRESS_STYLE = { className: 'bg-blue-50 text-blue-700 border-blue-200', dot: 'bg-blue-500' };
 
 /** Miniatura da foto (sem moldura) gerada pelo backend no tamanho da listagem. */
-function thumbUrl(childId: string, images: ChildImageLite[] | undefined, campaignId: string, size = 96) {
-  if (!images?.length) return null;
+function thumbUrl(childId: string, allImages: ChildImageLite[] | undefined, campaignId: string, size = 96) {
+  // "só layout" (criança sem foto) não tem miniatura
+  const images = (allImages ?? []).filter((i) => i.id && !i.placeholder);
+  if (!images.length) return null;
   const own = campaignId ? images.filter((i) => i.campaignId === campaignId) : [];
   const pool = own.length ? own : images;
   const latest = [...pool].sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())[0];
-  const qs = new URLSearchParams({ w: String(size), v: latest.id });
+  const qs = new URLSearchParams({ w: String(size), v: String(latest.id) });
   if (campaignId) qs.set('campaignId', campaignId);
   return apiPath(`/children/${childId}/thumb?${qs.toString()}`);
 }
@@ -53,6 +56,7 @@ type ChildListItem = {
   sponsorships?: Sponsorship[];
   images?: ChildImageLite[];
   community?: { id: string; name: string } | null;
+  cityId?: string | null;
 };
 
 type PageResp = {
@@ -69,6 +73,62 @@ export default function AdminChildrenPage() {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
   const { campaigns, campaignId, setCampaignId, ready } = useAdminCampaign();
+  const [photoFilter, setPhotoFilter] = useState<'' | 'without' | 'with'>('');
+  const [missingPhotos, setMissingPhotos] = useState<number | null>(null);
+
+  // layouts da campanha selecionada (o da cidade da criança, senão o padrão) para enviar foto pela listagem
+  const [frames, setFrames] = useState<{ id: string; config?: unknown; active?: boolean }[]>([]);
+  const [frameByCity, setFrameByCity] = useState<Record<string, string>>({});
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFrames([]); setFrameByCity({});
+    if (!campaignId) return;
+    (async () => {
+      const [rf, rc] = await Promise.all([
+        fetch(`/api/admin/campaigns/${campaignId}/layouts`, { cache: 'no-store' }).catch(() => null),
+        fetch(`/api/admin/campaigns/${campaignId}/city-layouts`, { cache: 'no-store' }).catch(() => null),
+      ]);
+      setFrames(rf?.ok ? await rf.json() : []);
+      const byCity: { cityId: string; frameId: string }[] = rc?.ok ? await rc.json() : [];
+      setFrameByCity(Object.fromEntries(byCity.map((l) => [l.cityId, l.frameId])));
+    })();
+  }, [campaignId]);
+
+  async function uploadPhoto(child: ChildListItem, file: File) {
+    if (!campaignId) return;
+    setUploadingId(child.id);
+    try {
+      const cityId = child.city?.id ?? child.cityId ?? '';
+      const frame = frames.find((f) => f.id === frameByCity[cityId]) ?? frames.find((f) => f.active) ?? null;
+      const fd = new FormData();
+      fd.append('file', file);
+      // mesma composição do cadastro guiado: padrão + layout da cidade/campanha
+      fd.append('Config', JSON.stringify(composeConfigForFrame(frame?.config)));
+      const qs = new URLSearchParams({ campaignId });
+      if (frame?.id) qs.set('layoutId', frame.id);
+      const res = await fetch(`/api/admin/children/${child.id}/photo?${qs.toString()}`, { method: 'POST', body: fd });
+      if (!res.ok) throw new Error(`Erro ${res.status}`);
+      await Promise.all([load(), loadMissingCount()]);
+    } catch {
+      alert(`Não foi possível enviar a foto de ${child.name}.`);
+    } finally {
+      setUploadingId(null);
+    }
+  }
+
+  // quantas crianças da campanha (ou do cadastro) ainda estão sem foto
+  async function loadMissingCount() {
+    try {
+      const qs = new URLSearchParams({ photo: 'without', take: '1' });
+      if (campaignId) qs.set('campaignId', campaignId);
+      const r = await fetch(`/api/admin/children?${qs.toString()}`, { cache: 'no-store' });
+      const j = r.ok ? await r.json() : null;
+      setMissingPhotos(typeof j?.total === 'number' ? j.total : null);
+    } catch {
+      setMissingPhotos(null);
+    }
+  }
   const [data, setData] = useState<PageResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState<{ total: number; active: number; pending: number; available: number; sponsorshipRate: number }>({
@@ -101,6 +161,7 @@ export default function AdminChildrenPage() {
       url.searchParams.set('take', String(PAGE_SIZE));
       if (q.trim()) url.searchParams.set('q', q.trim());
       if (campaignId) url.searchParams.set('campaignId', campaignId);
+      if (photoFilter) url.searchParams.set('photo', photoFilter);
 
       const res = await fetch(url.toString(), {
         cache: 'no-store',
@@ -152,9 +213,15 @@ export default function AdminChildrenPage() {
   useEffect(() => {
     if (!ready) return;
     load();
-    loadStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, page, campaignId, ready]);
+  }, [q, page, campaignId, photoFilter, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    loadStats();
+    loadMissingCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId, ready]);
 
   // status reais do apadrinhamento (pendente, em andamento…, concluído, encerrado, cancelado)
   const getStatusConfig = (s?: Sponsorship['status']) => {
@@ -291,7 +358,32 @@ export default function AdminChildrenPage() {
               onChange={(id) => { setPage(1); setCampaignId(id); }}
               className="lg:w-96"
             />
+            <label className="inline-flex items-center gap-2">
+              <Camera className="w-4 h-4 text-gray-500 shrink-0" />
+              <span className="text-sm font-medium text-gray-700">Foto</span>
+              <select
+                value={photoFilter}
+                onChange={(e) => { setPage(1); setPhotoFilter(e.target.value as typeof photoFilter); }}
+                className="px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+              >
+                <option value="">Todas</option>
+                <option value="without">Sem foto{campaignId ? ' na campanha' : ''}</option>
+                <option value="with">Com foto</option>
+              </select>
+            </label>
           </div>
+          {!!missingPhotos && (
+            <button
+              onClick={() => { setPage(1); setPhotoFilter(photoFilter === 'without' ? '' : 'without'); }}
+              className={`mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm border ${
+                photoFilter === 'without' ? 'bg-amber-600 text-white border-amber-600' : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+              }`}
+            >
+              <Camera className="w-4 h-4" />
+              {missingPhotos} criança{missingPhotos === 1 ? '' : 's'} sem foto{campaignId ? ' nesta campanha' : ''}
+              {photoFilter === 'without' ? ' · mostrar todas' : ' · ver'}
+            </button>
+          )}
         </div>
 
         {/* Table */}
@@ -364,10 +456,30 @@ export default function AdminChildrenPage() {
                               decoding="async"
                               className="w-full h-full object-cover"
                             />
+                          ) : uploadingId === child.id ? (
+                            <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
                           ) : (
                             <Camera className="w-6 h-6 text-gray-400" />
                           )}
                         </div>
+                        {/* sem foto: envio direto daqui, montado com o layout da cidade na campanha */}
+                        {!thumb && (
+                          campaignId ? (
+                            <label className={`mt-1.5 inline-flex items-center gap-1 text-xs text-blue-700 hover:underline cursor-pointer whitespace-nowrap ${uploadingId ? 'pointer-events-none opacity-50' : ''}`}>
+                              <Upload className="w-3 h-3" /> Enviar foto
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadPhoto(child, f); }}
+                              />
+                            </label>
+                          ) : (
+                            <Link href={`/admin/children/${child.id}`} className="mt-1.5 block text-xs text-gray-500 hover:underline whitespace-nowrap" title="Escolha uma campanha para enviar daqui">
+                              sem foto
+                            </Link>
+                          )
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex flex-col">

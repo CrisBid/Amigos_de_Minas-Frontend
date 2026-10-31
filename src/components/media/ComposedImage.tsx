@@ -172,7 +172,8 @@ async function composeFromUrls(
   vars: TextCtx,
   quality = 0.9
 ) {
-  const [photoImg, layoutImg] = await Promise.all([loadImg(photoUrl), loadImg(layoutUrl)]);
+  // sem photoUrl = criança ainda sem foto: só o layout, com a área da foto vazia
+  const [photoImg, layoutImg] = await Promise.all([photoUrl ? loadImg(photoUrl) : Promise.resolve(null), loadImg(layoutUrl)]);
   const W = cfg.canvas?.width ?? layoutImg.width ?? 1080;
   const H = cfg.canvas?.height ?? layoutImg.height ?? 1350;
 
@@ -189,8 +190,15 @@ async function composeFromUrls(
 
   // foto
   const pr = cfg.photoRect;
+  if (!photoImg) {
+    // fundo branco (o JPEG ficaria preto onde é transparente) e a área da foto em cinza claro
+    if (!cfg.canvas?.background) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H); }
+    ctx.fillStyle = '#e5e7eb';
+    if (pr.cornerRadius && pr.cornerRadius > 0) { roundRect(ctx, pr.x, pr.y, pr.width, pr.height, pr.cornerRadius); ctx.fill(); }
+    else ctx.fillRect(pr.x, pr.y, pr.width, pr.height);
+  }
   const dw = pr.width, dh = pr.height;
-  const sw = photoImg.width, sh = photoImg.height;
+  const sw = photoImg?.width ?? 1, sh = photoImg?.height ?? 1;
   let r = 1;
   switch (pr.fit) {
     case 'contain': r = Math.min(dw/sw, dh/sh); break;
@@ -207,7 +215,9 @@ async function composeFromUrls(
   const dx = pr.x + ox;
   const dy = pr.y + oy;
 
-  if (pr.cornerRadius && pr.cornerRadius > 0) {
+  if (!photoImg) {
+    // nada a desenhar: a área já ficou vazia acima
+  } else if (pr.cornerRadius && pr.cornerRadius > 0) {
     ctx.save(); roundRect(ctx, pr.x, pr.y, pr.width, pr.height, pr.cornerRadius); ctx.clip();
     ctx.drawImage(photoImg, dx, dy, nw, nh); ctx.restore();
   } else {
