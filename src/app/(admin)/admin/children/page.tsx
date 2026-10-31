@@ -4,11 +4,35 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Edit, Trash2, Upload, Users, Heart, Baby, MapPin, Gift, ChevronLeft, ChevronRight, Camera } from 'lucide-react';
 import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
+import { apiPath } from '@/lib/api';
+import { STATUS_PT, type SponsorshipStatus } from '@/lib/sponsorship-status';
 
 type Sponsorship = {
   id: string;
-  status: 'PENDING' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
+  status: SponsorshipStatus;
 };
+
+type ChildImageLite = { id: string; campaignId?: string | null; createdAt?: string };
+
+const STATUS_STYLE: Partial<Record<SponsorshipStatus, { className: string; dot: string }>> = {
+  PENDING: { className: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' },
+  COMPLETED: { className: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' },
+  ENDED: { className: 'bg-slate-50 text-slate-700 border-slate-200', dot: 'bg-slate-500' },
+  CANCELLED: { className: 'bg-red-50 text-red-700 border-red-200', dot: 'bg-red-500' },
+};
+// em andamento (em compra, embalado, encaixotado, aguardando entrega)
+const IN_PROGRESS_STYLE = { className: 'bg-blue-50 text-blue-700 border-blue-200', dot: 'bg-blue-500' };
+
+/** Miniatura da foto (sem moldura) gerada pelo backend no tamanho da listagem. */
+function thumbUrl(childId: string, images: ChildImageLite[] | undefined, campaignId: string, size = 96) {
+  if (!images?.length) return null;
+  const own = campaignId ? images.filter((i) => i.campaignId === campaignId) : [];
+  const pool = own.length ? own : images;
+  const latest = [...pool].sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())[0];
+  const qs = new URLSearchParams({ w: String(size), v: latest.id });
+  if (campaignId) qs.set('campaignId', campaignId);
+  return apiPath(`/children/${childId}/thumb?${qs.toString()}`);
+}
 
 type City = { id: string; name: string; state?: string | null };
 
@@ -27,6 +51,8 @@ type ChildListItem = {
   createdAt: string;
   updatedAt: string;
   sponsorships?: Sponsorship[];
+  images?: ChildImageLite[];
+  community?: { id: string; name: string } | null;
 };
 
 type PageResp = {
@@ -104,12 +130,15 @@ export default function AdminChildrenPage() {
       });
       if (res.ok) {
         const json = await res.json();
+        // "apadrinhadas" = concluídas + em andamento (compra, embalado, entrega…)
+        const total = json.total ?? 0;
+        const sponsored = (json.active ?? 0) + (json.in_progress ?? 0);
         setStats({
-          total: json.total ?? 0,
-          active: json.active ?? 0,
+          total,
+          active: sponsored,
           pending: json.pending ?? 0,
-          available: json.available ?? Math.max(0, (json.total ?? 0) - ((json.active ?? 0) + (json.pending ?? 0))),
-          sponsorshipRate: json.sponsorshipRate ?? (json.total ? Math.round(((json.active ?? 0) / json.total) * 100) : 0),
+          available: json.available ?? Math.max(0, total - (sponsored + (json.pending ?? 0))),
+          sponsorshipRate: total ? Math.round((sponsored / total) * 100) : 0,
         });
       } else {
         setStats({ total: 0, active: 0, pending: 0, available: 0, sponsorshipRate: 0 });
@@ -127,39 +156,10 @@ export default function AdminChildrenPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, page, campaignId, ready]);
 
+  // status reais do apadrinhamento (pendente, em andamento…, concluído, encerrado, cancelado)
   const getStatusConfig = (s?: Sponsorship['status']) => {
-    switch (s) {
-      case 'ACTIVE':
-        return {
-          label: 'Apadrinhado',
-          className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-          dot: 'bg-emerald-500',
-        };
-      case 'PENDING':
-        return {
-          label: 'Pendente',
-          className: 'bg-amber-50 text-amber-700 border-amber-200',
-          dot: 'bg-amber-500',
-        };
-      case 'ENDED':
-        return {
-          label: 'Encerrado',
-          className: 'bg-blue-50 text-blue-700 border-blue-200',
-          dot: 'bg-blue-500',
-        };
-      case 'CANCELLED':
-        return {
-          label: 'Cancelado',
-          className: 'bg-red-50 text-red-700 border-red-200',
-          dot: 'bg-red-500',
-        };
-      default:
-        return {
-          label: 'Disponível',
-          className: 'bg-slate-50 text-slate-700 border-slate-200',
-          dot: 'bg-slate-500',
-        };
-    }
+    if (!s) return { label: 'Disponível', className: 'bg-slate-50 text-slate-700 border-slate-200', dot: 'bg-slate-400' };
+    return { label: STATUS_PT[s] ?? s, ...(STATUS_STYLE[s] ?? IN_PROGRESS_STYLE) };
   };
 
   const StatusBadge = ({ status }: { status?: Sponsorship['status'] }) => {
@@ -211,7 +211,7 @@ export default function AdminChildrenPage() {
                 Cadastro Guiado (colar tabela)
               </Link>
               <Link
-                href="/admin/children/bulk"
+                href="/admin/children/new"
                 className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105"
               >
                 <Plus className="w-5 h-5" />
@@ -280,7 +280,7 @@ export default function AdminChildrenPage() {
               <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
               <input
                 className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
-                placeholder="Buscar crianças por nome, descrição..."
+                placeholder="Buscar por nome, ID, presente ou categoria..."
                 value={q}
                 onChange={(e) => { setPage(1); setQ(e.target.value); }}
               />
@@ -340,9 +340,10 @@ export default function AdminChildrenPage() {
                 {rows.map((child) => {
                   const age = calcAge(child.birthDate ?? undefined, child.age ?? undefined);
                   const status = latestStatus(child.sponsorships);
-                  const cityDisplay = child.city?.name 
-                    ? `${child.city.name}${child.city.state ? `/${child.city.state}` : ''}` 
+                  const cityDisplay = child.city?.name
+                    ? `${child.city.name}${child.city.state ? `/${child.city.state}` : ''}`
                     : (child.cityName || '—');
+                  const thumb = thumbUrl(child.id, child.images, campaignId);
 
                   return (
                     <tr key={child.id} className="hover:bg-blue-50/50 transition-colors duration-150">
@@ -351,10 +352,16 @@ export default function AdminChildrenPage() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-gradient-to-br from-blue-100 to-indigo-100 flex items-center justify-center shadow-sm">
-                          {child.photoUrl ? (
+                          {thumb ? (
+                            // miniatura 96px da foto (sem moldura), com carregamento sob demanda
+                            // eslint-disable-next-line @next/next/no-img-element
                             <img
-                              src={child.photoUrl}
+                              src={thumb}
                               alt={child.name}
+                              width={48}
+                              height={48}
+                              loading="lazy"
+                              decoding="async"
                               className="w-full h-full object-cover"
                             />
                           ) : (
@@ -382,9 +389,12 @@ export default function AdminChildrenPage() {
                         )}
                       </td>
                       <td className="px-6 py-4">
-                        <div className="flex items-center gap-1.5">
-                          <MapPin className="w-3 h-3 text-gray-400" />
-                          <span className="text-sm text-gray-600">{cityDisplay}</span>
+                        <div className="flex items-start gap-1.5">
+                          <MapPin className="w-3 h-3 text-gray-400 mt-1 shrink-0" />
+                          <span className="text-sm text-gray-600">
+                            {cityDisplay}
+                            {child.community?.name && <span className="block text-xs text-gray-400">{child.community.name}</span>}
+                          </span>
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -475,13 +485,9 @@ function Pagination({ page, pages, onChange }: { page: number; pages: number; on
 
 function DeleteChildButton({ id, name, onDone }: { id: string; name: string; onDone: () => void }) {
   const del = async () => {
-    if (!confirm(`Excluir (soft) "${name}"? Essa ação pode ser revertida.`)) return;
-    const res = await fetch(`/api/admin/children/${id}`, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ deletedAt: new Date().toISOString() }),
-    });
+    if (!confirm(`Excluir "${name}"? A criança sai das listagens e campanhas; o histórico é mantido no banco.`)) return;
+    // exclusão lógica do backend (marca deletedAt)
+    const res = await fetch(`/api/admin/children/${id}`, { method: 'DELETE', credentials: 'include' });
     if (!res.ok) {
       alert('Falha ao excluir.');
       return;

@@ -20,6 +20,9 @@ import {
 import {
   ComposeConfig, DEFAULT_COMPOSE_CONFIG, deepMerge, Gravity, PhotoRect, TextSpec,
 } from '@/components/media/composeConfig';
+import { composeConfigForFrame } from '@/components/media/composeConfig';
+import ComposerModal from '@/components/media/ComposerModal';
+import { placeholderPhoto, SAMPLE_CHILD } from '@/components/media/LayoutComposer';
 
 /* =====================
    Tipos
@@ -186,7 +189,15 @@ export default function BulkChildrenWizardPage() {
     const sep = guessSep(lines[0]);
     const split = (s: string) => s.split(sep).map((c) => c.trim());
 
-    const hdr = split(lines[0]);
+    // cabeçalhos vazios ou repetidos (colunas em branco da planilha) ganham nome único,
+    // senão o mapeamento por nome de coluna pega a coluna errada
+    const seenHdr = new Map<string, number>();
+    const hdr = split(lines[0]).map((h, i) => {
+      const base = h || `Coluna ${i + 1}`;
+      const n = (seenHdr.get(base) ?? 0) + 1;
+      seenHdr.set(base, n);
+      return n > 1 ? `${base} (${n})` : base;
+    });
     const data = lines.slice(1).map(split);
 
     return { headers: hdr, rows: data };
@@ -286,7 +297,6 @@ export default function BulkChildrenWizardPage() {
     const loadCampaigns = async () => {
       try {
         const url = new URL('/api/admin/campaigns', window.location.origin);
-        url.searchParams.set('status', 'ACTIVE');
         url.searchParams.set('page', '1');
         url.searchParams.set('pageSize', '200');
         const res = await fetch(url.toString(), {
@@ -296,7 +306,12 @@ export default function BulkChildrenWizardPage() {
         });
         if (!res.ok) return;
         const js = await res.json();
-        setCampaigns(Array.isArray(js?.items) ? js.items : js);
+        // ativas e em rascunho (dá para preparar a campanha antes de abrir); a única ativa já vem selecionada
+        const all: (Option & { status?: string })[] = Array.isArray(js?.items) ? js.items : Array.isArray(js) ? js : [];
+        const usable = all.filter((c) => c.status === 'ACTIVE' || c.status === 'DRAFT');
+        setCampaigns(usable.map((c) => ({ ...c, name: c.status === 'DRAFT' ? `${c.name} (rascunho)` : c.name })));
+        const active = usable.filter((c) => c.status === 'ACTIVE');
+        if (active.length === 1) setCampaignId((cur) => cur || active[0].id);
       } catch {}
     };
     loadCities();
@@ -416,7 +431,7 @@ export default function BulkChildrenWizardPage() {
     setHeaders(hdr);
     setRows(dataRows);
     const auto = tryAutoMap(hdr);
-    setColMap((prev) => ({ ...auto, ...prev }));
+    setColMap(auto);
 
     const built = buildDrafts(hdr, dataRows, auto);
     setDrafts(applyCity(built.drafts));
@@ -865,6 +880,8 @@ export default function BulkChildrenWizardPage() {
       }));
 
       // 2) upload das fotos (com Config)
+      // id interno de cada linha: o ID da planilha é o ID na campanha, que pode não ser o ID principal
+      const childIds: Record<string, string> = result?.ids ?? {};
       const uploadOne = async (pid: string, file: File) => {
         const fd = new FormData();
         fd.append('file', file);
@@ -874,7 +891,8 @@ export default function BulkChildrenWizardPage() {
         qs.set('campaignId', campaignId);
         if (selectedFrameId) qs.set('layoutId', selectedFrameId);
 
-        const r = await fetch(`/api/admin/children/${encodeURIComponent(pid)}/photo?${qs.toString()}`, {
+        const target = childIds[pid] ?? pid;
+        const r = await fetch(`/api/admin/children/${encodeURIComponent(target)}/photo?${qs.toString()}`, {
           method: 'POST',
           body: fd,
           credentials: 'include',
@@ -887,16 +905,20 @@ export default function BulkChildrenWizardPage() {
         }
       };
 
+      let uploadedCount = 0;
+      const uploadErrors: string[] = [];
       const entries = Object.entries(photoMap).filter(([, f]) => !!f) as [string, File][];
       for (const [idx, [pid, file]] of entries.entries()) {
         try {
           await uploadOne(pid, file);
+          uploadedCount += 1;
           setProgress((p) => ({
             ...p,
             uploaded: p.uploaded + 1,
             current: 1 + (idx + 1), // já contamos o “salvando”
           }));
         } catch (e: any) {
+          uploadErrors.push(e?.message || `Falha ao enviar foto de ${pid}`);
           setProgress((p) => ({
             ...p,
             failed: p.failed + 1,
@@ -911,9 +933,15 @@ export default function BulkChildrenWizardPage() {
       setFinalSummary((p) => ({
         created: Number(result?.created?.length || 0),
         updated: Number(result?.updated?.length || 0),
-        uploaded: progress.uploaded,
-        failed: progress.failed,
-        errors: progress.errors,
+        uploaded: uploadedCount,
+        failed: uploadErrors.length,
+        errors: [
+          // ID da planilha que era de outra criança no cadastro: virou cadastro novo
+          ...((result?.renumbered ?? []) as { publicId: number; newMainId: number; existingName: string }[]).map(
+            (r) => `ID ${r.publicId}: já era de "${r.existingName}" no cadastro; a criança foi cadastrada como nova (ID principal ${r.newMainId}) e usa o ID ${r.publicId} nesta campanha.`,
+          ),
+          ...uploadErrors,
+        ],
       }));
       setStep(6);
     } catch (e: any) {
@@ -961,6 +989,23 @@ export default function BulkChildrenWizardPage() {
   );
 
   const [showEditor, setShowEditor] = useState(false);
+  const [saveCfgAsDefault, setSaveCfgAsDefault] = useState(false);
+  const [placeholder, setPlaceholder] = useState('');
+  useEffect(() => { setPlaceholder(placeholderPhoto()); }, []);
+  const selectedFrame = frames.find((f) => f.id === selectedFrameId) ?? null;
+  // prévia do editor com a primeira criança que tem foto (ou uma silhueta)
+  const editorEntry = Object.entries(photoMap).find(([, f]) => !!f) as [string, File] | undefined;
+  const editorFile = editorEntry?.[1] ?? null;
+  const editorPhoto = useMemo(() => (editorFile ? URL.createObjectURL(editorFile) : placeholder), [editorFile, placeholder]);
+  const editorDraft = editorEntry ? drafts.find((d) => String(d.publicId) === editorEntry[0]) : drafts[0];
+  const editorSample = {
+    name: editorDraft?.name ?? SAMPLE_CHILD.name,
+    publicId: editorDraft?.publicId ?? SAMPLE_CHILD.publicId,
+    ageText: editorDraft?.birthDate ? calcAgeFromISO(editorDraft.birthDate) : editorDraft?.age != null ? `${editorDraft.age} anos` : SAMPLE_CHILD.ageText,
+    wantedGift: editorDraft?.wantedGift ?? SAMPLE_CHILD.wantedGift,
+    cityName: cities.find((c) => c.id === cityId)?.name ?? SAMPLE_CHILD.cityName,
+    communityName: communities.find((c) => c.id === communityId)?.name ?? '',
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
@@ -1694,11 +1739,38 @@ export default function BulkChildrenWizardPage() {
         </div>
 
         {showEditor && layoutSrc && (
-          <LayoutComposerModal
+          <ComposerModal
+            title="Enquadramento das fotos deste cadastro"
+            subtitle={selectedFrame ? `Layout ${selectedFrame.name || 'sem nome'}` : 'Layout novo'}
+            photoUrl={editorPhoto}
             layoutUrl={layoutSrc}
-            value={composeCfg}
-            onChange={setComposeCfg}
+            initialConfig={composeCfg}
+            resetConfig={selectedFrame ? composeConfigForFrame(selectedFrame.config) : DEFAULT_CONFIG}
+            sample={editorSample}
+            allowPhotoPick
+            saveLabel="Usar neste cadastro"
+            footer={selectedFrame ? (
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={saveCfgAsDefault} onChange={(e) => setSaveCfgAsDefault(e.target.checked)} />
+                Salvar também como padrão deste layout
+              </label>
+            ) : null}
             onClose={() => setShowEditor(false)}
+            onSave={async (cfg) => {
+              if (saveCfgAsDefault && selectedFrame) {
+                const r = await fetch(`/api/admin/campaign-frames/${selectedFrame.id}`, {
+                  method: 'PATCH',
+                  credentials: 'include',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ config: cfg }),
+                });
+                if (!r.ok) { alert('Falha ao salvar o padrão do layout.'); return; }
+                setFrames((list) => list.map((f) => (f.id === selectedFrame.id ? { ...f, config: cfg } : f)));
+              }
+              setComposeCfg(cfg as ComposeConfig);
+              setSaveCfgAsDefault(false);
+              setShowEditor(false);
+            }}
           />
         )}
       </div>
@@ -1718,478 +1790,6 @@ function downloadDataUrl(dataUrl: string, filename: string) {
   a.href = dataUrl;
   a.download = filename;
   a.click();
-}
-
-function LayoutComposerModal({
-  layoutUrl, value, onChange, onClose,
-}: {
-  layoutUrl: string;
-  value: ComposeConfig;
-  onChange: (v: ComposeConfig) => void;
-  onClose: () => void;
-}) {
-  const [local, setLocal] = useState<ComposeConfig>(value);
-  const W = local.canvas?.width ?? 1080;
-  const H = local.canvas?.height ?? 1350;
-  const pr = local.photoRect;
-
-  const update = (patch: Partial<ComposeConfig>) =>
-    setLocal(prev => ({ ...prev, ...patch }));
-
-  const updatePhoto = (p: Partial<PhotoRect>) =>
-    setLocal(prev => ({ ...prev, photoRect: { ...prev.photoRect, ...p } }));
-
-  const updateText = (id: string, p: Partial<TextSpec>) =>
-    setLocal(prev => ({
-      ...prev,
-      texts: prev.texts.map(t => (t.id === id ? { ...t, ...p } : t)),
-    }));
-
-  const addText = () => {
-    setLocal(prev => ({
-      ...prev,
-      texts: [
-        ...prev.texts,
-        {
-          id: 't' + Math.random().toString(36).slice(2, 7),
-          template: '{name}',
-          x: 48,
-          y: 48,
-          maxWidth: 600,
-          align: 'left',
-          font: { family: 'Inter, system-ui, sans-serif', size: 36, weight: 700 },
-          fill: '#ffffff',
-          letterSpacing: 0,
-          lineHeight: 1.1,
-        },
-      ],
-    }));
-  };
-
-  const removeText = (id: string) =>
-    setLocal(prev => ({ ...prev, texts: prev.texts.filter(t => t.id !== id) }));
-
-  // ======== SCALE (zoom automático) ========
-  const hostRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
-
-  useEffect(() => {
-    const el = hostRef.current;
-    if (!el) return;
-
-    const recompute = () => {
-      const pad = 16;
-      const availW = el.clientWidth - pad;
-      const availH = el.clientHeight - pad;
-      const s = Math.min(availW / W, availH / H, 1);
-      setScale(isFinite(s) && s > 0 ? s : 1);
-    };
-
-    recompute();
-
-    let ro: ResizeObserver | null = null;
-    if (typeof window !== 'undefined' && 'ResizeObserver' in window) {
-      ro = new ResizeObserver(() => recompute());
-      ro.observe(el);
-    }
-
-    window.addEventListener('resize', recompute);
-    return () => {
-      if (ro) ro.disconnect();
-      window.removeEventListener('resize', recompute);
-    };
-  }, [W, H]);
-
-  // ======== Drag e Resize compensando o scale ========
-  const startDrag = (e: React.MouseEvent, kind: 'photo' | 'text', id?: string) => {
-    e.preventDefault();
-    const sx = e.clientX, sy = e.clientY;
-    const base =
-      kind === 'photo'
-        ? { x: pr.x, y: pr.y }
-        : (() => {
-            const t = local.texts.find(t => t.id === id)!;
-            return { x: t.x, y: t.y };
-          })();
-
-    const onMove = (ev: MouseEvent) => {
-      const dx = (ev.clientX - sx) / scale;
-      const dy = (ev.clientY - sy) / scale;
-
-      if (kind === 'photo') {
-        updatePhoto({
-          x: Math.max(0, Math.min(W - pr.width, base.x + dx)),
-          y: Math.max(0, Math.min(H - pr.height, base.y + dy)),
-        });
-      } else if (id) {
-        updateText(id, {
-          x: Math.max(0, Math.min(W, base.x + dx)),
-          y: Math.max(0, Math.min(H, base.y + dy)),
-        });
-      }
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
-  const startResizePhoto = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const sx = e.clientX, sy = e.clientY;
-    const base = { w: pr.width, h: pr.height };
-    const onMove = (ev: MouseEvent) => {
-      const dx = (ev.clientX - sx) / scale;
-      const dy = (ev.clientY - sy) / scale;
-      updatePhoto({
-        width: Math.max(50, Math.min(W - pr.x, base.w + dx)),
-        height: Math.max(50, Math.min(H - pr.y, base.h + dy)),
-      });
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
-  const startResizeText = (e: React.MouseEvent, id: string) => {
-    e.preventDefault();
-    const sx = e.clientX;
-    const t0 = local.texts.find(t => t.id === id)!;
-    const baseW = t0.maxWidth;
-    const onMove = (ev: MouseEvent) => {
-      const dx = (ev.clientX - sx) / scale;
-      updateText(id, { maxWidth: Math.max(60, Math.min(W - t0.x, baseW + dx)) });
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white w-full max-w-6xl rounded-2xl overflow-hidden shadow-2xl">
-        <div className="p-4 border-b flex items-center justify-between">
-          <h3 className="font-semibold text-lg">Editor de Composição</h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                onChange(local);
-                onClose();
-              }}
-              className="px-3 py-1.5 rounded-lg bg-blue-600 text-white"
-            >
-              Salvar
-            </button>
-            <button onClick={onClose} className="px-3 py-1.5 rounded-lg border">
-              Fechar
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3">
-          {/* CANVAS */}
-          <div className="lg:col-span-2 p-4">
-            <div
-              ref={hostRef}
-              className="relative mx-auto border rounded-xl bg-gray-100"
-              style={{ maxHeight: '75vh', overflow: 'auto', padding: 8 }}
-            >
-              <div
-                className="relative mx-auto overflow-hidden rounded-xl shadow"
-                style={{ width: W * scale, height: H * scale }}
-              >
-                <div
-                  className="absolute top-0 left-0"
-                  style={{
-                    width: W,
-                    height: H,
-                    transform: `scale(${scale})`,
-                    transformOrigin: 'top left',
-                    backgroundImage: `url(${layoutUrl})`,
-                    backgroundRepeat: 'no-repeat',
-                    backgroundPosition: 'center',
-                    backgroundSize: local.layout?.resizeToCanvas ? '100% 100%' : 'contain',
-                    opacity: local.layout?.opacity ?? 1,
-                  }}
-                >
-                  {/* PHOTO RECT */}
-                  <div
-                    className="absolute border-2 border-blue-500/80 bg-blue-300/10 cursor-move"
-                    style={{ left: pr.x, top: pr.y, width: pr.width, height: pr.height }}
-                    onMouseDown={(e) => startDrag(e, 'photo')}
-                    title="Área da foto"
-                  >
-                    <div
-                      className="absolute w-3 h-3 bg-blue-600 right-[-6px] bottom-[-6px] cursor-se-resize"
-                      onMouseDown={startResizePhoto}
-                    />
-                  </div>
-
-                  {/* TEXTOS (guias) */}
-                  {local.texts.map(t => (
-                    <div
-                      key={t.id}
-                      className="absolute border border-emerald-500/80 bg-emerald-200/10 cursor-move"
-                      style={{ left: t.x, top: t.y, width: t.maxWidth }}
-                      onMouseDown={(e) => startDrag(e, 'text', t.id)}
-                      title="Texto"
-                    >
-                      <div className="px-1 text-[10px] text-emerald-700/80">#{t.id}</div>
-                      <div
-                        className="absolute w-3 h-3 bg-emerald-600 right-[-6px] bottom-[-6px] cursor-e-resize"
-                        onMouseDown={(e) => startResizeText(e, t.id)}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* PAINEL PROPRIEDADES */}
-          <div className="p-4 border-l bg-gray-50 space-y-6 max-h-[80vh] overflow-auto">
-            {/* Canvas / Layout */}
-            <div className="space-y-2">
-              <div className="font-semibold">Canvas / Layout</div>
-              <div className="grid grid-cols-2 gap-2">
-                <NumberInput
-                  label="Largura"
-                  value={W}
-                  onChange={(v) => update({ canvas: { ...local.canvas, width: v } })}
-                />
-                <NumberInput
-                  label="Altura"
-                  value={H}
-                  onChange={(v) => update({ canvas: { ...local.canvas, height: v } })}
-                />
-              </div>
-              <label className="inline-flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={!!local.layout?.resizeToCanvas}
-                  onChange={(e) =>
-                    update({ layout: { ...local.layout, resizeToCanvas: e.target.checked } })
-                  }
-                />
-                Redimensionar layout para o canvas
-              </label>
-              <label className="text-sm block">
-                Opacidade do layout
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={local.layout?.opacity ?? 1}
-                  onChange={(e) =>
-                    update({ layout: { ...local.layout, opacity: parseFloat(e.target.value) } })
-                  }
-                />
-              </label>
-            </div>
-
-            {/* Foto (photoRect) */}
-            <div className="space-y-2">
-              <div className="font-semibold">Foto (photoRect)</div>
-              <div className="grid grid-cols-2 gap-2">
-                <NumberInput label="X" value={pr.x} onChange={(v) => updatePhoto({ x: v })} />
-                <NumberInput label="Y" value={pr.y} onChange={(v) => updatePhoto({ y: v })} />
-                <NumberInput
-                  label="Largura"
-                  value={pr.width}
-                  onChange={(v) => updatePhoto({ width: v })}
-                />
-                <NumberInput
-                  label="Altura"
-                  value={pr.height}
-                  onChange={(v) => updatePhoto({ height: v })}
-                />
-                <NumberInput
-                  label="Scale"
-                  step={0.05}
-                  value={pr.scale ?? 1}
-                  onChange={(v) => updatePhoto({ scale: v })}
-                />
-                <NumberInput
-                  label="Cantos"
-                  value={pr.cornerRadius ?? 0}
-                  onChange={(v) => updatePhoto({ cornerRadius: v })}
-                />
-                <NumberInput
-                  label="offX"
-                  value={pr.offsetX ?? 0}
-                  onChange={(v) => updatePhoto({ offsetX: v })}
-                />
-                <NumberInput
-                  label="offY"
-                  value={pr.offsetY ?? 0}
-                  onChange={(v) => updatePhoto({ offsetY: v })}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="text-xs">
-                  Fit
-                  <select
-                    className="w-full border rounded px-2 py-1 text-sm"
-                    value={pr.fit}
-                    onChange={(e) => updatePhoto({ fit: e.target.value as PhotoRect['fit'] })}
-                  >
-                    {['cover', 'contain', 'fill', 'inside', 'outside'].map(x => (
-                      <option key={x} value={x}>{x}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs">
-                  Gravity
-                  <select
-                    className="w-full border rounded px-2 py-1 text-sm"
-                    value={pr.gravity}
-                    onChange={(e) => updatePhoto({ gravity: e.target.value as Gravity })}
-                  >
-                    {[
-                      'north','northeast','east','southeast','south',
-                      'southwest','west','northwest','center',
-                    ].map(g => (
-                      <option key={g} value={g}>{g}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </div>
-
-            {/* Textos */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="font-semibold">Textos</div>
-                <button onClick={addText} className="text-sm px-2 py-1 rounded bg-emerald-600 text-white">
-                  Adicionar texto
-                </button>
-              </div>
-
-              {local.texts.map(t => (
-                <div key={t.id} className="p-2 rounded border bg-white space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs text-gray-500">#{t.id}</div>
-                    <button onClick={() => removeText(t.id)} className="text-xs text-red-600">
-                      Remover
-                    </button>
-                  </div>
-
-                  <label className="text-xs block">
-                    Template
-                    <input
-                      className="w-full border rounded px-2 py-1 text-sm"
-                      value={t.template}
-                      onChange={(e) => updateText(t.id, { template: e.target.value })}
-                    />
-                    <span className="text-[11px] text-gray-500">
-                      Use {'{name} {publicId} {age} {wantedGift} {cityName} {communityName}'}
-                    </span>
-                  </label>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumberInput label="X" value={t.x} onChange={(v) => updateText(t.id, { x: v })} />
-                    <NumberInput label="Y" value={t.y} onChange={(v) => updateText(t.id, { y: v })} />
-                    <NumberInput label="Largura máx." value={t.maxWidth} onChange={(v) => updateText(t.id, { maxWidth: v })} />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumberInput label="Tamanho da Fonte" value={t.font.size} onChange={(v) => updateText(t.id, { font: { ...t.font, size: v } })} />
-                    <NumberInput label="Peso (font-weight)" value={t.font.weight} onChange={(v) => updateText(t.id, { font: { ...t.font, weight: v } })} />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="text-xs">
-                      Alinhamento
-                      <select
-                        className="w-full border rounded px-2 py-1 text-sm"
-                        value={t.align}
-                        onChange={(e) => updateText(t.id, { align: e.target.value as TextSpec['align'] })}
-                      >
-                        <option value="left">Esquerda</option>
-                        <option value="center">Centro</option>
-                        <option value="right">Direita</option>
-                      </select>
-                    </label>
-                    <label className="text-xs">
-                      Cor
-                      <input
-                        type="color"
-                        className="w-full h-9 border rounded"
-                        value={t.fill}
-                        onChange={(e) => updateText(t.id, { fill: e.target.value })}
-                      />
-                    </label>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="inline-flex items-center gap-2 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={!!t.uppercase}
-                        onChange={(e) => updateText(t.id, { uppercase: e.target.checked })}
-                      />
-                      MAIÚSCULAS
-                    </label>
-                    <label className="inline-flex items-center gap-2 text-xs">
-                      Espaçamento letras
-                      <input
-                        type="number"
-                        className="w-20 border rounded px-2 py-0.5 text-sm"
-                        value={t.letterSpacing ?? 0}
-                        onChange={(e) => updateText(t.id, { letterSpacing: Number(e.target.value) })}
-                      />
-                    </label>
-                    <label className="inline-flex items-center gap-2 text-xs">
-                      LineHeight
-                      <input
-                        type="number"
-                        step="0.1"
-                        className="w-20 border rounded px-2 py-0.5 text-sm"
-                        value={t.lineHeight ?? 1.1}
-                        onChange={(e) => updateText(t.id, { lineHeight: Number(e.target.value) })}
-                      />
-                    </label>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="pt-2 border-t">
-              <button onClick={() => onChange(local)} className="px-3 py-1.5 rounded-lg border">
-                Aplicar no preview
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function NumberInput({ label, value, onChange, step=1 }:{
-  label:string; value:number; onChange:(v:number)=>void; step?:number;
-}) {
-  return (
-    <label className="text-sm text-gray-600 block">
-      {label}
-      <input
-        type="number"
-        step={step}
-        value={Number.isFinite(value) ? value : 0}
-        onChange={e=>onChange(parseFloat(e.target.value))}
-        className="w-full border rounded px-2 py-1"
-      />
-    </label>
-  );
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
