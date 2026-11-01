@@ -19,11 +19,17 @@ type School = {
   communityId?: string | null;
   community?: { id: string; name: string } | null;
   communityName?: string | null;
+  // comunidades atendidas (uma escola pode receber crianças de várias comunidades)
+  communities?: { id: string; name: string }[];
+  communityIds?: string[];
   createdAt?: string; updatedAt?: string; deletedAt?: string | null;
 };
 type PageResp<T> = { items: T[]; total: number; page: number; pageSize: number; pages: number };
 
 /* ====== Helpers ====== */
+const schoolCommunities = (s: Partial<School>) =>
+  s.communities ?? (s.community ? [s.community] : []);
+
 const pageSize = 20;
 const normalize = <T,>(raw: any, p: number): PageResp<T> => {
   const items: T[] = Array.isArray(raw?.items)
@@ -107,7 +113,7 @@ export default function AdminSchoolsPage() {
   const headerStats = useMemo(() => {
     const total = data?.total ?? rows.length;
     const withAddr = rows.filter(r => !!r.address?.trim()).length;
-    const unlinked = rows.filter(r => !r.communityId).length;
+    const unlinked = rows.filter(r => schoolCommunities(r).length === 0).length;
     return { total, withAddr, unlinked };
   }, [data, rows]);
 
@@ -179,7 +185,7 @@ export default function AdminSchoolsPage() {
                   <Th>#</Th>
                   <Th>Escola</Th>
                   <Th>Cidade</Th>
-                  <Th>Comunidade</Th>
+                  <Th>Comunidades</Th>
                   <Th>Slug</Th>
                   <Th className="text-right">Ações</Th>
                 </tr>
@@ -195,7 +201,15 @@ export default function AdminSchoolsPage() {
                       {s.address && <div className="text-xs text-gray-500 line-clamp-1">{s.address}</div>}
                     </Td>
                     <Td>{s.city?.name ?? s.cityName ?? '—'}</Td>
-                    <Td>{s.community?.name ?? s.communityName ?? '—'}</Td>
+                    <Td>
+                      {schoolCommunities(s).length ? (
+                        <div className="flex flex-wrap gap-1">
+                          {schoolCommunities(s).map((c) => (
+                            <span key={c.id} className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 text-xs">{c.name}</span>
+                          ))}
+                        </div>
+                      ) : (s.communityName ?? '—')}
+                    </Td>
                     <Td className="text-gray-700">{s.slug ?? '—'}</Td>
                     <Td className="text-right">
                       <div className="flex items-center justify-end gap-2">
@@ -434,7 +448,7 @@ function SchoolDialog({
   cities: CityMin[];
   communitiesByCity: (cityId: string) => Promise<Community[]>;
   onClose: () => void;
-  onSubmit: (payload: { publicId?: number; cityId: string; communityId?: string | null; name: string; slug?: string; address?: string }) => Promise<void>;
+  onSubmit: (payload: { publicId?: number; cityId: string; communityIds: string[]; name: string; slug?: string; address?: string }) => Promise<void>;
 }) {
   const [publicId, setPublicId] = useState<number | ''>(initial?.publicId ?? '');
   const [cityId, setCityId] = useState<string>(initial?.cityId ?? '');
@@ -444,15 +458,18 @@ function SchoolDialog({
   const [slugAuto, setSlugAuto] = useState(() => !initial?.slug || initial.slug === slugify(initial?.name ?? ''));
   const changeName = (v: string) => { setName(v); if (slugAuto) setSlug(slugify(v)); };
   const [address, setAddress] = useState(initial?.address ?? '');
-  const [communityId, setCommunityId] = useState<string>(initial?.communityId ?? '');
+  const [communityIds, setCommunityIds] = useState<string[]>(() => schoolCommunities(initial ?? {}).map((c) => c.id));
   const [communities, setCommunities] = useState<Community[]>([]);
+  const toggleCommunity = (id: string) =>
+    setCommunityIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   useEffect(() => {
     (async () => {
-      if (!cityId) { setCommunities([]); setCommunityId(''); return; }
+      if (!cityId) { setCommunities([]); setCommunityIds([]); return; }
       const list = await communitiesByCity(cityId);
       setCommunities(list);
-      if (communityId && !list.some(c => c.id === communityId)) setCommunityId('');
+      // comunidades de outra cidade não valem
+      setCommunityIds((prev) => prev.filter((id) => list.some((c) => c.id === id)));
     })();
   }, [cityId]);
 
@@ -463,7 +480,7 @@ function SchoolDialog({
     const finalSlug = slugify(slug) || slugify(name);
     if (finalSlug) payload.slug = finalSlug;
     if (address) payload.address = address.trim();
-    payload.communityId = communityId || null;
+    payload.communityIds = communityIds;
     if (publicId !== '') payload.publicId = Number(publicId);
     await onSubmit(payload);
   };
@@ -481,15 +498,22 @@ function SchoolDialog({
             {cities.map(c => (<option key={c.id} value={c.id}>{c.name}{c.state ? ` (${c.state})` : ''}</option>))}
           </select>
         </Field>
-        <Field label="Comunidade (Opcional)">
-          <select className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-            disabled={!cityId}
-            value={communityId}
-            onChange={(e) => setCommunityId(e.target.value)}
-          >
-            <option value="">{!cityId ? 'Selecione uma cidade' : 'Nenhuma'}</option>
-            {communities.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
-          </select>
+        <Field label={`Comunidades atendidas${communityIds.length ? ` (${communityIds.length})` : ''}`}>
+          {!cityId ? (
+            <p className="text-sm text-gray-500 px-1">Selecione uma cidade</p>
+          ) : communities.length === 0 ? (
+            <p className="text-sm text-gray-500 px-1">Esta cidade não tem comunidades cadastradas</p>
+          ) : (
+            <div className="max-h-44 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50 p-2 grid grid-cols-1 sm:grid-cols-2 gap-1">
+              {communities.map((c) => (
+                <label key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white cursor-pointer text-sm">
+                  <input type="checkbox" checked={communityIds.includes(c.id)} onChange={() => toggleCommunity(c.id)} />
+                  <span className="truncate">{c.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-gray-500">Marque todas as comunidades cujas crianças frequentam esta escola.</p>
         </Field>
         <Field label="Nome *">
           <input className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500" value={name} onChange={(e) => changeName(e.target.value)} placeholder="Ex: Escola Municipal José de Alencar" />

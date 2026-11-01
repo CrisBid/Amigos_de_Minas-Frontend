@@ -113,11 +113,12 @@ export default function EditChildPage() {
   async function reloadLocation(cityId?: string, communityId?: string) {
     setLoadingLoc(true);
     try {
-      const qsSchools = new URLSearchParams({ limit: '1000' });
+      // a API pagina em 20 por padrão: pede todas; com comunidade, vêm as escolas que a atendem
+      const qsSchools = new URLSearchParams({ pageSize: '1000' });
       if (cityId) qsSchools.set('cityId', cityId);
       if (communityId) qsSchools.set('communityId', communityId);
       const [rc, rs] = await Promise.all([
-        cityId ? fetch(`/api/admin/communities?cityId=${cityId}&limit=1000`, { cache: 'no-store' }) : null,
+        cityId ? fetch(`/api/admin/communities?cityId=${cityId}&pageSize=1000`, { cache: 'no-store' }) : null,
         fetch(`/api/admin/schools?${qsSchools.toString()}`, { cache: 'no-store' }),
       ]);
       setCommunities(rc?.ok ? listOf<Community>(await rc.json()) : []);

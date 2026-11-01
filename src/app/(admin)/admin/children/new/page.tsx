@@ -8,7 +8,7 @@ import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFil
 import ComposedImage from '@/components/media/ComposedImage';
 import { composeConfigForFrame } from '@/components/media/composeConfig';
 
-type Option = { id: string; name: string; state?: string | null };
+type Option = { id: string; name: string; state?: string | null; communityIds?: string[] };
 type Frame = { id: string; url: string; name?: string | null; active?: boolean; config?: unknown };
 
 const listOf = <T,>(j: any): T[] => (Array.isArray(j?.items) ? j.items : Array.isArray(j) ? j : []);
@@ -81,8 +81,8 @@ export default function NewChildPage() {
     if (!cityId) { setCommunities([]); setSchools([]); return; }
     (async () => {
       const [rc, rs] = await Promise.all([
-        fetch(`/api/admin/communities?cityId=${cityId}&limit=1000`, { cache: 'no-store' }).catch(() => null),
-        fetch(`/api/admin/schools?cityId=${cityId}&limit=1000`, { cache: 'no-store' }).catch(() => null),
+        fetch(`/api/admin/communities?cityId=${cityId}&pageSize=1000`, { cache: 'no-store' }).catch(() => null),
+        fetch(`/api/admin/schools?cityId=${cityId}&pageSize=1000`, { cache: 'no-store' }).catch(() => null),
       ]);
       setCommunities(rc?.ok ? listOf<Option>(await rc.json()) : []);
       setSchools(rs?.ok ? listOf<Option>(await rs.json()) : []);
@@ -215,7 +215,16 @@ export default function NewChildPage() {
               </label>
               <label className="text-sm text-gray-700">
                 Comunidade
-                <select value={communityId} onChange={(e) => setCommunityId(e.target.value)} disabled={!cityId} className={`${inputCls} bg-white disabled:bg-gray-50`}>
+                <select
+                  value={communityId}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setCommunityId(next);
+                    // escola que não atende a nova comunidade sai da seleção
+                    const s = schools.find((x) => x.id === schoolId);
+                    if (next && s?.communityIds?.length && !s.communityIds.includes(next)) setSchoolId('');
+                  }}
+                  disabled={!cityId} className={`${inputCls} bg-white disabled:bg-gray-50`}>
                   <option value="">Selecione…</option>
                   {communities.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
@@ -224,7 +233,10 @@ export default function NewChildPage() {
                 Escola
                 <select value={schoolId} onChange={(e) => setSchoolId(e.target.value)} disabled={!cityId} className={`${inputCls} bg-white disabled:bg-gray-50`}>
                   <option value="">Selecione…</option>
-                  {schools.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {/* escolas que atendem a comunidade escolhida (ou sem comunidade definida) */}
+                  {schools
+                    .filter((s) => !communityId || !s.communityIds?.length || s.communityIds.includes(communityId))
+                    .map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </label>
             </div>

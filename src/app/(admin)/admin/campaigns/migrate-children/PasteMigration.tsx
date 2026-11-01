@@ -11,7 +11,7 @@ import { placeholderPhoto } from '@/components/media/LayoutComposer';
 type Campaign = { id: string; name: string; slug: string; year?: number | null };
 type City = { id: string; name: string; state?: string | null };
 type CommunityOpt = { id: string; name: string; cityId?: string | null };
-type SchoolOpt = { id: string; name: string; communityId?: string | null };
+type SchoolOpt = { id: string; name: string; communityId?: string | null; communityIds?: string[] };
 
 type Candidate = {
   id: string;
@@ -321,7 +321,12 @@ export default function PasteMigration({
     setNewSchoolId('');
   }, [communityId]);
 
-  const schoolsFor = (commId: string) => schools.filter((s) => !commId || !s.communityId || s.communityId === commId);
+  // escolas que atendem a comunidade (uma escola pode atender várias); sem vínculo = vale para todas
+  const schoolsFor = (commId: string) =>
+    schools.filter((s) => {
+      const ids = s.communityIds ?? (s.communityId ? [s.communityId] : []);
+      return !commId || ids.length === 0 || ids.includes(commId);
+    });
 
   async function loadCandidates() {
     if (!cityId) { setCandidates([]); setUsedTargetIds([]); return; }
