@@ -11,6 +11,7 @@ import { placeholderPhoto } from '@/components/media/LayoutComposer';
 type Campaign = { id: string; name: string; slug: string; year?: number | null };
 type City = { id: string; name: string; state?: string | null };
 type CommunityOpt = { id: string; name: string; cityId?: string | null };
+type SchoolOpt = { id: string; name: string; communityId?: string | null };
 
 type Candidate = {
   id: string;
@@ -238,6 +239,11 @@ export default function PasteMigration({
   const [communities, setCommunities] = useState<CommunityOpt[]>([]);
   const [cityId, setCityId] = useState('');
   const [communityId, setCommunityId] = useState('');
+  const [schools, setSchools] = useState<SchoolOpt[]>([]);
+  // vínculos das crianças novas: padrão do lote (começa com a comunidade do filtro) e ajuste por linha
+  const [newCommunityId, setNewCommunityId] = useState('');
+  const [newSchoolId, setNewSchoolId] = useState('');
+  const [rowLinks, setRowLinks] = useState<Record<number, { communityId?: string; schoolId?: string }>>({});
 
   // ---- crianças da cidade/comunidade ----
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -288,21 +294,34 @@ export default function PasteMigration({
 
   useEffect(() => {
     setCommunityId('');
-    if (!cityId) { setCommunities([]); return; }
-    (async () => {
+    setRowLinks({});
+    if (!cityId) { setCommunities([]); setSchools([]); return; }
+    // todas as comunidades/escolas da cidade (a API pagina em 20 por padrão)
+    const load = async <T,>(path: string, set: (v: T[]) => void) => {
       try {
-        const url = new URL('/api/admin/communities', window.location.origin);
+        const url = new URL(path, window.location.origin);
         url.searchParams.set('cityId', cityId);
+        url.searchParams.set('pageSize', '1000');
         const res = await fetch(url.toString(), { cache: 'no-store', credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
-          setCommunities(Array.isArray(data) ? data : (data?.items ?? []));
-        }
+          set(Array.isArray(data) ? data : (data?.items ?? []));
+        } else set([]);
       } catch {
-        setCommunities([]);
+        set([]);
       }
-    })();
+    };
+    load<CommunityOpt>('/api/admin/communities', setCommunities);
+    load<SchoolOpt>('/api/admin/schools', setSchools);
   }, [cityId]);
+
+  // o filtro de comunidade vira o padrão das crianças novas
+  useEffect(() => {
+    setNewCommunityId(communityId);
+    setNewSchoolId('');
+  }, [communityId]);
+
+  const schoolsFor = (commId: string) => schools.filter((s) => !commId || !s.communityId || s.communityId === commId);
 
   async function loadCandidates() {
     if (!cityId) { setCandidates([]); setUsedTargetIds([]); return; }
@@ -629,13 +648,24 @@ export default function PasteMigration({
     setExcluded(new Set());
     setPhotos({});
     setPhotoFiles([]);
+    setRowLinks({});
   }
+
+  // comunidade/escola de cada criança nova: a da linha, senão a do lote
+  const linkOf = (line: number) => {
+    const comm = rowLinks[line]?.communityId ?? newCommunityId;
+    let school = rowLinks[line]?.schoolId ?? newSchoolId;
+    // escola de outra comunidade não vale para esta criança
+    if (school && !schoolsFor(comm).some((s) => s.id === school)) school = '';
+    return { communityId: comm, schoolId: school };
+  };
 
   // ---- migrar (e cadastrar as novas) ----
   async function submit() {
     if (selectedRows.length === 0 || blockingRows.length > 0) return;
-    if (selectedNew.length > 0 && !communityId &&
-      !confirm(`${selectedNew.length} criança(s) nova(s) serão cadastradas sem comunidade, só com a cidade. Continuar?`)) return;
+    const newWithoutCommunity = selectedNew.filter((r) => !linkOf(r.line).communityId).length;
+    if (newWithoutCommunity > 0 &&
+      !confirm(`${newWithoutCommunity} criança(s) nova(s) serão cadastradas sem comunidade, só com a cidade. Continuar?`)) return;
     const errors: string[] = [];
     let uploaded = 0;
 
@@ -656,9 +686,10 @@ export default function PasteMigration({
             motherName: r.motherName.trim() || null,
             wantedGift: r.gift.trim() || null,
             publicId: r.newId,
+            communityId: linkOf(r.line).communityId || null,
+            schoolId: linkOf(r.line).schoolId || null,
           })),
           cityId,
-          communityId: communityId || null,
         }),
       });
       if (!res.ok) {
@@ -898,6 +929,43 @@ export default function PasteMigration({
             </div>
           </div>
 
+          {counts.fresh > 0 && (
+            <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-3">
+              <p className="text-sm font-semibold text-blue-900 mb-2">
+                Vínculo das {counts.fresh} criança{counts.fresh === 1 ? '' : 's'} nova{counts.fresh === 1 ? '' : 's'}
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">Comunidade</label>
+                  <select
+                    value={newCommunityId}
+                    onChange={(e) => { setNewCommunityId(e.target.value); setNewSchoolId(''); }}
+                    className={`w-full p-2 border rounded-lg bg-white text-sm ${newCommunityId ? 'border-gray-300' : 'border-amber-300'}`}
+                  >
+                    <option value="">Sem comunidade</option>
+                    {communities.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">Escola</label>
+                  <select
+                    value={newSchoolId}
+                    onChange={(e) => setNewSchoolId(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded-lg bg-white text-sm"
+                  >
+                    <option value="">Sem escola</option>
+                    {schoolsFor(newCommunityId).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </div>
+              </div>
+              <p className="text-xs text-blue-800 mt-2">
+                Vale para todas as crianças novas do lote. Se alguma for de outra comunidade ou escola, troque na linha dela.
+                {communities.length === 0 && ' Esta cidade não tem comunidades cadastradas.'}
+                {schools.length === 0 && ' Esta cidade não tem escolas cadastradas.'}
+              </p>
+            </div>
+          )}
+
           <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-gray-500">
             <span>
               {frame
@@ -1029,6 +1097,33 @@ export default function PasteMigration({
                             {c.community?.name ?? '—'} · ID anterior #{c.currentPublicId ?? '—'}
                           </p>
                         )}
+                        {r.isNew && (() => {
+                          const link = linkOf(r.line);
+                          const setLink = (patch: { communityId?: string; schoolId?: string }) =>
+                            setRowLinks((prev) => ({ ...prev, [r.line]: { ...link, ...prev[r.line], ...patch } }));
+                          return (
+                            <div className="grid grid-cols-2 gap-1 mt-1.5">
+                              <select
+                                value={link.communityId}
+                                onChange={(e) => setLink({ communityId: e.target.value })}
+                                className={`px-1.5 py-1 border rounded-md bg-white text-xs ${link.communityId ? 'border-gray-300' : 'border-amber-300 text-amber-800'}`}
+                                title="Comunidade da criança nova"
+                              >
+                                <option value="">Sem comunidade</option>
+                                {communities.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                              </select>
+                              <select
+                                value={link.schoolId}
+                                onChange={(e) => setLink({ schoolId: e.target.value })}
+                                className="px-1.5 py-1 border border-gray-300 rounded-md bg-white text-xs"
+                                title="Escola da criança nova"
+                              >
+                                <option value="">Sem escola</option>
+                                {schoolsFor(link.communityId).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                              </select>
+                            </div>
+                          );
+                        })()}
                         {problems.map((p) => (
                           <p
                             key={p.text}
