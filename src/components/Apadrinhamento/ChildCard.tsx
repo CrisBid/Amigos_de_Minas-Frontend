@@ -118,7 +118,7 @@ export default function ChildCard({
 
         {(child.presente || child.categoria) && (
           <p className="text-sm text-gray-600">
-            Presente: {child.presente ?? child.categoria}
+            Presente: {child.presente || child.categoria}
           </p>
         )}
 
