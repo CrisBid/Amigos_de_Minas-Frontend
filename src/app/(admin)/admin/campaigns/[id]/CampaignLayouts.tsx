@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, ImagePlus, LayoutTemplate, Loader2, PencilRuler, Search, Star, Trash2 } from 'lucide-react';
+import { CheckCircle2, ImagePlus, LayoutTemplate, Loader2, PencilRuler, RefreshCw, Search, Star, Trash2 } from 'lucide-react';
 import { composeConfigForFrame } from '@/components/media/composeConfig';
 import ComposerModal from '@/components/media/ComposerModal';
 import { placeholderPhoto, SAMPLE_CHILD } from '@/components/media/LayoutComposer';
@@ -37,6 +37,7 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
   const [uploadName, setUploadName] = useState('');
   const [uploading, setUploading] = useState(false);
   const [savingCity, setSavingCity] = useState<string | null>(null);
+  const [replacing, setReplacing] = useState<string | null>(null); // layout com a imagem sendo trocada
   const [cityQuery, setCityQuery] = useState('');
 
   // enquadramento padrão do layout (vale para toda foto nova montada com ele)
@@ -110,6 +111,23 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
       alert(e instanceof Error ? e.message : 'Falha ao enviar layout.');
     } finally {
       setUploading(false);
+    }
+  }
+
+  // troca só a imagem: nome, enquadramento, padrão e cidades continuam iguais
+  async function replaceImage(frame: Frame, index: number, file: File) {
+    if (!confirm(`Trocar a imagem de "${frameLabel(frame, index)}" por "${file.name}"? O enquadramento e as cidades que usam este layout continuam iguais.`)) return;
+    setReplacing(frame.id);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch(`/api/admin/campaign-frames/${frame.id}/file`, { method: 'PUT', credentials: 'include', body: fd });
+      if (!res.ok) throw new Error(await extractError(res, 'Falha ao trocar a imagem do layout.'));
+      await loadFrames();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Falha ao trocar a imagem do layout.');
+    } finally {
+      setReplacing(null);
     }
   }
 
@@ -207,8 +225,15 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {frames.map((f, i) => (
               <div key={f.id} className={`rounded-xl border overflow-hidden bg-white ${f.active ? 'ring-2 ring-blue-500' : ''}`}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={f.url} alt={frameLabel(f, i)} className="w-full aspect-[4/5] object-contain bg-gray-50" />
+                <div className="relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={f.url} alt={frameLabel(f, i)} className="w-full aspect-[4/5] object-contain bg-gray-50" />
+                  {replacing === f.id && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-white/70">
+                      <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
+                    </div>
+                  )}
+                </div>
                 <div className="p-2 text-xs">
                   <p className="font-semibold text-gray-900 truncate" title={frameLabel(f, i)}>{frameLabel(f, i)}</p>
                   <p className={`mt-0.5 ${f.config ? 'text-emerald-700' : 'text-amber-700'}`}>
@@ -220,6 +245,23 @@ export default function CampaignLayouts({ campaignId }: { campaignId: string }) 
                   >
                     <PencilRuler className="w-3.5 h-3.5" /> Configurar enquadramento
                   </button>
+                  <label
+                    className={`mt-1 w-full inline-flex items-center justify-center gap-1 px-2 py-1 rounded-md border hover:bg-gray-50 ${replacing ? 'pointer-events-none opacity-50' : 'cursor-pointer'}`}
+                    title="Substitui só a imagem, mantendo enquadramento e cidades"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" /> Trocar imagem
+                    <input
+                      type="file"
+                      accept="image/png,image/webp,image/jpeg"
+                      className="hidden"
+                      disabled={!!replacing}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (file) replaceImage(f, i, file);
+                      }}
+                    />
+                  </label>
                   <div className="mt-1 flex items-center justify-between gap-1">
                     {f.active ? (
                       <span className="inline-flex items-center gap-1 text-blue-700"><Star className="w-3 h-3" /> Padrão</span>
