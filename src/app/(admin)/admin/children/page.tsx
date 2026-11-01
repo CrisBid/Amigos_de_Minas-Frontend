@@ -28,9 +28,9 @@ const IN_PROGRESS_STYLE = { className: 'bg-blue-50 text-blue-700 border-blue-200
 function thumbUrl(childId: string, allImages: ChildImageLite[] | undefined, campaignId: string, size = 96) {
   // "só layout" (criança sem foto) não tem miniatura
   const images = (allImages ?? []).filter((i) => i.id && !i.placeholder);
-  if (!images.length) return null;
-  const own = campaignId ? images.filter((i) => i.campaignId === campaignId) : [];
-  const pool = own.length ? own : images;
+  // com campanha, só a foto dela (migrada sem foto nova = sem miniatura, igual às novas)
+  const pool = campaignId ? images.filter((i) => i.campaignId === campaignId) : images;
+  if (!pool.length) return null;
   const latest = [...pool].sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime())[0];
   const qs = new URLSearchParams({ w: String(size), v: String(latest.id) });
   if (campaignId) qs.set('campaignId', campaignId);

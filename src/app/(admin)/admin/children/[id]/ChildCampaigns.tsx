@@ -288,7 +288,7 @@ export default function ChildCampaigns({
                     ? <>Enviada para esta campanha em {formatDate(item.image.createdAt)}</>
                     : item.displayFromCampaign
                       ? <>Usando a foto de <strong>{item.displayFromCampaign.name ?? 'outra campanha'}</strong> (sem foto nova)</>
-                      : <span className="text-gray-500">Nenhuma foto</span>}
+                      : <span className="text-gray-500">Sem foto nesta campanha — aparece só a moldura</span>}
                 </dd>
               </div>
               {item.migratedFrom && (
