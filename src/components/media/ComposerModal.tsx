@@ -1,7 +1,7 @@
 'use client';
 
 import { ReactNode, useEffect, useState } from 'react';
-import { ImagePlus, Loader2, RotateCcw, X } from 'lucide-react';
+import { ImagePlus, Loader2, RotateCcw, ScanFace, X } from 'lucide-react';
 import LayoutComposer from './LayoutComposer';
 import type { ComposeSample } from './ComposedImage';
 import type { ComposeConfig } from './composeConfig';
@@ -22,6 +22,7 @@ export default function ComposerModal({
   allowPhotoPick = false,
   footer,
   saveLabel = 'Salvar',
+  onAutoFrame,
   onClose,
   onSave,
 }: {
@@ -39,12 +40,26 @@ export default function ComposerModal({
   /** conteúdo extra no rodapé (ex.: opções de aplicação) */
   footer?: ReactNode;
   saveLabel?: string;
+  /** enquadramento automático (ex.: pelo rosto): recebe a composição atual e devolve a ajustada, ou null */
+  onAutoFrame?: (cfg: ComposeConfig) => Promise<ComposeConfig | null>;
   onClose: () => void;
   onSave: (cfg: ComposeConfig) => Promise<void> | void;
 }) {
   const [cfg, setCfg] = useState<ComposeConfig>(initialConfig);
   const [saving, setSaving] = useState(false);
   const [previewPhoto, setPreviewPhoto] = useState<string | null>(null);
+  const [autoState, setAutoState] = useState<'idle' | 'running' | 'noface'>('idle');
+
+  async function autoFrame() {
+    if (!onAutoFrame) return;
+    setAutoState('running');
+    try {
+      const next = await onAutoFrame(cfg);
+      if (next) { setCfg(next); setAutoState('idle'); } else setAutoState('noface');
+    } catch {
+      setAutoState('noface');
+    }
+  }
 
   useEffect(() => () => { if (previewPhoto) URL.revokeObjectURL(previewPhoto); }, [previewPhoto]);
 
@@ -73,6 +88,19 @@ export default function ComposerModal({
             {subtitle && <p className="text-xs text-gray-500 truncate">{subtitle}</p>}
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {onAutoFrame && (
+              <button
+                onClick={autoFrame}
+                disabled={autoState === 'running' || !!previewPhoto}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm disabled:opacity-50 ${
+                  autoState === 'noface' ? 'border-amber-300 bg-amber-50 text-amber-800' : 'hover:bg-gray-50'
+                }`}
+                title="Posiciona e aproxima a foto para a cabeça ficar inteira"
+              >
+                {autoState === 'running' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanFace className="w-4 h-4" />}
+                {autoState === 'noface' ? 'Rosto não encontrado' : 'Ajustar pelo rosto'}
+              </button>
+            )}
             {allowPhotoPick && (
               <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50 cursor-pointer" title="Só para visualizar; a foto não é enviada">
                 <ImagePlus className="w-4 h-4" /> Foto de exemplo
