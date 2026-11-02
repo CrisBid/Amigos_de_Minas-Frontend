@@ -239,7 +239,7 @@ export default function LayoutComposer({
         <div className="p-4 space-y-4 overflow-auto text-sm">
           {tab === 'photo' && (
             <>
-              <Range label="Zoom" min={0.3} max={4} step={0.01} value={pr.scale ?? 1} onChange={(v) => setPhoto({ scale: v })} format={(v) => `${Math.round(v * 100)}%`} />
+              <Range label="Zoom" min={0.3} max={4} step={0.01} value={pr.scale ?? 1} onChange={(v) => setPhoto({ scale: v })} percent clamp={[0.05, 10]} />
               <Range label="Posição horizontal" min={-round(W / 2)} max={round(W / 2)} step={1} value={pr.offsetX ?? 0} onChange={(v) => setPhoto({ offsetX: v })} />
               <Range label="Posição vertical" min={-round(H / 2)} max={round(H / 2)} step={1} value={pr.offsetY ?? 0} onChange={(v) => setPhoto({ offsetY: v })} />
               <div className="flex gap-2">
@@ -354,7 +354,8 @@ export default function LayoutComposer({
                 min={0} max={1} step={0.05}
                 value={value.layout.opacity ?? 1}
                 onChange={(v) => onChange({ ...value, layout: { ...value.layout, opacity: v } })}
-                format={(v) => `${Math.round(v * 100)}%`}
+                percent
+                clamp={[0, 1]}
               />
             </>
           )}
@@ -378,17 +379,67 @@ function Num({ label, value, onChange }: { label: string; value: number; onChang
   );
 }
 
+/**
+ * Barra + campo numérico ligados. `percent`: o campo mostra e recebe em % (1 = 100%).
+ * O campo aceita valores fora da faixa da barra (exceto `clamp`), para ajustes finos.
+ */
 function Range({
-  label, min, max, step, value, onChange, format,
+  label, min, max, step, value, onChange, percent = false, clamp,
 }: {
   label: string; min: number; max: number; step: number; value: number;
-  onChange: (v: number) => void; format?: (v: number) => string;
+  onChange: (v: number) => void; percent?: boolean; clamp?: [number, number];
 }) {
+  const factor = percent ? 100 : 1;
+  const shown = Math.round(value * factor * 100) / 100;
+  // texto em edição: deixa digitar "-", "" ou "1," sem o valor pular
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = (text: string) => {
+    const n = parseFloat(text.replace(',', '.'));
+    if (!Number.isFinite(n)) return;
+    let v = n / factor;
+    if (clamp) v = Math.min(clamp[1], Math.max(clamp[0], v));
+    onChange(v);
+  };
+
   return (
-    <label className="text-xs text-gray-600 block">
-      <span className="flex justify-between"><span>{label}</span><span className="text-gray-400">{format ? format(value) : value}</span></span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} className="w-full" />
-    </label>
+    <div className="text-xs text-gray-600">
+      <span>{label}</span>
+      <div className="flex items-center gap-2 mt-0.5">
+        <input
+          type="range"
+          min={min} max={max} step={step}
+          value={Math.min(max, Math.max(min, value))}
+          onChange={(e) => { setDraft(null); onChange(parseFloat(e.target.value)); }}
+          className="flex-1 min-w-0"
+          aria-label={label}
+        />
+        <div className="relative shrink-0">
+          <input
+            type="text"
+            inputMode="decimal"
+            value={draft ?? String(shown)}
+            onChange={(e) => { setDraft(e.target.value); commit(e.target.value); }}
+            onBlur={() => setDraft(null)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              // setas: passo da barra (com Shift, 10x)
+              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                const delta = (e.key === 'ArrowUp' ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
+                let v = value + delta;
+                if (clamp) v = Math.min(clamp[1], Math.max(clamp[0], v));
+                setDraft(null);
+                onChange(Math.round(v * 10000) / 10000);
+              }
+            }}
+            className={`w-20 border rounded-md px-2 py-1 text-right text-gray-900 ${percent ? 'pr-6' : ''}`}
+            aria-label={`${label} (valor)`}
+          />
+          {percent && <span className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">%</span>}
+        </div>
+      </div>
+    </div>
   );
 }
 
