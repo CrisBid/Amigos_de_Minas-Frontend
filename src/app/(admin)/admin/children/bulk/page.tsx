@@ -66,6 +66,12 @@ const FIELD_LABEL: Record<string, string> = {
   birthDate: 'nascimento', age: 'idade', category: 'categoria', wantedGift: 'presente', description: 'observações', motherName: 'mãe',
 };
 
+/** ID numérico sem zeros à esquerda ("0669" → "669"), como o backend usa nas chaves. */
+function canonicalId(v: unknown) {
+  const s = String(v ?? '').trim();
+  return /^\d+$/.test(s) ? String(parseInt(s, 10)) : s;
+}
+
 /** Distância de edição entre duas palavras (para "KAIKI" × "KAYKY"). */
 function editDistance(a: string, b: string) {
   const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
@@ -562,8 +568,9 @@ export default function BulkChildrenWizardPage() {
     const issues: string[] = [];
     const map: Record<string, File | null> = {};
 
+    // "0669" (planilha) e "669" (nome do arquivo) são o mesmo ID
     const byPublicId = new Map<string, DraftChild>();
-    drafts.forEach((d) => byPublicId.set(String(d.publicId).trim(), d));
+    drafts.forEach((d) => byPublicId.set(canonicalId(d.publicId), d));
 
     const byName = new Map<string, DraftChild>();
     drafts.forEach((d) => byName.set(normalizeName(d.name), d));
@@ -572,9 +579,9 @@ export default function BulkChildrenWizardPage() {
       const base = f.name.replace(/\.[^.]+$/, '');
       const m = base.match(/^(\d{1,12})/);
       if (m) {
-        const pid = m[1];
-        if (byPublicId.has(pid)) {
-          map[pid] = f;
+        const draft = byPublicId.get(canonicalId(m[1]));
+        if (draft) {
+          map[String(draft.publicId)] = f;
           return;
         }
       }
@@ -983,7 +990,10 @@ export default function BulkChildrenWizardPage() {
         qs.set('campaignId', campaignId);
         if (selectedFrameId) qs.set('layoutId', selectedFrameId);
 
-        const target = childIds[pid] ?? pid;
+        // o backend devolve as chaves sem zeros à esquerda ("0669" → "669"). Nunca enviar o número
+        // da planilha no lugar do id: a rota de foto o leria como ID principal, de outra criança.
+        const target = childIds[canonicalId(pid)] ?? childIds[pid];
+        if (!target) throw new Error(`Foto de ${pid}: criança não encontrada no retorno do cadastro.`);
         const r = await fetch(`/api/admin/children/${encodeURIComponent(target)}/photo?${qs.toString()}`, {
           method: 'POST',
           body: fd,
@@ -1029,7 +1039,7 @@ export default function BulkChildrenWizardPage() {
         failed: uploadErrors.length,
         errors: uploadErrors,
         // ID da planilha que já era ID principal de outra criança: virou cadastro novo (informativo)
-        renumbered: (result?.renumbered ?? []).map((r: Renumbered) => ({ ...r, childId: childIds[String(r.publicId)] })),
+        renumbered: (result?.renumbered ?? []).map((r: Renumbered) => ({ ...r, childId: childIds[canonicalId(r.publicId)] })),
       }));
       setStep(6);
     } catch (e: any) {
