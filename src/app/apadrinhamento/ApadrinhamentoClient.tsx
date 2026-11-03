@@ -85,14 +85,18 @@ async function safeErrMsg(res: Response) {
   } catch { return res.statusText; }
 }
 
-function calcularIdade(birthDate?: string | Date | null): number {
-  if (!birthDate) return 0;
-  const d = new Date(birthDate);
-  if (isNaN(d.getTime())) return 0;
-  const hoje = new Date();
-  let idade = hoje.getFullYear() - d.getFullYear();
-  if (hoje.getMonth() < d.getMonth() || (hoje.getMonth() === d.getMonth() && hoje.getDate() < d.getDate())) idade--;
-  return idade;
+/** Idade pela data de nascimento (guardada em UTC); sem data, a idade informada no cadastro. */
+function idadeDe(child: { birthDate?: string | Date | null; age?: number | null }): number | undefined {
+  if (child.birthDate) {
+    const d = new Date(child.birthDate);
+    if (!isNaN(d.getTime())) {
+      const hoje = new Date();
+      let idade = hoje.getUTCFullYear() - d.getUTCFullYear();
+      if (hoje.getUTCMonth() < d.getUTCMonth() || (hoje.getUTCMonth() === d.getUTCMonth() && hoje.getUTCDate() < d.getUTCDate())) idade--;
+      return idade;
+    }
+  }
+  return typeof child.age === 'number' ? child.age : undefined;
 }
 function parseFaixa(fo?: string): { minAge?: number; maxAge?: number } {
   switch (fo) {
@@ -106,6 +110,17 @@ function parseFaixa(fo?: string): { minAge?: number; maxAge?: number } {
 }
 
 type CategoryItem = { category: string; count?: number };
+type LocationOption = { id: string; name: string; count?: number };
+
+// valor do filtro para as crianças sem categoria
+const NO_CATEGORY = '__none__';
+
+/** Mantém na lista a opção escolhida mesmo sem crianças no recorte atual, para o select não ficar em branco. */
+function keepSelected(list: LocationOption[], prev: LocationOption[], selectedId: string) {
+  if (!selectedId || list.some((o) => o.id === selectedId)) return list;
+  const old = prev.find((o) => o.id === selectedId);
+  return old ? [...list, { ...old, count: 0 }] : list;
+}
 
 export default function ApadrinhamentoClient({ initialScanFs }: Props) {
   const { data: session, status } = useSession({
@@ -139,7 +154,11 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
 
   const [stats, setStats] = useState({ total: 0, active: 0, pending: 0, in_progress: 0, available: 0, sponsorshipRate: 0 });
 
+  const [total, setTotal] = useState<number | null>(null);
+
   const [searchTerm, setSearchTerm] = useState('');
+  // a busca só vai ao servidor depois de uma pausa na digitação
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   // filtros por ID
   const [filtros, setFiltros] = useState({
     cidadeId: '',
@@ -154,11 +173,12 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // opções do backend
-  const [citiesOpt, setCitiesOpt] = useState<City[]>([]);
-  const [communitiesOpt, setCommunitiesOpt] = useState<Community[]>([]);
-  const [schoolsOpt, setSchoolsOpt] = useState<SchoolObj[]>([]);
+  const [citiesOpt, setCitiesOpt] = useState<LocationOption[]>([]);
+  const [communitiesOpt, setCommunitiesOpt] = useState<LocationOption[]>([]);
+  const [schoolsOpt, setSchoolsOpt] = useState<LocationOption[]>([]);
   const [categoriesOpt, setCategoriesOpt] = useState<CategoryItem[]>([]);
-  const [loadingOptions, setLoadingOptions] = useState({ cities: false, communities: false, schools: false, categories: false });
+  const [noCategoryCount, setNoCategoryCount] = useState(0);
+  const [loadingOptions, setLoadingOptions] = useState(false);
 
   // sentinela
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -179,7 +199,10 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         const all = allRes.ok ? await allRes.json() : [];
         const byId = new Map<string, Campaign>();
         [...active, ...all].forEach((c: Campaign) => byId.set(c.id, c));
-        const unique = Array.from(byId.values()).sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+        // a campanha ativa vem primeiro (é a que abre selecionada)
+        const unique = Array.from(byId.values()).sort(
+          (a, b) => Number(b.status === 'ACTIVE') - Number(a.status === 'ACTIVE') || (b.year ?? 0) - (a.year ?? 0),
+        );
         setCampaigns(unique);
         setCampaignId(unique[0]?.id || '');
       } catch (e) {
@@ -198,13 +221,15 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         const res = await fetch(url.toString(), { cache: 'no-store', credentials: 'include', headers: { accept: 'application/json' } });
         if (res.ok) {
           const j = await res.json();
+          // "apadrinhadas" = todas que já têm padrinho (pendentes e em andamento inclusive): é o filtro "Indisponíveis"
+          const taken = (j.active ?? 0) + (j.in_progress ?? 0) + (j.pending ?? 0);
           setStats({
             total: j.total ?? 0,
-            active: j.active ?? 0,
+            active: taken,
             pending: j.pending ?? 0,
             in_progress: j.in_progress ?? 0,
-            available: j.available ?? Math.max(0, (j.total ?? 0) - ((j.active ?? 0) + (j.pending ?? 0))),
-            sponsorshipRate: j.sponsorshipRate ?? (j.total ? Math.round(((j.active ?? 0) / j.total) * 100) : 0),
+            available: j.available ?? Math.max(0, (j.total ?? 0) - taken),
+            sponsorshipRate: j.sponsorshipRate ?? (j.total ? Math.round((taken / j.total) * 100) : 0),
           });
         } else {
           setStats({ total: 0, active: 0, pending: 0, in_progress: 0, available: 0, sponsorshipRate: 0 });
@@ -215,116 +240,52 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     })();
   }, [campaignId]);
 
-  // ===== opções =====
-  const fetchCities = useCallback(async () => {
-    if (!api) return;
-    setLoadingOptions(prev => ({ ...prev, cities: true }));
-    try {
-      const res = await fetch(`${api}/cities`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(await safeErrMsg(res));
-      const data = await res.json();
-      setCitiesOpt(Array.isArray(data) ? data : (data?.items ?? []));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Falha ao carregar cidades.');
-      setCitiesOpt([]);
-    } finally {
-      setLoadingOptions(prev => ({ ...prev, cities: false }));
-    }
-  }, [api]);
-
-  const fetchCommunities = useCallback(async (cityId?: string) => {
-    if (!api) return;
-    setLoadingOptions(prev => ({ ...prev, communities: true }));
-    try {
-      const url = new URL(`${api}/communities`);
-      if (cityId) url.searchParams.set('cityId', cityId);
-      const res = await fetch(url.toString(), { cache: 'no-store' });
-      if (!res.ok) throw new Error(await safeErrMsg(res));
-      const data = await res.json();
-      setCommunitiesOpt(Array.isArray(data) ? data : (data?.items ?? []));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Falha ao carregar comunidades.');
-      setCommunitiesOpt([]);
-    } finally {
-      setLoadingOptions(prev => ({ ...prev, communities: false }));
-    }
-  }, [api]);
-
-  const fetchSchools = useCallback(async (cityId?: string, communityId?: string) => {
-    if (!api) return;
-    setLoadingOptions(prev => ({ ...prev, schools: true }));
-    try {
-      const url = new URL(`${api}/schools`);
-      if (cityId) url.searchParams.set('cityId', cityId);
-      if (communityId) url.searchParams.set('communityId', communityId);
-      const res = await fetch(url.toString(), { cache: 'no-store' });
-      if (!res.ok) throw new Error(await safeErrMsg(res));
-      const data = await res.json();
-      setSchoolsOpt(Array.isArray(data) ? data : (data?.items ?? []));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Falha ao carregar escolas.');
-      setSchoolsOpt([]);
-    } finally {
-      setLoadingOptions(prev => ({ ...prev, schools: false }));
-    }
-  }, [api]);
-
-  // >>> categorias (via /children/categories)
-  const fetchCategories = useCallback(async () => {
-    if (!api) return;
-    setLoadingOptions(prev => ({ ...prev, categories: true }));
-    try {
-      const url = new URL(`${api}/children/categories`);
-      if (campaignId) url.searchParams.set('campaignId', campaignId);
-
-      const q = searchTerm.trim();
-      if (q) url.searchParams.set('q', q);
-      if (filtros.cidadeId) url.searchParams.set('cityId', filtros.cidadeId);
-      if (filtros.comunidadeId) url.searchParams.set('communityId', filtros.comunidadeId);
-      if (filtros.escolaId) url.searchParams.set('schoolId', filtros.escolaId);
-      if (filtros.status === 'disponivel') url.searchParams.set('status', 'available');
-      if (filtros.status === 'apadrinhado') url.searchParams.set('status', 'assigned');
-      const { minAge, maxAge } = parseFaixa(filtros.idade);
-      if (typeof minAge === 'number') url.searchParams.set('minAge', String(minAge));
-      if (typeof maxAge === 'number') url.searchParams.set('maxAge', String(maxAge));
-
-      const res = await fetch(url.toString(), { cache: 'no-store' });
-      if (!res.ok) throw new Error(await safeErrMsg(res));
-      const data = await res.json();
-
-      const items = Array.isArray(data)
-        ? data.map((c: any) => (typeof c === 'string' ? { category: c } : c))
-        : (data?.items ?? []);
-      setCategoriesOpt(items.filter((it: any) => !!it?.category));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Falha ao carregar categorias.');
-      setCategoriesOpt([]);
-    } finally {
-      setLoadingOptions(prev => ({ ...prev, categories: false }));
-    }
-  }, [api, campaignId, searchTerm, filtros.cidadeId, filtros.comunidadeId, filtros.escolaId, filtros.status, filtros.idade]);
-
-  // carregar cidades ao escolher campanha
+  // ===== busca: espera uma pausa na digitação =====
   useEffect(() => {
-    if (!campaignId) return;
-    fetchCities();
-  }, [campaignId, fetchCities]);
+    const t = window.setTimeout(() => setDebouncedSearch(searchTerm.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [searchTerm]);
 
-  // quando muda cidade
+  // ===== opções dos filtros: só o que tem criança nesta campanha e nos outros filtros =====
   useEffect(() => {
-    const cid = filtros.cidadeId || undefined;
-    setFiltros(prev => ({ ...prev, comunidadeId: '', escolaId: '' }));
-    fetchCommunities(cid);
-    fetchSchools(cid, undefined);
-  }, [filtros.cidadeId, fetchCommunities, fetchSchools]);
+    if (!api || !campaignId) return;
+    const ac = new AbortController();
+    setLoadingOptions(true);
 
-  // quando muda comunidade
-  useEffect(() => {
-    const cid = filtros.cidadeId || undefined;
-    const coid = filtros.comunidadeId || undefined;
-    setFiltros(prev => ({ ...prev, escolaId: '' }));
-    fetchSchools(cid, coid);
-  }, [filtros.comunidadeId, fetchSchools, filtros.cidadeId]);
+    const url = new URL(`${api}/children/filter-options`);
+    url.searchParams.set('campaignId', campaignId);
+    if (debouncedSearch) url.searchParams.set('q', debouncedSearch);
+    if (filtros.cidadeId) url.searchParams.set('cityId', filtros.cidadeId);
+    if (filtros.comunidadeId) url.searchParams.set('communityId', filtros.comunidadeId);
+    if (filtros.categoria) url.searchParams.set('category', filtros.categoria);
+    if (filtros.status === 'disponivel') url.searchParams.set('status', 'available');
+    if (filtros.status === 'apadrinhado') url.searchParams.set('status', 'assigned');
+    const { minAge, maxAge } = parseFaixa(filtros.idade);
+    if (typeof minAge === 'number') url.searchParams.set('minAge', String(minAge));
+    if (typeof maxAge === 'number') url.searchParams.set('maxAge', String(maxAge));
+
+    fetch(url.toString(), { cache: 'no-store', signal: ac.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await safeErrMsg(res));
+        return res.json();
+      })
+      .then((data) => {
+        setCitiesOpt((prev) => keepSelected(data?.cities ?? [], prev, filtros.cidadeId));
+        setCommunitiesOpt((prev) => keepSelected(data?.communities ?? [], prev, filtros.comunidadeId));
+        setSchoolsOpt((prev) => keepSelected(data?.schools ?? [], prev, filtros.escolaId));
+        const cats: CategoryItem[] = data?.categories ?? [];
+        const missing = filtros.categoria && filtros.categoria !== NO_CATEGORY && !cats.some((c) => c.category === filtros.categoria);
+        setCategoriesOpt(missing ? [...cats, { category: filtros.categoria, count: 0 }] : cats);
+        setNoCategoryCount(data?.noCategory ?? 0);
+        setLoadingOptions(false);
+      })
+      .catch((e) => {
+        if (ac.signal.aborted) return;
+        setError(e instanceof Error ? e.message : 'Falha ao carregar as opções dos filtros.');
+        setLoadingOptions(false);
+      });
+    return () => ac.abort();
+  }, [api, campaignId, debouncedSearch, filtros.cidadeId, filtros.comunidadeId, filtros.escolaId, filtros.categoria, filtros.status, filtros.idade]);
 
   // ===== map do backend
   const mapChildren = useCallback((data: any[], selectedCampaignId: string): Child[] => {
@@ -365,8 +326,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     url.searchParams.set('take', String(take));
     if (scanFs) url.searchParams.set('scan', '1');
 
-    const q = searchTerm.trim();
-    if (q) url.searchParams.set('q', q);
+    if (debouncedSearch) url.searchParams.set('q', debouncedSearch);
 
     if (filtros.cidadeId) url.searchParams.set('cityId', filtros.cidadeId);
     if (filtros.comunidadeId) url.searchParams.set('communityId', filtros.comunidadeId);
@@ -382,24 +342,28 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     if (typeof maxAge === 'number') url.searchParams.set('maxAge', String(maxAge));
 
     return url;
-  }, [api, campaignId, scanFs, filtros, searchTerm]);
+  }, [api, campaignId, scanFs, filtros, debouncedSearch]);
 
   // ===== fetch página =====
+  // só a resposta do pedido mais recente vale: uma busca antiga que chegue depois é descartada
+  const requestRef = useRef(0);
   const fetchPage = useCallback(async (opts?: { reset?: boolean; skip?: number }) => {
     if (!campaignId || !api) return;
 
     const reset = !!opts?.reset;
     const take = PAGE_SIZE;
     const skip = typeof opts?.skip === 'number' ? opts.skip : nextSkipRef.current;
+    const request = ++requestRef.current;
 
     const url = buildUrl(skip, take);
 
     try {
-      if (reset) { setLoading(true); setError(null); } else { setLoadingMore(true); }
+      if (reset) { setLoading(true); setLoadingMore(false); setError(null); } else { setLoadingMore(true); }
 
       const res = await fetch(url.toString(), { cache: 'no-store' });
       if (!res.ok) throw new Error(await safeErrMsg(res));
       const json = await res.json();
+      if (request !== requestRef.current) return;
 
       const itemsRaw: any[] = Array.isArray(json) ? json : (json?.items ?? []);
       const mapped = mapChildren(itemsRaw, campaignId);
@@ -407,11 +371,11 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       if (reset) {
         setChildren(mapped);
         nextSkipRef.current = mapped.length;
-        setSelectedIds(new Set());
       } else {
         setChildren(prev => [...prev, ...mapped]);
         nextSkipRef.current = skip + mapped.length;
       }
+      setTotal(typeof json?.total === 'number' ? json.total : null);
 
       const serverHasMore =
         !Array.isArray(json) && typeof json?.hasMore === 'boolean'
@@ -420,41 +384,20 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
 
       setHasMore(serverHasMore);
     } catch (e) {
+      if (request !== requestRef.current) return;
       setError(e instanceof Error ? e.message : 'Falha ao carregar crianças.');
     } finally {
-      if (reset) setLoading(false); else setLoadingMore(false);
+      if (request === requestRef.current) { setLoading(false); setLoadingMore(false); }
     }
   }, [api, campaignId, buildUrl, mapChildren]);
 
-  // ===== reset ao trocar campanha/scan =====
+  // ===== recarrega do início quando muda campanha, filtro ou busca =====
+  // (fetchPage muda junto com os filtros, por meio de buildUrl)
   useEffect(() => {
     if (!campaignId) return;
-    setChildren([]); setHasMore(true); nextSkipRef.current = 0;
+    setHasMore(true); nextSkipRef.current = 0;
     fetchPage({ reset: true, skip: 0 });
   }, [campaignId, scanFs, fetchPage]);
-
-  // ===== debounce busca/filtros =====
-  const debounceTimer = useRef<number | null>(null);
-  useEffect(() => {
-    if (!campaignId) return;
-    if (debounceTimer.current) window.clearTimeout(debounceTimer.current);
-    debounceTimer.current = window.setTimeout(() => {
-      setChildren([]); setHasMore(true); nextSkipRef.current = 0;
-      fetchPage({ reset: true, skip: 0 });
-    }, 300);
-    return () => { if (debounceTimer.current) window.clearTimeout(debounceTimer.current); };
-  }, [campaignId, filtros, searchTerm, fetchPage]);
-
-  // >>> debounce para categorias
-  const debounceCats = useRef<number | null>(null);
-  useEffect(() => {
-    if (!campaignId) return;
-    if (debounceCats.current) window.clearTimeout(debounceCats.current);
-    debounceCats.current = window.setTimeout(() => {
-      fetchCategories();
-    }, 250);
-    return () => { if (debounceCats.current) window.clearTimeout(debounceCats.current); };
-  }, [campaignId, searchTerm, filtros.cidadeId, filtros.comunidadeId, filtros.escolaId, filtros.status, filtros.idade, fetchCategories]);
 
   // ===== infinite scroll =====
   useEffect(() => {
@@ -504,9 +447,9 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     setSelectedIds(new Set());
   }
 
-  function selectAllPageAvailable() {
+  function selectAllShownAvailable() {
     const next = new Set(selectedIds);
-    childrenFiltradas.forEach(ch => {
+    children.forEach(ch => {
       if (!isUnavailable(ch.sponsorshipStatus)) next.add(ch.id);
     });
     setSelectedIds(next);
@@ -529,36 +472,22 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     }
   }
 
-  // ===== filtros locais (reforço) =====
-  const childrenFiltradas = useMemo(() => {
-    return children.filter((child) => {
-      const matchesSearch = child.name?.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesCategoria = !filtros.categoria || child.category === filtros.categoria;
-
-      const isIndisp = isUnavailable(child.sponsorshipStatus);
-      const matchesStatus =
-        !filtros.status ||
-        (filtros.status === 'disponivel' && !isIndisp) ||
-        (filtros.status === 'apadrinhado' && isIndisp);
-
-      let matchesIdade = true;
-      const idadeBase = (child.age ?? calcularIdade(child.birthDate)) || 0;
-      switch (filtros.idade) {
-        case '0-3 anos':   matchesIdade = idadeBase <= 3; break;
-        case '4-6 anos':   matchesIdade = idadeBase >= 4 && idadeBase <= 6; break;
-        case '7-9 anos':   matchesIdade = idadeBase >= 7 && idadeBase <= 9; break;
-        case '10-12 anos': matchesIdade = idadeBase >= 10 && idadeBase <= 12; break;
-        case '13+ anos':   matchesIdade = idadeBase >= 13; break;
-      }
-
-      return matchesSearch && matchesCategoria && matchesStatus && matchesIdade;
-    });
-  }, [children, searchTerm, filtros]);
-
   function limparFiltros() {
     setFiltros({ cidadeId: '', comunidadeId: '', escolaId: '', categoria: '', idade: '', status: 'disponivel' });
     setSearchTerm('');
   }
+
+  function trocarCampanha(id: string) {
+    setCampaignId(id);
+    // a seleção e o local são da campanha anterior
+    setSelectedIds(new Set());
+    setFiltros((prev) => ({ ...prev, cidadeId: '', comunidadeId: '', escolaId: '', categoria: '' }));
+  }
+
+  const filtrosAtivos =
+    !!searchTerm.trim() || !!filtros.cidadeId || !!filtros.comunidadeId || !!filtros.escolaId ||
+    !!filtros.categoria || !!filtros.idade || filtros.status !== 'disponivel';
+  const rotulo = (name: string, count?: number) => (typeof count === 'number' ? `${name} (${count})` : name);
 
   const selectedCount = selectedIds.size;
 
@@ -581,7 +510,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             <label className="text-sm text-gray-600">Campanha:</label>
             <select
               value={campaignId}
-              onChange={(e) => setCampaignId(e.target.value)}
+              onChange={(e) => trocarCampanha(e.target.value)}
               className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
             >
               {campaigns.map((c) => (
@@ -616,102 +545,114 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             <Filter className="h-5 w-5 text-gray-600 mr-2" />
             <h2 className="text-lg font-bold text-gray-800">Filtros e Busca</h2>
           </div>
-          <button onClick={limparFiltros} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800" title="Limpar filtros">
-            <X className="w-4 h-4" /> Limpar filtros
-          </button>
+          {filtrosAtivos && (
+            <button onClick={limparFiltros} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800" title="Limpar filtros">
+              <X className="w-4 h-4" /> Limpar filtros
+            </button>
+          )}
+        </div>
+
+        <div className="relative mb-3">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
+          <input
+            type="text"
+            placeholder="Buscar por nome, ID ou presente..."
+            aria-label="Buscar por nome, ID ou presente"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+          />
+          {searchTerm && (
+            <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" aria-label="Limpar busca">
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
-          <div className="sm:col-span-2 xl:col-span-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
-              <input
-                type="text"
-                placeholder="Buscar por nome..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-              />
-            </div>
-          </div>
-
-          {/* Cidade (IDs) */}
           <select
+            aria-label="Cidade"
             value={filtros.cidadeId}
             onChange={(e) => setFiltros({ ...filtros, cidadeId: e.target.value, comunidadeId: '', escolaId: '' })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
+            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
           >
-            <option value="">{loadingOptions.cities ? 'Carregando…' : 'Todas as cidades'}</option>
+            <option value="">Todas as cidades</option>
             {citiesOpt.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>{rotulo(c.name, c.count)}</option>
             ))}
           </select>
 
-          {/* Comunidade (IDs) */}
           <select
+            aria-label="Comunidade"
             value={filtros.comunidadeId}
             onChange={(e) => setFiltros({ ...filtros, comunidadeId: e.target.value, escolaId: '' })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
-            disabled={!filtros.cidadeId && communitiesOpt.length === 0}
+            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
           >
-            <option value="">{loadingOptions.communities ? 'Carregando…' : 'Todas as comunidades'}</option>
+            <option value="">Todas as comunidades</option>
             {communitiesOpt.map((co) => (
-              <option key={co.id} value={co.id}>{co.name}</option>
+              <option key={co.id} value={co.id}>{rotulo(co.name, co.count)}</option>
             ))}
           </select>
 
-          {/* Escola (IDs) */}
           <select
+            aria-label="Escola"
             value={filtros.escolaId}
             onChange={(e) => setFiltros({ ...filtros, escolaId: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
-            disabled={schoolsOpt.length === 0 && !filtros.cidadeId && !filtros.comunidadeId}
+            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
           >
-            <option value="">{loadingOptions.schools ? 'Carregando…' : 'Todas as escolas'}</option>
+            <option value="">Todas as escolas</option>
             {schoolsOpt.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
+              <option key={s.id} value={s.id}>{rotulo(s.name, s.count)}</option>
             ))}
           </select>
 
-          {/* >>> Categoria (via /children/categories) */}
           <select
+            aria-label="Categoria"
             value={filtros.categoria}
             onChange={(e) => setFiltros({ ...filtros, categoria: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
+            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
           >
-            <option value="">
-              {loadingOptions.categories ? 'Carregando…' : 'Todas as categorias'}
-            </option>
+            <option value="">Todas as categorias</option>
             {categoriesOpt.map((it) => (
-              <option key={it.category} value={it.category}>
-                {it.category}{typeof it.count === 'number' ? ` (${it.count})` : ''}
-              </option>
+              <option key={it.category} value={it.category}>{rotulo(it.category, it.count)}</option>
             ))}
+            {(noCategoryCount > 0 || filtros.categoria === NO_CATEGORY) && (
+              <option value={NO_CATEGORY}>{rotulo('Sem categoria', noCategoryCount)}</option>
+            )}
           </select>
 
           <select
+            aria-label="Situação"
             value={filtros.status}
             onChange={(e) => setFiltros({ ...filtros, status: e.target.value as StatusFiltro })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
+            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
           >
-            <option value="">Todos os status</option>
+            <option value="">Todas as situações</option>
             <option value="disponivel">Disponíveis</option>
             <option value="apadrinhado">Indisponíveis</option>
           </select>
 
           <select
+            aria-label="Idade"
             value={filtros.idade}
             onChange={(e) => setFiltros({ ...filtros, idade: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
+            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
           >
             <option value="">Todas as idades</option>
             {FAIXAS_ETARIAS.map((f) => (<option key={f} value={f}>{f}</option>))}
           </select>
         </div>
+
+        <p className="mt-3 text-sm text-gray-600 flex items-center gap-2" aria-live="polite">
+          {(loading || loadingOptions) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+          {total !== null && !loading && (
+            <span><strong>{total.toLocaleString('pt-BR')}</strong> criança{total === 1 ? ' encontrada' : 's encontradas'}</span>
+          )}
+        </p>
       </div>
 
       {/* Ações em massa acima da grid */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div className="text-sm text-gray-700">
           {selectedCount > 0 ? (
             <span>
@@ -723,12 +664,12 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         </div>
         <div className="flex gap-2">
           <button
-            onClick={selectAllPageAvailable}
+            onClick={selectAllShownAvailable}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
-            title="Seleciona todas desta página que estiverem disponíveis"
+            title="Seleciona as crianças disponíveis já carregadas na lista"
           >
             <CheckSquare className="w-4 h-4" />
-            Selecionar página (disponíveis)
+            Selecionar as exibidas
           </button>
           <button
             onClick={clearSelection}
@@ -741,10 +682,10 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       </div>
 
       {/* Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {childrenFiltradas.map((child) => {
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 transition-opacity ${loading ? 'opacity-50' : ''}`}>
+        {children.map((child) => {
           const nomeCidade = child.city?.name ?? child.cityName ?? '';
-          const idadeCalculada = (child.age ?? calcularIdade(child.birthDate)) || 0;
+          const idadeCalculada = idadeDe(child);
           const unavailable = isUnavailable(child.sponsorshipStatus);
           const checked = selectedIds.has(child.id);
 
@@ -821,12 +762,19 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         </div>
       )}
 
-      {!loading && !loadingMore && !hasMore && childrenFiltradas.length > 0 && (
+      {!loading && !loadingMore && !hasMore && children.length > 0 && (
         <div className="text-center text-gray-500 py-6">Você chegou ao fim da lista. 🎉</div>
       )}
 
-      {!loading && childrenFiltradas.length === 0 && (
-        <div className="text-center text-gray-500 py-10">Nenhuma criança encontrada com os filtros aplicados.</div>
+      {!loading && children.length === 0 && (
+        <div className="text-center text-gray-500 py-10">
+          <p>Nenhuma criança encontrada com os filtros aplicados.</p>
+          {filtrosAtivos && (
+            <button onClick={limparFiltros} className="mt-3 px-4 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm text-gray-700">
+              Limpar filtros
+            </button>
+          )}
+        </div>
       )}
 
       {/* ===== Barra fixa de ação em massa ===== */}

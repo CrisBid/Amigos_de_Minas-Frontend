@@ -23,7 +23,7 @@ export default function ChildCard({
     id: string;
     publicId: number;       // opcional para mostrar no Card / ComposedImage
     nome: string;
-    idade: number;          // já calculada
+    idade?: number;         // já calculada (sem data nem idade no cadastro: não mostra)
     cidade: string;
     comunidade?: string;
     escola?: string;
@@ -43,7 +43,7 @@ export default function ChildCard({
 
   const metaLineParts = [child.cidade, child.comunidade, child.escola].filter(Boolean);
   const metaLine = metaLineParts.join(' • ');
-  const ageText = `${child.idade} anos`;
+  const ageText = typeof child.idade === 'number' ? `${child.idade} ${child.idade === 1 ? 'ano' : 'anos'}` : '';
 
   // se tiver images[] disponível:
   const composeInputs = useMemo(
@@ -111,7 +111,7 @@ export default function ChildCard({
         </div>
 
         {typeof child.idade === 'number' && (
-          <p className="text-sm text-gray-600">Idade: {child.idade} anos</p>
+          <p className="text-sm text-gray-600">Idade: {ageText}</p>
         )}
 
         {metaLine && <p className="text-sm text-gray-600">{metaLine}</p>}
