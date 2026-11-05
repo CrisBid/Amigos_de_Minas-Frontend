@@ -111,6 +111,21 @@ function ImageThumb({ url, label }: { url: string; label: string }) {
     </a>
   );
 }
+/** Mensagem de erro do backend ({ message }) ou o status HTTP */
+async function errorMessage(r: Response) {
+  const txt = await r.text().catch(() => '');
+  try {
+    const j = JSON.parse(txt);
+    const m = j?.message ?? j?.error;
+    if (m) return Array.isArray(m) ? m.join(' ') : String(m);
+  } catch {}
+  return txt.slice(0, 200) || `erro ${r.status}`;
+}
+function countByStatus(items: Sponsorship[]) {
+  const m = new Map<SponsorshipStatus, number>();
+  for (const it of items) m.set(it.status, (m.get(it.status) ?? 0) + 1);
+  return [...m.entries()];
+}
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -329,6 +344,16 @@ export default function AdminSponsorshipsPage() {
   const [destResults, setDestResults] = useState<SponsorLite[]>([]);
   const [destSponsor, setDestSponsor] = useState<SponsorLite | null>(null);
 
+  // ===== Exclusão de todos os apadrinhamentos de um padrinho
+  const [deleteSponsor, setDeleteSponsor] = useState<{
+    name: string;
+    email: string | null;
+    visible: Sponsorship[]; // os que aparecem na aba/filtro atual
+    all: Sponsorship[]; // todos do padrinho na campanha selecionada
+  } | null>(null);
+  const [deleteScope, setDeleteScope] = useState<'visible' | 'all'>('all');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
   // Carrega pontos de coleta
   useEffect(() => {
     (async () => {
@@ -500,8 +525,40 @@ export default function AdminSponsorshipsPage() {
   async function del(id: string) {
     if (!confirm('Excluir apadrinhamento? Esta ação não pode ser desfeita.')) return;
     const r = await fetch(`/api/admin/sponsorships/${id}`, { method: 'DELETE', credentials: 'include' });
-    if (!r.ok) return alert('Falha ao excluir.');
+    if (!r.ok) return alert(`Falha ao excluir: ${await errorMessage(r)}`);
     await load();
+  }
+
+  // ===== Excluir todos de um padrinho
+  function beginDeleteSponsor(group: { sponsorId: string; sponsor: SponsorLite | null; items: Sponsorship[] }) {
+    // todos do padrinho carregados (qualquer status), não só os da aba/filtro atual
+    const all = allRows.filter(r => (r.sponsor?.id ?? '__sem_padrinho__') === group.sponsorId);
+    setDeleteSponsor({
+      name: group.sponsor?.name || 'Sem padrinho',
+      email: group.sponsor?.email ?? null,
+      visible: group.items,
+      all,
+    });
+    setDeleteScope(all.length > group.items.length ? 'visible' : 'all');
+  }
+  async function applyDeleteSponsor() {
+    if (!deleteSponsor) return;
+    const items = deleteScope === 'all' ? deleteSponsor.all : deleteSponsor.visible;
+    if (!items.length) return;
+    setDeleteBusy(true);
+    try {
+      const r = await fetch('/api/admin/sponsorships/bulk-delete', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sponsorshipIds: items.map(it => it.id) }),
+      });
+      if (!r.ok) { alert(`Falha ao excluir: ${await errorMessage(r)}`); return; }
+      setDeleteSponsor(null);
+      await load();
+    } finally {
+      setDeleteBusy(false);
+    }
   }
   function openChildModelFromRow(childObj: any) {
     setChildModelPayload(childObj ?? null);
@@ -1271,6 +1328,15 @@ export default function AdminSponsorshipsPage() {
                         <ArrowRightLeft className="w-4 h-4" /> Transferir padrinho
                       </button>
 
+                      {/* Exclusão de todos do padrinho */}
+                      <button
+                        onClick={() => beginDeleteSponsor(group)}
+                        className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                        title="Excluir todos os apadrinhamentos deste padrinho"
+                      >
+                        <Trash2 className="w-4 h-4" /> Excluir todos
+                      </button>
+
                       {/* Detalhes */}
                       {group.sponsor?.id && (
                         <button
@@ -1708,6 +1774,85 @@ export default function AdminSponsorshipsPage() {
       </Modal>
 
       {/* Modal: Transferir padrinho */}
+      <Modal
+        open={!!deleteSponsor}
+        title="Excluir apadrinhamentos do padrinho"
+        onClose={() => { if (!deleteBusy) setDeleteSponsor(null); }}
+      >
+        {deleteSponsor && (() => {
+          const chosen = deleteScope === 'all' ? deleteSponsor.all : deleteSponsor.visible;
+          const campaignText = campaignId ? 'nesta campanha' : 'em todas as campanhas';
+          const options: { key: 'visible' | 'all'; label: string; items: Sponsorship[] }[] = [
+            { key: 'visible', label: 'Somente os que aparecem no filtro atual', items: deleteSponsor.visible },
+            { key: 'all', label: `Todos do padrinho ${campaignText} (qualquer status)`, items: deleteSponsor.all },
+          ];
+          return (
+            <div className="space-y-4">
+              <div>
+                <div className="text-base font-semibold text-gray-900">{deleteSponsor.name}</div>
+                {deleteSponsor.email && <div className="text-sm text-gray-600">{deleteSponsor.email}</div>}
+              </div>
+
+              <div className="space-y-2">
+                {options
+                  // os dois são iguais: mostra só uma opção
+                  .filter(o => o.key === 'all' || deleteSponsor.visible.length !== deleteSponsor.all.length)
+                  .map(o => (
+                    <label
+                      key={o.key}
+                      className={`block rounded-xl border px-4 py-3 cursor-pointer transition ${
+                        deleteScope === o.key ? 'border-red-400 bg-red-50' : 'border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="delete-scope"
+                          checked={deleteScope === o.key}
+                          onChange={() => setDeleteScope(o.key)}
+                          disabled={deleteBusy}
+                        />
+                        <span className="text-sm font-medium text-gray-900">{o.label}</span>
+                        <span className="ml-auto text-sm font-semibold text-gray-700">{o.items.length}</span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5 pl-6">
+                        {countByStatus(o.items).map(([st, n]) => (
+                          <span key={st} className="inline-flex items-center gap-1">
+                            <StatusBadge status={st} /> <span className="text-xs text-gray-600">{n}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </label>
+                  ))}
+              </div>
+
+              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                {chosen.length} apadrinhamento{chosen.length === 1 ? '' : 's'} será{chosen.length === 1 ? '' : 'ão'} excluído{chosen.length === 1 ? '' : 's'} definitivamente
+                e as crianças deixam de ter este padrinho. Esta ação não pode ser desfeita.
+              </p>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeleteSponsor(null)}
+                  disabled={deleteBusy}
+                  className="px-4 py-2 rounded-xl border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={applyDeleteSponsor}
+                  disabled={deleteBusy || chosen.length === 0}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {deleteBusy ? 'Excluindo…' : `Excluir ${chosen.length}`}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
       <Modal
         open={transferOpen}
         title={`Transferir ${transferIds.length} apadrinhamento${transferIds.length > 1 ? 's' : ''}`}
