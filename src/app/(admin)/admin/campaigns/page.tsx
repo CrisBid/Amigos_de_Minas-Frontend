@@ -265,13 +265,13 @@ export default function AdminCampaignsPage() {
             <table className="w-full">
               <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
                 <tr>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">#</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Campanha</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Slug</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Ano</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Período</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Status</th>
-                  <th className="text-right px-6 py-4 text-sm font-semibold text-gray-900">Ações</th>
+                  <th className="hidden md:table-cell text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">#</th>
+                  <th className="text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">Campanha</th>
+                  <th className="hidden md:table-cell text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">Slug</th>
+                  <th className="text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">Ano</th>
+                  <th className="hidden lg:table-cell text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">Período</th>
+                  <th className="text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">Status</th>
+                  <th className="text-right px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -302,10 +302,10 @@ export default function AdminCampaignsPage() {
                 
                 {rows.map((c) => (
                   <tr key={c.id} className="hover:bg-blue-50/50 transition-colors duration-150">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                    <td className="hidden md:table-cell px-3 sm:px-6 py-3 sm:py-4 text-sm font-medium text-gray-900">
                       {c.publicId ?? '—'}
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4">
                       <div className="flex flex-col">
                         <span className="text-sm font-semibold text-gray-900">{c.name}</span>
                         {c.description && (
@@ -315,32 +315,32 @@ export default function AdminCampaignsPage() {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="hidden md:table-cell px-3 sm:px-6 py-3 sm:py-4">
                       <code className="text-sm bg-gray-100 px-2 py-1 rounded text-gray-800">
                         {c.slug}
                       </code>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600 font-medium">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 text-sm text-gray-600 font-medium">
                       {c.year ?? '—'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
+                    <td className="hidden lg:table-cell px-3 sm:px-6 py-3 sm:py-4 text-sm text-gray-600">
                       <div className="flex flex-col gap-1">
                         <span>{fmtDate(c.startDate)}</span>
                         <span className="text-xs text-gray-400">até</span>
                         <span>{fmtDate(c.endDate)}</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4">
                       <StatusBadge status={c.status} />
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4">
                       <div className="flex items-center justify-end gap-2">
                         <a 
                           href={`/admin/campaigns/${c.id}`}
                           className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg border border-blue-200 transition-colors duration-150"
                         >
                           <Edit className="w-4 h-4" />
-                          Editar
+                          <span className="hidden sm:inline">Editar</span>
                         </a>
                         <StatusMenu current={c.status} onChange={(s) => changeStatus(c.id, s)} />
                         <button 
@@ -348,7 +348,7 @@ export default function AdminCampaignsPage() {
                           className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200 transition-colors duration-150"
                         >
                           <Trash2 className="w-4 h-4" />
-                          Excluir
+                          <span className="hidden sm:inline">Excluir</span>
                         </button>
                       </div>
                     </td>
@@ -466,9 +466,9 @@ function CreateCampaignDialog({ onClose, onCreated }: { onClose: () => void; onC
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-        <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 rounded-t-3xl">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[60]">
+      <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-3xl max-h-[92dvh] overflow-y-auto overscroll-contain">
+        <div className="sticky top-0 bg-white border-b border-gray-100 px-4 sm:px-6 py-3 sm:py-4 sm:rounded-t-3xl">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-2xl font-bold text-gray-900">Nova Campanha</h2>
@@ -483,7 +483,7 @@ function CreateCampaignDialog({ onClose, onCreated }: { onClose: () => void; onC
           </div>
         </div>
 
-        <div className="px-6 py-6 space-y-6">
+        <div className="px-4 sm:px-6 py-5 sm:py-6 space-y-6">
           <div className="grid md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="text-sm font-semibold text-gray-700">Nome da Campanha *</label>
@@ -562,7 +562,7 @@ function CreateCampaignDialog({ onClose, onCreated }: { onClose: () => void; onC
           </div>
         </div>
 
-        <div className="sticky bottom-0 bg-white border-t border-gray-100 px-6 py-4 rounded-b-3xl">
+        <div className="sticky bottom-0 bg-white border-t border-gray-100 px-4 sm:px-6 py-3 sm:py-4 sm:rounded-b-3xl">
           <div className="flex justify-end gap-3">
             <button 
               className="px-6 py-3 text-gray-700 hover:bg-gray-100 rounded-xl font-semibold transition-all duration-200"

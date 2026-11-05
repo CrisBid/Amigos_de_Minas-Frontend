@@ -374,12 +374,15 @@ export default function EditChildPage() {
 
       {/* Barra de salvar: só aparece com alterações nos dados */}
       {dirty && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 backdrop-blur">
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 backdrop-blur pb-[env(safe-area-inset-bottom)]">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
-            <span className="text-sm text-gray-700">Alterações não salvas nos dados da criança</span>
-            <div className="flex gap-2">
+            <span className="text-sm text-gray-700 min-w-0">
+              <span className="sm:hidden">Alterações não salvas</span>
+              <span className="hidden sm:inline">Alterações não salvas nos dados da criança</span>
+            </span>
+            <div className="flex gap-2 shrink-0">
               <button type="button" onClick={discard} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm hover:bg-gray-50">
-                <Undo2 className="w-4 h-4" /> Descartar
+                <Undo2 className="w-4 h-4" /> <span className="hidden sm:inline">Descartar</span>
               </button>
               <button
                 type="button"
@@ -388,7 +391,7 @@ export default function EditChildPage() {
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
               >
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                {saving ? 'Salvando…' : 'Salvar alterações'}
+                {saving ? 'Salvando…' : <><span className="sm:hidden">Salvar</span><span className="hidden sm:inline">Salvar alterações</span></>}
               </button>
             </div>
           </div>

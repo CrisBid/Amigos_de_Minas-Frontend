@@ -4,17 +4,15 @@ import AdminSubNav from "@/components/Admin/AdminSubNav";
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
-      {/* Navigation Container */}
-      <div className="sticky top-0 z-40 backdrop-blur-xl bg-white/80 border-b border-white/20 shadow-sm">
-        {/* Top Navigation */}
+    // margens negativas: anulam o espaçamento do <main> do site, que já tem o seu próprio aqui
+    <div className="-mx-4 sm:-mx-6 -my-6 sm:-my-10 min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+      {/* gruda logo abaixo do cabeçalho do site (h-16), em vez de ficar escondida atrás dele */}
+      <div className="sticky top-16 z-40 backdrop-blur-xl bg-white/85 border-b border-gray-200/60 shadow-sm">
         <AdminTopNav />
-        {/* Sub Navigation */}
         <AdminSubNav />
       </div>
 
-      {/* Main Content */}
-      <main className="relative">
+      <main className="relative pb-8">
         {children}
       </main>
     </div>

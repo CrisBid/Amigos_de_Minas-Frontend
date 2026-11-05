@@ -344,14 +344,15 @@ function Modal({ title, subtitle, icon, onClose, children }: {
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/40" onMouseDown={onClose}>
+    // acima do cabeçalho do site (z-50); no celular abre de baixo, com rolagem própria
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center sm:p-4 bg-black/40" onMouseDown={onClose}>
       <div
         role="dialog"
         aria-modal="true"
-        className="w-full max-w-md rounded-2xl bg-white shadow-xl ring-1 ring-gray-200"
+        className="w-full sm:max-w-md max-h-[92dvh] overflow-y-auto overscroll-contain rounded-t-2xl sm:rounded-2xl bg-white shadow-xl ring-1 ring-gray-200"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start gap-3 p-5 border-b border-gray-100">
+        <div className="sticky top-0 z-10 bg-white flex items-start gap-3 p-5 border-b border-gray-100">
           <div className="p-2 rounded-xl bg-gray-900 text-white">{icon}</div>
           <div className="min-w-0 flex-1">
             <h2 className="font-semibold">{title}</h2>
