@@ -93,7 +93,7 @@ export default function Footer() {
           <div className="border-t border-gray-100 mt-12 pt-8">
             <div className="flex flex-col md:flex-row justify-between items-center">
               <p className="text-gray-500 text-sm mb-4 md:mb-0">
-                &copy; 2024 ONG Amigos de Minas. Feito com ❤️ para transformar vidas.
+                &copy; {new Date().getFullYear()} ONG Amigos de Minas. Feito com ❤️ para transformar vidas.
               </p>
               <div className="flex items-center space-x-6 text-sm text-gray-500">
                 <a href="#" className="hover:text-blue-600 transition-colors">Política de Privacidade</a>
