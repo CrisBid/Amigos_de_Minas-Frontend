@@ -106,7 +106,8 @@ export default function MeusApadrinhamentosPage() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<Sponsorship[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [campaignFilter, setCampaignFilter] = useState<string>(''); // campaignId
+  const [campaignFilter, setCampaignFilter] = useState<string>(''); // campaignId ('' = todas)
+  const [campaignsReady, setCampaignsReady] = useState(false); // lista carregada e campanha ativa escolhida
   const [error, setError] = useState<string | null>(null);
 
   const [exporting, setExporting] = useState(false);
@@ -148,19 +149,34 @@ export default function MeusApadrinhamentosPage() {
       return;
     }
 
+    // campanhas uma vez só; a ativa já vem escolhida no filtro
+    if (!campaignsReady) {
+      (async () => {
+        try {
+          const [cRes, allRes] = await Promise.all([
+            fetch(`${api}/campaigns?status=ACTIVE`, { cache: 'no-store' }),
+            fetch(`${api}/campaigns`, { cache: 'no-store' }),
+          ]);
+          const cJson = cRes.ok ? await cRes.json() : [];
+          const allJson = allRes.ok ? await allRes.json() : [];
+          const merged: Campaign[] = uniqBy([...(cJson ?? []), ...(allJson ?? [])], 'id')
+            .sort((a: any, b: any) => Number(b.status === 'ACTIVE') - Number(a.status === 'ACTIVE') || (b.year ?? 0) - (a.year ?? 0));
+          setCampaigns(merged);
+          const active = merged.find((c) => c.status === 'ACTIVE');
+          if (active) setCampaignFilter(active.id);
+        } catch {
+          // sem a lista de campanhas: mostra todas
+        } finally {
+          setCampaignsReady(true);
+        }
+      })();
+      return;
+    }
+
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        // campanhas ativas e todas (para filtrar por campanha)
-        const cRes = await fetch(`${api}/campaigns?status=ACTIVE`, { cache: 'no-store' });
-        const allRes = await fetch(`${api}/campaigns`, { cache: 'no-store' });
-        const cJson = cRes.ok ? await cRes.json() : [];
-        const allJson = allRes.ok ? await allRes.json() : [];
-        const merged = uniqBy([...(cJson ?? []), ...(allJson ?? [])], 'id')
-          .sort((a: any, b: any) => (b.year ?? 0) - (a.year ?? 0));
-        setCampaigns(merged);
-
         // apadrinhamentos do usuário (com filtro opcional)
         const url = new URL(`${api}/sponsorships/me`);
         if (campaignFilter) url.searchParams.set('campaignId', campaignFilter);
@@ -177,7 +193,7 @@ export default function MeusApadrinhamentosPage() {
         setLoading(false);
       }
     })();
-  }, [status, api, provider, accessToken, campaignFilter, router]);
+  }, [status, api, provider, accessToken, campaignFilter, campaignsReady, router]);
 
   const handleExportPdf = async () => {
     if (loading || shown.length === 0) return;
@@ -367,9 +383,17 @@ export default function MeusApadrinhamentosPage() {
           <p className="text-gray-500 text-sm mt-1 max-w-md mx-auto">
             Escolha uma criança, leve o presente que ela pediu até um ponto de coleta e acompanhe a entrega por aqui.
           </p>
-          <Link href="/apadrinhamento" className="mt-5 inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-green-500 text-white font-semibold shadow-sm hover:shadow-md">
-            <Heart className="w-4 h-4" /> Apadrinhar uma criança
-          </Link>
+          <div className="mt-5 flex flex-col sm:flex-row items-center justify-center gap-2">
+            <Link href="/apadrinhamento" className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-green-500 text-white font-semibold shadow-sm hover:shadow-md">
+              <Heart className="w-4 h-4" /> Apadrinhar uma criança
+            </Link>
+            {/* a campanha ativa vem escolhida; apadrinhamentos de anos anteriores ficam em "todas" */}
+            {campaignFilter && (
+              <button onClick={() => setCampaignFilter('')} className="px-5 py-3 rounded-xl border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                Ver todas as campanhas
+              </button>
+            )}
+          </div>
         </div>
       ) : shown.length === 0 ? (
         <div className="bg-white border border-gray-100 rounded-2xl p-8 text-center text-gray-500">

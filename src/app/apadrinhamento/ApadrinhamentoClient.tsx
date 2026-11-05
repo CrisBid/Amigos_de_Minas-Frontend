@@ -328,6 +328,8 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     url.searchParams.set('campaignId', campaignId);
     url.searchParams.set('skip', String(skip));
     url.searchParams.set('take', String(take));
+    // crianças com foto primeiro; as sem foto vêm depois
+    url.searchParams.set('sort', 'photo');
     if (scanFs) url.searchParams.set('scan', '1');
 
     if (debouncedSearch) url.searchParams.set('q', debouncedSearch);
