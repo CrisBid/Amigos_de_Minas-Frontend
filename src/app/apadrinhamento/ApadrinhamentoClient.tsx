@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { Filter, Search, Loader2, AlertCircle, X, CheckSquare, Square } from 'lucide-react';
+import { Filter, Search, Loader2, AlertCircle, X, CheckSquare, Square, SlidersHorizontal, Heart, Sparkles, ClipboardCheck, Gift, Users } from 'lucide-react';
 import Stats from '@/components/Apadrinhamento/Stats';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
 
@@ -114,6 +114,8 @@ type LocationOption = { id: string; name: string; count?: number };
 
 // valor do filtro para as crianças sem categoria
 const NO_CATEGORY = '__none__';
+// acima disso, "selecionar todas" pede confirmação
+const BULK_CONFIRM = 50;
 
 /** Mantém na lista a opção escolhida mesmo sem crianças no recorte atual, para o select não ficar em branco. */
 function keepSelected(list: LocationOption[], prev: LocationOption[], selectedId: string) {
@@ -171,6 +173,8 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
 
   // >>> seleção múltipla
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // celular: filtros de local/categoria/idade ficam recolhidos
+  const [showFilters, setShowFilters] = useState(false);
 
   // opções do backend
   const [citiesOpt, setCitiesOpt] = useState<LocationOption[]>([]);
@@ -344,6 +348,54 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     return url;
   }, [api, campaignId, scanFs, filtros, debouncedSearch]);
 
+  // ===== todas as disponíveis com os filtros atuais (sem depender do que já foi carregado) =====
+  // mesmos filtros da lista, mas sempre só as disponíveis
+  const buildAvailableUrl = useCallback((skip: number, take: number) => {
+    const url = buildUrl(skip, take);
+    url.searchParams.set('status', 'available');
+    url.searchParams.delete('scan');
+    return url;
+  }, [buildUrl]);
+
+  const [availableTotal, setAvailableTotal] = useState<number | null>(null);
+  useEffect(() => {
+    if (!api || !campaignId) return;
+    const ac = new AbortController();
+    setAvailableTotal(null);
+    fetch(buildAvailableUrl(0, 1).toString(), { cache: 'no-store', signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (!ac.signal.aborted) setAvailableTotal(typeof j?.total === 'number' ? j.total : null); })
+      .catch(() => {});
+    return () => ac.abort();
+  }, [api, campaignId, buildAvailableUrl]);
+
+  const [selectingAll, setSelectingAll] = useState<{ done: number; total: number } | null>(null);
+  async function selectAllAvailable() {
+    if (!api || !campaignId || selectingAll) return;
+    const total = availableTotal ?? 0;
+    if (total > BULK_CONFIRM && !confirm(`Selecionar ${total.toLocaleString('pt-BR')} crianças disponíveis${comunidadeNome ? ` de ${comunidadeNome}` : ''}?`)) return;
+    setSelectingAll({ done: 0, total });
+    setError(null);
+    try {
+      const ids: string[] = [];
+      for (let skip = 0; ; skip += 100) {
+        const r = await fetch(buildAvailableUrl(skip, 100).toString(), { cache: 'no-store' });
+        if (!r.ok) throw new Error(await safeErrMsg(r));
+        const j = await r.json();
+        const page: any[] = Array.isArray(j) ? j : (j?.items ?? []);
+        // confere de novo: só quem não tem apadrinhamento ativo
+        mapChildren(page, campaignId).forEach((c) => { if (!isUnavailable(c.sponsorshipStatus)) ids.push(c.id); });
+        setSelectingAll({ done: ids.length, total: Math.max(total, ids.length) });
+        if (Array.isArray(j) || !j?.hasMore || page.length === 0) break;
+      }
+      setSelectedIds((prev) => new Set([...prev, ...ids]));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Não foi possível selecionar todas as crianças.');
+    } finally {
+      setSelectingAll(null);
+    }
+  }
+
   // ===== fetch página =====
   // só a resposta do pedido mais recente vale: uma busca antiga que chegue depois é descartada
   const requestRef = useRef(0);
@@ -447,14 +499,6 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
     setSelectedIds(new Set());
   }
 
-  function selectAllShownAvailable() {
-    const next = new Set(selectedIds);
-    children.forEach(ch => {
-      if (!isUnavailable(ch.sponsorshipStatus)) next.add(ch.id);
-    });
-    setSelectedIds(next);
-  }
-
   async function handleBulkSponsor() {
     if (!campaignId) { setError('Selecione uma campanha.'); return; }
     const ids = Array.from(selectedIds);
@@ -490,36 +534,79 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
   const rotulo = (name: string, count?: number) => (typeof count === 'number' ? `${name} (${count})` : name);
 
   const selectedCount = selectedIds.size;
+  const comunidadeNome = communitiesOpt.find((c) => c.id === filtros.comunidadeId)?.name ?? '';
+  // outros recortes além da comunidade (o "selecionar todas" respeita todos eles)
+  const outrosFiltros = !!debouncedSearch || !!filtros.escolaId || !!filtros.categoria || !!filtros.idade;
 
   if (status === 'loading') {
     return (
-      <div className="max-w-6xl mx-auto px-6 py-16 text-gray-600 flex items-center gap-2">
+      <div className="max-w-6xl mx-auto py-16 text-gray-600 flex items-center justify-center gap-2">
         <Loader2 className="w-5 h-5 animate-spin" />
         Carregando sua sessão…
       </div>
     );
   }
 
+  const selectCls = 'w-full p-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 bg-white min-w-0 text-sm';
+  // filtros "escondidos" no botão do celular (busca e situação ficam sempre à mostra)
+  const hiddenFilterCount = [filtros.cidadeId, filtros.comunidadeId, filtros.escolaId, filtros.categoria, filtros.idade].filter(Boolean).length;
+  const SITUACOES: { value: StatusFiltro; label: string }[] = [
+    { value: 'disponivel', label: 'Disponíveis' },
+    { value: 'apadrinhado', label: 'Indisponíveis' },
+    { value: '', label: 'Todas' },
+  ];
+
   return (
-    <div className="max-w-6xl mx-auto px-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Crianças Para Apadrinhamento</h2>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-600">Campanha:</label>
-            <select
-              value={campaignId}
-              onChange={(e) => trocarCampanha(e.target.value)}
-              className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white"
-            >
-              {campaigns.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}{c.year ? ` (${c.year})` : ''}
-                </option>
-              ))}
-            </select>
+    <div className={`max-w-6xl mx-auto ${selectedCount > 0 ? 'pb-28' : ''}`}>
+      {/* Topo: chamada + como funciona */}
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#253243] via-[#2f5d7c] to-emerald-600 text-white shadow-xl mb-5">
+        <div className="absolute -right-16 -top-16 w-64 h-64 rounded-full bg-white/10" aria-hidden />
+        <div className="absolute -left-10 -bottom-20 w-56 h-56 rounded-full bg-white/5" aria-hidden />
+        <div className="relative p-5 sm:p-8">
+          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+            <div className="max-w-2xl">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold">
+                <Sparkles className="w-3.5 h-3.5" /> Campanha de Natal
+              </span>
+              <h1 className="mt-3 text-2xl sm:text-4xl font-bold leading-tight">Faça o Natal de uma criança mais feliz</h1>
+              <p className="mt-2 text-sm sm:text-base text-white/85">
+                Escolha uma ou mais crianças, leve o presente que elas pediram e acompanhe a entrega pelo site. 💚
+              </p>
+            </div>
+            <label className="flex flex-col gap-1 lg:min-w-[16rem]">
+              <span className="text-xs font-semibold text-white/80">Campanha</span>
+              <select
+                value={campaignId}
+                onChange={(e) => trocarCampanha(e.target.value)}
+                className="w-full p-2.5 rounded-xl bg-white text-gray-900 text-sm border-0 focus:ring-2 focus:ring-emerald-300"
+              >
+                {campaigns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{c.year ? ` (${c.year})` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
+
+          <ol className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
+            {[
+              { icon: Heart, title: 'Escolha', text: 'Toque em “Apadrinhar” ou selecione várias crianças.' },
+              { icon: ClipboardCheck, title: 'Confirme', text: 'Diga como vai ajudar: presente no ponto de coleta ou PIX.' },
+              { icon: Gift, title: 'Entregue', text: 'Leve o presente e acompanhe em “Meus apadrinhamentos”.' },
+            ].map(({ icon: Icon, title, text }, i) => (
+              <li key={title} className="flex items-start gap-3 rounded-2xl bg-white/10 backdrop-blur px-3 py-3">
+                <span className="flex items-center justify-center w-9 h-9 rounded-xl bg-white text-[#253243] shrink-0 relative">
+                  <Icon className="w-4 h-4" />
+                  <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-emerald-400 text-[#253243] text-[11px] font-bold flex items-center justify-center">{i + 1}</span>
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold">{title}</span>
+                  <span className="block text-xs text-white/80">{text}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
         </div>
       </div>
 
@@ -532,49 +619,85 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       <Stats stats={stats} />
 
       {error && (
-        <div className="mt-4 mb-2 flex items-center gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3">
-          <AlertCircle className="w-4 h-4" />
-          {error}
+        <div className="mt-4 mb-2 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl p-3">
+          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span className="flex-1">{error}</span>
+          <button onClick={() => setError(null)} aria-label="Fechar aviso" className="p-0.5 rounded hover:bg-red-100"><X className="w-4 h-4" /></button>
         </div>
       )}
 
-      {/* Filtros */}
-      <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6 mb-4">
-        <div className="flex items-center justify-between mb-4">
+      {/* Busca e filtros */}
+      <div className="bg-white rounded-2xl shadow-md sm:shadow-lg p-3 sm:p-6 mb-4 space-y-3">
+        <div className="hidden sm:flex items-center justify-between">
           <div className="flex items-center">
             <Filter className="h-5 w-5 text-gray-600 mr-2" />
-            <h2 className="text-lg font-bold text-gray-800">Filtros e Busca</h2>
+            <h2 className="text-lg font-bold text-gray-800">Filtros e busca</h2>
           </div>
           {filtrosAtivos && (
-            <button onClick={limparFiltros} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800" title="Limpar filtros">
+            <button onClick={limparFiltros} className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800">
               <X className="w-4 h-4" /> Limpar filtros
             </button>
           )}
         </div>
 
-        <div className="relative mb-3">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
-          <input
-            type="text"
-            placeholder="Buscar por nome, ID ou presente..."
-            aria-label="Buscar por nome, ID ou presente"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
-          />
-          {searchTerm && (
-            <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" aria-label="Limpar busca">
-              <X className="h-4 w-4" />
-            </button>
-          )}
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
+            <input
+              type="search"
+              inputMode="search"
+              placeholder="Nome, ID ou presente…"
+              aria-label="Buscar por nome, ID ou presente"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-10 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 text-base sm:text-sm"
+            />
+            {searchTerm && (
+              <button onClick={() => setSearchTerm('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600" aria-label="Limpar busca">
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          {/* celular: abre os demais filtros */}
+          <button
+            onClick={() => setShowFilters((v) => !v)}
+            className={`sm:hidden relative inline-flex items-center gap-1.5 px-3 rounded-xl border text-sm font-medium ${
+              showFilters || hiddenFilterCount ? 'border-green-600 text-green-700 bg-green-50' : 'border-gray-300 text-gray-700 bg-white'
+            }`}
+            aria-expanded={showFilters}
+          >
+            <SlidersHorizontal className="w-4 h-4" /> Filtros
+            {hiddenFilterCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-green-600 text-white text-[11px] font-bold flex items-center justify-center">
+                {hiddenFilterCount}
+              </span>
+            )}
+          </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+        {/* situação: botões grandes para tocar */}
+        <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-gray-100" role="radiogroup" aria-label="Situação">
+          {SITUACOES.map((s) => (
+            <button
+              key={s.value || 'todas'}
+              role="radio"
+              aria-checked={filtros.status === s.value}
+              onClick={() => setFiltros({ ...filtros, status: s.value })}
+              className={`py-2 rounded-lg text-sm font-medium transition ${
+                filtros.status === s.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        <div className={`${showFilters ? 'grid' : 'hidden'} sm:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-3`}>
           <select
             aria-label="Cidade"
             value={filtros.cidadeId}
             onChange={(e) => setFiltros({ ...filtros, cidadeId: e.target.value, comunidadeId: '', escolaId: '' })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
+            className={selectCls}
           >
             <option value="">Todas as cidades</option>
             {citiesOpt.map((c) => (
@@ -586,7 +709,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             aria-label="Comunidade"
             value={filtros.comunidadeId}
             onChange={(e) => setFiltros({ ...filtros, comunidadeId: e.target.value, escolaId: '' })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
+            className={selectCls}
           >
             <option value="">Todas as comunidades</option>
             {communitiesOpt.map((co) => (
@@ -598,7 +721,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             aria-label="Escola"
             value={filtros.escolaId}
             onChange={(e) => setFiltros({ ...filtros, escolaId: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
+            className={selectCls}
           >
             <option value="">Todas as escolas</option>
             {schoolsOpt.map((s) => (
@@ -610,7 +733,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
             aria-label="Categoria"
             value={filtros.categoria}
             onChange={(e) => setFiltros({ ...filtros, categoria: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
+            className={selectCls}
           >
             <option value="">Todas as categorias</option>
             {categoriesOpt.map((it) => (
@@ -622,67 +745,99 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
           </select>
 
           <select
-            aria-label="Situação"
-            value={filtros.status}
-            onChange={(e) => setFiltros({ ...filtros, status: e.target.value as StatusFiltro })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
-          >
-            <option value="">Todas as situações</option>
-            <option value="disponivel">Disponíveis</option>
-            <option value="apadrinhado">Indisponíveis</option>
-          </select>
-
-          <select
             aria-label="Idade"
             value={filtros.idade}
             onChange={(e) => setFiltros({ ...filtros, idade: e.target.value })}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 bg-white min-w-0"
+            className={selectCls}
           >
             <option value="">Todas as idades</option>
             {FAIXAS_ETARIAS.map((f) => (<option key={f} value={f}>{f}</option>))}
           </select>
         </div>
 
-        <p className="mt-3 text-sm text-gray-600 flex items-center gap-2" aria-live="polite">
-          {(loading || loadingOptions) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-          {total !== null && !loading && (
-            <span><strong>{total.toLocaleString('pt-BR')}</strong> criança{total === 1 ? ' encontrada' : 's encontradas'}</span>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-gray-600" aria-live="polite">
+          <span className="flex items-center gap-2">
+            {(loading || loadingOptions) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            {total !== null && !loading && (
+              <span><strong>{total.toLocaleString('pt-BR')}</strong> criança{total === 1 ? ' encontrada' : 's encontradas'}</span>
+            )}
+          </span>
+          {filtrosAtivos && (
+            <button onClick={limparFiltros} className="sm:hidden inline-flex items-center gap-1 text-gray-600 hover:text-gray-800">
+              <X className="w-4 h-4" /> Limpar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Comunidade escolhida: apadrinhar todas as disponíveis dela de uma vez */}
+      {filtros.comunidadeId && comunidadeNome && !!availableTotal && (
+        <div className="mb-4 rounded-2xl border-2 border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <span className="p-2.5 rounded-xl bg-emerald-600 text-white self-start sm:self-auto"><Users className="w-5 h-5" /></span>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-emerald-900">
+              {availableTotal.toLocaleString('pt-BR')} criança{availableTotal === 1 ? '' : 's'} disponíve{availableTotal === 1 ? 'l' : 'is'} em {comunidadeNome}
+            </p>
+            <p className="text-sm text-emerald-800/80">
+              Apadrinhe a comunidade inteira de uma vez{outrosFiltros ? ' (respeitando os outros filtros aplicados)' : ''} — não precisa rolar a lista.
+            </p>
+          </div>
+          <button
+            onClick={async () => { await selectAllAvailable(); }}
+            disabled={!!selectingAll}
+            className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-sm disabled:opacity-60"
+          >
+            {selectingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckSquare className="w-4 h-4" />}
+            {selectingAll ? `Selecionando… ${selectingAll.done}/${selectingAll.total}` : `Selecionar as ${availableTotal.toLocaleString('pt-BR')}`}
+          </button>
+        </div>
+      )}
+
+      {/* Seleção */}
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <p className="text-sm text-gray-600">
+          {selectedCount > 0 ? (
+            <><strong className="text-gray-900">{selectedCount}</strong> selecionada{selectedCount > 1 ? 's' : ''}</>
+          ) : (
+            <span className="hidden sm:inline">Toque em “Selecionar” ou escolha uma comunidade para apadrinhar várias de uma vez.</span>
           )}
         </p>
-      </div>
-
-      {/* Ações em massa acima da grid */}
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-        <div className="text-sm text-gray-700">
-          {selectedCount > 0 ? (
-            <span>
-              <strong>{selectedCount}</strong> selecionada{selectedCount > 1 ? 's' : ''}.
-            </span>
-          ) : (
-            <span>Selecione múltiplas crianças para apadrinhar em lote.</span>
+        <div className="flex gap-2 ml-auto">
+          <button
+            onClick={selectAllAvailable}
+            disabled={!!selectingAll || !availableTotal}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm disabled:opacity-50"
+            title="Seleciona todas as crianças disponíveis com os filtros atuais, mesmo as que ainda não apareceram na lista"
+          >
+            {selectingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckSquare className="w-4 h-4" />}
+            {selectingAll
+              ? `${selectingAll.done}/${selectingAll.total}`
+              : <>Todas as disponíveis{availableTotal ? ` (${availableTotal.toLocaleString('pt-BR')})` : ''}</>}
+          </button>
+          {selectedCount > 0 && (
+            <button
+              onClick={clearSelection}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
+            >
+              <Square className="w-4 h-4" /> Limpar
+            </button>
           )}
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={selectAllShownAvailable}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
-            title="Seleciona as crianças disponíveis já carregadas na lista"
-          >
-            <CheckSquare className="w-4 h-4" />
-            Selecionar as exibidas
-          </button>
-          <button
-            onClick={clearSelection}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
-          >
-            <Square className="w-4 h-4" />
-            Limpar seleção
-          </button>
-        </div>
       </div>
 
-      {/* Grid */}
-      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 transition-opacity ${loading ? 'opacity-50' : ''}`}>
+      {/* Grade: 2 colunas no celular */}
+      <div className={`grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-5 transition-opacity ${loading && children.length ? 'opacity-50' : ''}`}>
+        {loading && children.length === 0 && Array.from({ length: 6 }, (_, i) => (
+          <div key={`sk-${i}`} className="rounded-xl border border-gray-200 bg-white overflow-hidden animate-pulse">
+            <div className="aspect-[9/16] bg-gray-100" />
+            <div className="p-3 space-y-2">
+              <div className="h-4 bg-gray-100 rounded w-3/4" />
+              <div className="h-3 bg-gray-100 rounded w-1/2" />
+              <div className="h-8 bg-gray-100 rounded" />
+            </div>
+          </div>
+        ))}
+
         {children.map((child) => {
           const nomeCidade = child.city?.name ?? child.cityName ?? '';
           const idadeCalculada = idadeDe(child);
@@ -690,64 +845,54 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
           const checked = selectedIds.has(child.id);
 
           return (
-            <div key={String(child.id)} className="relative group">
-              {/* Checkbox/selector sobre o card */}
-              <button
-                type="button"
-                onClick={() => toggleSelect(child.id, child.sponsorshipStatus)}
-                disabled={unavailable}
-                className={[
-                  'absolute z-10 top-2 left-2 inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium shadow',
-                  unavailable
-                    ? 'cursor-not-allowed bg-gray-100 text-gray-400 border border-gray-200'
-                    : checked
-                      ? 'bg-emerald-600 text-white border border-emerald-700'
-                      : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-                ].join(' ')}
-                title={unavailable ? 'Indisponível para seleção' : checked ? 'Remover da seleção' : 'Selecionar'}
-              >
-                {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
-                {unavailable ? 'Indisp.' : checked ? 'Selecionado' : 'Selecionar'}
-              </button>
+            <div key={String(child.id)} className={`relative group rounded-xl transition ${checked ? 'ring-2 ring-emerald-500 ring-offset-2' : ''}`}>
+              {/* seleção sobre a foto */}
+              {!unavailable && (
+                <button
+                  type="button"
+                  onClick={() => toggleSelect(child.id, child.sponsorshipStatus)}
+                  className={[
+                    'absolute z-10 top-2 left-2 inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold shadow-md backdrop-blur',
+                    checked
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-white/90 text-gray-700 hover:bg-white',
+                  ].join(' ')}
+                  aria-pressed={checked}
+                  title={checked ? 'Remover da seleção' : 'Selecionar'}
+                >
+                  {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                  <span className="hidden sm:inline">{checked ? 'Selecionada' : 'Selecionar'}</span>
+                </button>
+              )}
 
-              {/* Highlight quando selecionado */}
-              <div className={checked ? 'ring-2 ring-emerald-500 rounded-2xl transition' : ''}>
-                <ChildCard
-                  child={{
-                    id: child.id,
-                    publicId: child.publicId ?? 0,
-                    nome: child.name,
-                    idade: idadeCalculada,
-                    cidade: nomeCidade,
-                    escola: child.school?.name ?? child.schoolLegacy ?? '',
-                    categoria: child.category ?? '',
-                    presente: child.wantedGift ?? '',
-                    descricao: child.description ?? '',
-                    apadrinhado: unavailable,
-                    foto: child.photoUrl ?? '',
-                    images: child.images,
-                    status: child.sponsorshipStatus,
-                    comunidade: child.community?.name ?? '',
-                  }}
-                  onSponsor={() => handleSponsor(child.id)}
-                  sponsoring={sponsoringId === child.id}
-                />
-              </div>
+              <ChildCard
+                child={{
+                  id: child.id,
+                  publicId: child.publicId ?? 0,
+                  nome: child.name,
+                  idade: idadeCalculada,
+                  cidade: nomeCidade,
+                  escola: child.school?.name ?? child.schoolLegacy ?? '',
+                  categoria: child.category ?? '',
+                  presente: child.wantedGift ?? '',
+                  descricao: child.description ?? '',
+                  apadrinhado: unavailable,
+                  foto: child.photoUrl ?? '',
+                  images: child.images,
+                  status: child.sponsorshipStatus,
+                  comunidade: child.community?.name ?? '',
+                }}
+                onSponsor={() => handleSponsor(child.id)}
+                sponsoring={sponsoringId === child.id}
+              />
             </div>
           );
         })}
       </div>
 
-      {loading && (
-        <div className="flex items-center gap-2 text-gray-600 py-8">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Carregando…
-        </div>
-      )}
-
       <div ref={sentinelRef} className="h-1" />
 
-      {!loading && hasMore && (
+      {!loading && hasMore && children.length > 0 && (
         <div className="flex flex-col items-center py-6">
           {loadingMore ? (
             <div className="flex items-center gap-2 text-gray-600">
@@ -755,7 +900,7 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
               Carregando mais…
             </div>
           ) : (
-            <button className="px-4 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50" onClick={() => fetchPage()}>
+            <button className="px-5 py-2.5 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-sm font-medium" onClick={() => fetchPage()}>
               Carregar mais
             </button>
           )}
@@ -767,7 +912,8 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
       )}
 
       {!loading && children.length === 0 && (
-        <div className="text-center text-gray-500 py-10">
+        <div className="text-center text-gray-500 py-12 px-4 bg-white rounded-2xl border border-gray-100">
+          <Search className="w-8 h-8 mx-auto mb-2 text-gray-300" />
           <p>Nenhuma criança encontrada com os filtros aplicados.</p>
           {filtrosAtivos && (
             <button onClick={limparFiltros} className="mt-3 px-4 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm text-gray-700">
@@ -777,24 +923,27 @@ export default function ApadrinhamentoClient({ initialScanFs }: Props) {
         </div>
       )}
 
-      {/* ===== Barra fixa de ação em massa ===== */}
+      {/* ===== Barra fixa da seleção ===== */}
       {selectedCount > 0 && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] sm:w-auto">
-          <div className="mx-auto flex items-center gap-3 bg-white border border-emerald-200 shadow-xl rounded-2xl px-4 py-3">
-            <span className="text-sm text-gray-800">
-              <strong>{selectedCount}</strong> criança{selectedCount > 1 ? 's' : ''} selecionada{selectedCount > 1 ? 's' : ''}.
-            </span>
-            <button
-              onClick={handleBulkSponsor}
-              className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700"
-            >
-              Concluir apadrinhamento em massa
-            </button>
+        <div className="fixed inset-x-0 bottom-0 z-40 p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <div className="max-w-xl mx-auto flex items-center gap-2 sm:gap-3 bg-white border border-emerald-200 shadow-2xl rounded-2xl p-2 sm:p-3">
             <button
               onClick={clearSelection}
-              className="inline-flex items-center justify-center px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm"
+              className="p-2.5 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50"
+              aria-label="Limpar seleção"
+              title="Limpar seleção"
             >
-              Limpar
+              <X className="w-5 h-5" />
+            </button>
+            <div className="flex-1 min-w-0 text-sm text-gray-800 leading-tight">
+              <strong>{selectedCount}</strong> criança{selectedCount > 1 ? 's' : ''}
+              <span className="block text-xs text-gray-500">selecionada{selectedCount > 1 ? 's' : ''}</span>
+            </div>
+            <button
+              onClick={handleBulkSponsor}
+              className="inline-flex items-center justify-center gap-2 px-4 sm:px-5 py-3 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 active:scale-[0.98] transition"
+            >
+              <Heart className="w-4 h-4" /> Apadrinhar {selectedCount > 1 ? `as ${selectedCount}` : ''}
             </button>
           </div>
         </div>
