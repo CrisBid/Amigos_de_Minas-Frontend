@@ -4,6 +4,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useSession, signOut } from 'next-auth/react'
 import { Heart, LayoutDashboard, LogIn, LogOut, Menu, User, UserPlus, X } from 'lucide-react'
 import logo from '@/assets/logo.jpg'
@@ -32,7 +33,17 @@ export function Header() {
     if (!mobileOpen) return
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = prev }
+    // virou a tela / ficou largo (menu do computador): fecha, senão a rolagem ficaria travada
+    const mq = window.matchMedia('(min-width: 768px)')
+    const onWide = () => { if (mq.matches) setMobileOpen(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMobileOpen(false) }
+    mq.addEventListener('change', onWide)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = prev
+      mq.removeEventListener('change', onWide)
+      window.removeEventListener('keydown', onKey)
+    }
   }, [mobileOpen])
 
   return (
@@ -111,11 +122,17 @@ export function Header() {
         </div>
       </div>
 
-      {/* Celular: painel do menu */}
-      {mobileOpen && (
-        <div className="md:hidden fixed inset-x-0 top-16 bottom-0 z-50">
+      {/* Celular: painel do menu.
+          Vai direto no <body> (portal): o backdrop-blur do header faria o "fixed" ficar preso dentro dele,
+          com altura zero, e o menu não aparecia. */}
+      {mobileOpen && typeof document !== 'undefined' && createPortal(
+        <div className="md:hidden fixed inset-x-0 top-16 bottom-0 z-[60]">
           <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} aria-hidden="true" />
-          <div className="relative bg-white border-b border-gray-200 shadow-lg max-h-full overflow-y-auto">
+          {/* qualquer link tocado fecha o menu (inclusive o da página atual) */}
+          <div
+            className="relative bg-white border-b border-gray-200 shadow-lg max-h-full overflow-y-auto overscroll-contain"
+            onClick={(e) => { if ((e.target as HTMLElement).closest('a')) setMobileOpen(false) }}
+          >
             {session && (
               <div className="flex items-center gap-3 px-4 py-4 border-b border-gray-100">
                 <Avatar name={session.user?.name ?? 'Usuário'} image={session.user?.image ?? undefined} size={40} />
@@ -169,7 +186,8 @@ export function Header() {
               ) : null}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </header>
   )
