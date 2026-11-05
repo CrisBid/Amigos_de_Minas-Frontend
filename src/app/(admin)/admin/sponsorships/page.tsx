@@ -20,6 +20,12 @@ import {
   Square,
   ArrowRightLeft,
   FileText,
+  RefreshCw,
+  XCircle,
+  LayoutList,
+  ChevronDown,
+  ChevronRight,
+  CheckCircle2,
 } from 'lucide-react';
 
 // >>> PDF exporter
@@ -32,6 +38,7 @@ import {
   type SponsorshipStatus,
 } from '@/lib/sponsorship-status';
 import StatusBadge from '@/components/Sponsorship/StatusBadge';
+import { normalizeText } from '@/lib/sheetImport';
 
 /* ===================== */
 /* Tipos                 */
@@ -80,7 +87,11 @@ type Sponsorship = {
   collectionPoint?: CollectionPointLite | null;
 };
 
-type TabKey = Extract<SponsorshipStatus, 'PENDING' | 'IN_PROGRESS' | 'COMPLETED'>;
+const ALL_STATUSES: SponsorshipStatus[] = [
+  'PENDING', 'IN_PROGRESS', 'IN_PURCHASE', 'PACKED', 'BOXED', 'AWAITING_DELIVERY', 'COMPLETED', 'ENDED', 'CANCELLED',
+];
+// "em andamento": aprovado e ainda no caminho até a entrega
+const IN_FLOW: SponsorshipStatus[] = ['IN_PROGRESS', 'IN_PURCHASE', 'PACKED', 'BOXED', 'AWAITING_DELIVERY'];
 
 /* ===================== */
 /* Utils                 */
@@ -269,21 +280,18 @@ async function enrichItemsForSponsor(items: Sponsorship[]): Promise<PdfItem[]> {
 /* ===================== */
 export default function AdminSponsorshipsPage() {
   // filtros
+  const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
+  // busca é feita aqui na tela: espera o usuário parar de digitar
+  useEffect(() => {
+    const t = setTimeout(() => setQ(qInput), 250);
+    return () => clearTimeout(t);
+  }, [qInput]);
   // campanha: começa com a única ativa (se houver) e é lembrada entre as telas do admin
   const { campaigns, campaignId, setCampaignId, ready: campaignReady } = useAdminCampaign();
-  const [activeTab, setActiveTab] = useState<TabKey>('PENDING');
 
-  // NOVO: filtros extras por mais status
-  const EXTRA_STATUS: SponsorshipStatus[] = [
-    'IN_PURCHASE',
-    'PACKED',
-    'BOXED',
-    'AWAITING_DELIVERY',
-    'ENDED',
-    'CANCELLED',
-  ];
-  const [statusFilters, setStatusFilters] = useState<SponsorshipStatus[]>([]); // se não-vazio, sobrepõe aba
+  // status: vazio = todos; vários podem ser marcados juntos
+  const [statusFilters, setStatusFilters] = useState<SponsorshipStatus[]>(['PENDING']);
 
   const METHOD_OPTIONS = ['PIX', 'GIFT'] as const;
   type MethodOption = (typeof METHOD_OPTIONS)[number];
@@ -354,6 +362,26 @@ export default function AdminSponsorshipsPage() {
   const [deleteScope, setDeleteScope] = useState<'visible' | 'all'>('all');
   const [deleteBusy, setDeleteBusy] = useState(false);
 
+  // padrinhos abertos na visão agrupada (sem escolha: abre se forem poucos)
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const [groupsDefaultOpen, setGroupsDefaultOpen] = useState<boolean | null>(null);
+  function setAllGroupsOpen(open: boolean) {
+    setOpenGroups({});
+    setGroupsDefaultOpen(open);
+  }
+
+  // seleção: status em lote
+  const [selStatus, setSelStatus] = useState<SponsorshipStatus>('IN_PROGRESS');
+  const [selBusy, setSelBusy] = useState(false);
+
+  // aviso rápido de sucesso
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   // Carrega pontos de coleta
   useEffect(() => {
     (async () => {
@@ -375,14 +403,13 @@ export default function AdminSponsorshipsPage() {
     })();
   }, []);
 
-  // Busca SEM status; filtro por status é no cliente
+  // Busca tudo da campanha; status, método e texto são filtrados aqui na tela
   async function load() {
     setLoading(true);
     try {
       const url = new URL('/api/admin/sponsorships', window.location.origin);
       url.searchParams.set('pageSize', '100000');
       if (campaignId) url.searchParams.set('campaignId', campaignId);
-      if (q.trim()) url.searchParams.set('q', q.trim());
       const res = await fetch(url.toString(), { cache: 'no-store', credentials: 'include' });
       const ok = res.ok;
       const json = ok ? await res.json() : { items: [] as Sponsorship[] };
@@ -406,7 +433,7 @@ export default function AdminSponsorshipsPage() {
     if (!campaignReady) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, campaignId, campaignReady]);
+  }, [campaignId, campaignReady]);
 
   // ===== Export PDF helper (abre o modal padrão com as opções)
   function openExportModal(items: Sponsorship[], label: string, sponsorId?: string) {
@@ -449,17 +476,13 @@ export default function AdminSponsorshipsPage() {
 
   /* ===== Filtros no cliente ===== */
 
-  // [MODIFICAR] o bloco que calcula "filteredBySelection" e "visibleRows"
-
-  // (1) mantém como está a parte de status (aba x filtros extras)
+  // (1) status (nenhum marcado = todos)
   const filteredBySelection = useMemo(() => {
-    if (statusFilters.length > 0) {
-      return allRows.filter(r => statusFilters.includes(r.status));
-    }
-    return allRows.filter(r => r.status === activeTab);
-  }, [allRows, activeTab, statusFilters]);
+    if (statusFilters.length === 0) return allRows;
+    return allRows.filter(r => statusFilters.includes(r.status));
+  }, [allRows, statusFilters]);
 
-  // (2) [ADICIONAR] aplicar filtro por método sobre o resultado acima
+  // (2) método
   const filteredByMethod = useMemo(() => {
     if (!isFilteringMethods) return filteredBySelection;
     return filteredBySelection.filter(r => {
@@ -469,24 +492,19 @@ export default function AdminSponsorshipsPage() {
     });
   }, [filteredBySelection, isFilteringMethods, methodFilters]);
 
-  // (3) [MODIFICAR] visibleRows para usar "filteredByMethod" como base
+  // (3) texto: criança (nome ou ID), padrinho (nome ou e-mail) e ponto de coleta, sem diferença de acentos
   const visibleRows = useMemo(() => {
-    const qLower = q.trim().toLowerCase();
+    const raw = q.trim();
     const base = filteredByMethod;
-    if (!qLower) return base;
+    if (!raw) return base;
+    const needle = normalizeText(raw);
+    const idNeedle = raw.replace(/^#/, '');
+    const isId = /^\d+$/.test(idNeedle);
     return base.filter((r) => {
-      const childName = r.child?.name?.toLowerCase() ?? '';
-      const sponsorName = r.sponsor?.name?.toLowerCase() ?? '';
-      const sponsorEmail = r.sponsor?.email?.toLowerCase() ?? '';
-      const cpName =
-        (r.collectionPoint?.name ||
-          (r.collectionPointId ? cpMap.get(r.collectionPointId || '')?.name : ''))?.toLowerCase() ?? '';
-      return (
-        childName.includes(qLower) ||
-        sponsorName.includes(qLower) ||
-        sponsorEmail.includes(qLower) ||
-        cpName.includes(qLower)
-      );
+      if (isId && String(r.child?.publicId ?? '') === String(parseInt(idNeedle, 10))) return true;
+      const cpName = r.collectionPoint?.name || (r.collectionPointId ? cpMap.get(r.collectionPointId)?.name : '') || '';
+      const haystack = normalizeText([r.child?.name, r.sponsor?.name, cpName].join(' '));
+      return haystack.includes(needle) || (r.sponsor?.email ?? '').toLowerCase().includes(raw.toLowerCase());
     });
   }, [filteredByMethod, q, cpMap]);
 
@@ -512,15 +530,34 @@ export default function AdminSponsorshipsPage() {
   }
 
   /* ===== Ações ===== */
-  async function changeStatus(id: string, newStatus: SponsorshipStatus) {
-    const r = await fetch(`/api/admin/sponsorships/${id}`, {
+  function patchStatus(id: string, status: SponsorshipStatus) {
+    return fetch(`/api/admin/sponsorships/${id}`, {
       method: 'PATCH',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ status: newStatus }),
+      body: JSON.stringify({ status }),
     });
-    if (!r.ok) { alert('Falha ao alterar status.'); return; }
-    await load();
+  }
+  // atualiza a linha na hora (sem recarregar tudo) e desfaz se o backend recusar
+  async function changeStatus(id: string, newStatus: SponsorshipStatus) {
+    const before = allRows.find(r => r.id === id)?.status;
+    setAllRows(prev => prev.map(r => (r.id === id ? { ...r, status: newStatus } : r)));
+    const r = await patchStatus(id, newStatus);
+    if (!r.ok) {
+      if (before) setAllRows(prev => prev.map(x => (x.id === id ? { ...x, status: before } : x)));
+      alert(`Falha ao alterar status: ${await errorMessage(r)}`);
+      return;
+    }
+    setToast(`Status alterado para "${STATUS_PT[newStatus]}".`);
+  }
+  /** Mesmo status para vários apadrinhamentos (padrinho inteiro ou seleção) */
+  async function changeStatusMany(ids: string[], newStatus: SponsorshipStatus) {
+    const results = await Promise.allSettled(ids.map(id => patchStatus(id, newStatus)));
+    const okIds = new Set(ids.filter((_, i) => results[i].status === 'fulfilled' && (results[i] as PromiseFulfilledResult<Response>).value.ok));
+    setAllRows(prev => prev.map(r => (okIds.has(r.id) ? { ...r, status: newStatus } : r)));
+    const failed = ids.length - okIds.size;
+    if (failed) alert(`Algumas atualizações falharam (${failed}/${ids.length}).`);
+    else setToast(`${okIds.size} apadrinhamento(s) agora em "${STATUS_PT[newStatus]}".`);
   }
   async function del(id: string) {
     if (!confirm('Excluir apadrinhamento? Esta ação não pode ser desfeita.')) return;
@@ -555,6 +592,7 @@ export default function AdminSponsorshipsPage() {
       });
       if (!r.ok) { alert(`Falha ao excluir: ${await errorMessage(r)}`); return; }
       setDeleteSponsor(null);
+      setToast(`${items.length} apadrinhamento(s) excluído(s).`);
       await load();
     } finally {
       setDeleteBusy(false);
@@ -726,6 +764,7 @@ export default function AdminSponsorshipsPage() {
         return;
       }
       setTransferOpen(false);
+      setToast(`${transferIds.length} apadrinhamento(s) transferido(s) para ${destSponsor.name}.`);
       setTransferIds([]);
       setSelectedIds({});
       await load();
@@ -734,248 +773,213 @@ export default function AdminSponsorshipsPage() {
     }
   }
 
-  const selectedCount = useMemo(() => Object.values(selectedIds).filter(Boolean).length, [selectedIds]);
+  const selectedRows = useMemo(() => allRows.filter(r => selectedIds[r.id]), [allRows, selectedIds]);
+  const selectedCount = selectedRows.length;
+
+  async function applySelectionStatus() {
+    if (!selectedCount) return;
+    if (!confirm(`Alterar para "${STATUS_PT[selStatus]}" os ${selectedCount} apadrinhamento(s) selecionado(s)?`)) return;
+    setSelBusy(true);
+    try { await changeStatusMany(selectedRows.map(r => r.id), selStatus); }
+    finally { setSelBusy(false); }
+  }
+  async function deleteSelection() {
+    if (!selectedCount) return;
+    if (!confirm(`Excluir definitivamente os ${selectedCount} apadrinhamento(s) selecionado(s)? Esta ação não pode ser desfeita.`)) return;
+    setSelBusy(true);
+    try {
+      const r = await fetch('/api/admin/sponsorships/bulk-delete', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sponsorshipIds: selectedRows.map(x => x.id) }),
+      });
+      if (!r.ok) { alert(`Falha ao excluir: ${await errorMessage(r)}`); return; }
+      setToast(`${selectedCount} apadrinhamento(s) excluído(s).`);
+      await load();
+    } finally {
+      setSelBusy(false);
+    }
+  }
+  function exportSelection() {
+    const sponsors = new Set(selectedRows.map(r => r.sponsor?.id ?? ''));
+    const only = sponsors.size === 1 ? selectedRows[0]?.sponsor : null;
+    openExportModal(selectedRows, only?.name ? `${only.name} - seleção` : 'Seleção', only?.id);
+  }
 
   /* ===== UI ===== */
-  function Tab({ id, label, count, active, onClick }: { id: TabKey; label: string; count?: number; active: boolean; onClick: () => void }) {
-    return (
-      <button
-        onClick={onClick}
-        className={`px-4 py-2 rounded-xl border text-sm font-medium transition
-          ${active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}
-        `}
-      >
-        {label} {Number.isFinite(count) ? `(${count})` : ''}
-      </button>
-    );
+  function toggleStatusFilter(s: SponsorshipStatus) {
+    setStatusFilters(prev => (prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]));
+  }
+  const sameStatuses = (a: SponsorshipStatus[], b: SponsorshipStatus[]) =>
+    a.length === b.length && a.every(s => b.includes(s));
+  const hasFilters = !!qInput.trim() || isFilteringMethods || !sameStatuses(statusFilters, ['PENDING']);
+  function clearFilters() {
+    setQInput(''); setQ(''); setMethodFilters([]); setStatusFilters(['PENDING']);
   }
 
-  // helpers botão de filtro extra
-  function toggleStatusFilter(s: SponsorshipStatus) {
-    setStatusFilters(prev => {
-      const has = prev.includes(s);
-      if (has) return prev.filter(x => x !== s);
-      return [...prev, s];
-    });
-  }
-  const isFilteringExtras = statusFilters.length > 0;
+  const sponsorsInView = useMemo(() => new Set(visibleRows.map(r => r.sponsor?.id ?? '')).size, [visibleRows]);
+  const sumOf = (list: SponsorshipStatus[]) => list.reduce((acc, s) => acc + (countsAll[s] ?? 0), 0);
+
+  // indicadores da campanha inteira; clicar filtra a lista por aquele grupo de status
+  const statCards: { label: string; statuses: SponsorshipStatus[]; value: number; hint: string; icon: React.ReactNode; tone: string; text: string }[] = [
+    { label: 'Total', statuses: [], value: allRows.length, hint: `${new Set(allRows.map(r => r.sponsor?.id)).size} padrinho(s)`, icon: <Heart className="w-5 h-5 text-blue-600" />, tone: 'bg-blue-100', text: 'text-gray-900' },
+    { label: 'Pendentes', statuses: ['PENDING'], value: countsAll.PENDING, hint: 'aguardando aprovação', icon: <Clock className="w-5 h-5 text-amber-600" />, tone: 'bg-amber-100', text: 'text-amber-700' },
+    { label: 'Em andamento', statuses: IN_FLOW, value: sumOf(IN_FLOW), hint: 'compra, embalagem e entrega', icon: <Users className="w-5 h-5 text-cyan-600" />, tone: 'bg-cyan-100', text: 'text-cyan-700' },
+    { label: 'Concluídos', statuses: ['COMPLETED'], value: countsAll.COMPLETED, hint: 'presente entregue', icon: <UserCheck className="w-5 h-5 text-emerald-600" />, tone: 'bg-emerald-100', text: 'text-emerald-700' },
+    { label: 'Encerrados / cancelados', statuses: ['ENDED', 'CANCELLED'], value: countsAll.ENDED + countsAll.CANCELLED, hint: 'fora do fluxo', icon: <XCircle className="w-5 h-5 text-slate-600" />, tone: 'bg-slate-100', text: 'text-slate-700' },
+  ];
+
+  const chipCls = (active: boolean) =>
+    `inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm transition ${
+      active ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+    }`;
+  const countCls = (active: boolean) => `text-xs px-1.5 rounded-full ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-600'}`;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-28">
         {/* Header */}
-        <div className="mb-8">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">
-                Apadrinhamentos dos Amigos de Minas
-              </h1>
-              <p className="text-gray-600 text-lg">
-                Acompanhe e gerencie os vínculos entre padrinhos e crianças
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              {selectedCount > 0 && (
+        <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Apadrinhamentos</h1>
+            <p className="text-gray-600 mt-1">Acompanhe e gerencie os vínculos entre padrinhos e crianças</p>
+          </div>
+          <button
+            onClick={load}
+            disabled={loading}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 shadow-sm"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
+          </button>
+        </div>
+
+        {/* Indicadores (clicáveis) */}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+          {statCards.map(c => {
+            const active = sameStatuses(statusFilters, c.statuses);
+            return (
+              <button
+                key={c.label}
+                onClick={() => setStatusFilters(c.statuses)}
+                className={`text-left bg-white/80 rounded-2xl p-4 border shadow-sm transition hover:shadow-md flex items-center justify-between gap-3 ${
+                  active ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-100'
+                }`}
+                title={`Mostrar ${c.label.toLowerCase()}`}
+              >
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-600 truncate">{c.label}</p>
+                  <p className={`text-2xl font-bold ${c.text}`}>{c.value.toLocaleString('pt-BR')}</p>
+                  <p className="text-xs text-gray-500 truncate">{c.hint}</p>
+                </div>
+                <div className={`p-2.5 rounded-xl shrink-0 ${c.tone}`}>{c.icon}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Filtros */}
+        <div className="bg-white/80 rounded-2xl p-4 border border-gray-100 shadow-sm mb-6 space-y-3">
+          <div className="flex flex-col lg:flex-row gap-3">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                className="w-full pl-9 pr-9 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="Buscar por criança (nome ou ID), padrinho (nome ou e-mail) ou ponto de coleta…"
+                value={qInput}
+                onChange={(e) => setQInput(e.target.value)}
+              />
+              {qInput && (
                 <button
-                  onClick={() => beginTransfer(Object.keys(selectedIds).filter(id => selectedIds[id]))}
-                  className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-sm"
-                  title="Transferir itens selecionados"
+                  onClick={() => { setQInput(''); setQ(''); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-gray-100 text-gray-500"
+                  aria-label="Limpar busca"
                 >
-                  <ArrowRightLeft className="w-4 h-4" />
-                  Transferir selecionados ({selectedCount})
+                  <X className="w-4 h-4" />
                 </button>
               )}
-              <div className="text-sm text-gray-500 px-4 py-2 bg-white/50 rounded-xl border border-white/20">
-                Funcionalidades extras em breve
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Stats (da aba/filtro atual) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Total (filtro atual)</p>
-                <p className="text-3xl font-bold text-gray-900">{visibleRows.length}</p>
-              </div>
-              <div className="p-3 bg-blue-100 rounded-xl">
-                <Heart className="w-6 h-6 text-blue-600" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Concluídos (filtro)</p>
-                <p className="text-3xl font-bold text-emerald-600">
-                  {visibleRows.filter(r => r.status === 'COMPLETED').length}
-                </p>
-              </div>
-              <div className="p-3 bg-emerald-100 rounded-xl">
-                <UserCheck className="w-6 h-6 text-emerald-600" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Pendentes (filtro)</p>
-                <p className="text-3xl font-bold text-amber-600">
-                  {visibleRows.filter(r => r.status === 'PENDING').length}
-                </p>
-              </div>
-              <div className="p-3 bg-amber-100 rounded-xl">
-                <Clock className="w-6 h-6 text-amber-600" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Em processo/andamento (filtro)</p>
-                <p className="text-3xl font-bold text-cyan-600">
-                  {visibleRows.filter(r => r.status === 'IN_PROGRESS').length}
-                </p>
-              </div>
-              <div className="p-3 bg-cyan-100 rounded-xl">
-                <Users className="w-6 h-6 text-cyan-600" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Abas principais */}
-        <div className="mb-3">
-          <div className="flex flex-wrap gap-2">
-            <Tab id="PENDING" label="Pendentes" count={countsAll.PENDING} active={!isFilteringExtras && activeTab === 'PENDING'} onClick={() => setActiveTab('PENDING')} />
-            <Tab id="IN_PROGRESS" label="Em andamento" count={countsAll.IN_PROGRESS} active={!isFilteringExtras && activeTab === 'IN_PROGRESS'} onClick={() => setActiveTab('IN_PROGRESS')} />
-            <Tab id="COMPLETED" label="Concluídos" count={countsAll.COMPLETED} active={!isFilteringExtras && activeTab === 'COMPLETED'} onClick={() => setActiveTab('COMPLETED')} />
-          </div>
-          {isFilteringExtras && (
-            <div className="mt-2 text-xs text-gray-600">
-              * Filtro extra por status ativo; as abas ficam desabilitadas enquanto os filtros abaixo estiverem selecionados.
-            </div>
-          )}
-        </div>
-
-        {/* NOVO: Botões de filtro para mais status */}
-        <div className="mb-6 bg-white/70 backdrop-blur-sm rounded-2xl p-4 border border-white/20 shadow-lg">
-          <div className="flex flex-wrap items-center gap-2">
-            {EXTRA_STATUS.map((s) => {
-              const active = statusFilters.includes(s);
-              return (
-                <button
-                  key={s}
-                  onClick={() => toggleStatusFilter(s)}
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm transition ${
-                    active
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                  title={`Filtrar por ${STATUS_PT[s]}`}
-                >
-                  <StatusBadge status={s} />
-                  <span className="text-xs">{countsAll[s]}</span>
-                </button>
-              );
-            })}
-
-            {/* Botão para limpar filtros extras */}
-            <button
-              onClick={() => setStatusFilters([])}
-              className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
-              title="Limpar filtros de status"
-            >
-              Limpar filtros
-            </button>
-          </div>
-        </div>
-
-        {/* === Filtros por método === */}
-        <div className="mb-6 bg-white/70 backdrop-blur-sm rounded-2xl p-4 border border-white/20 shadow-lg">
-          <div className="flex flex-wrap items-center gap-2">
-            {METHOD_OPTIONS.map((m) => {
-              const active = methodFilters.includes(m);
-              const label = m === 'PIX' ? 'PIX' : 'Presente no ponto (GIFT)';
-              return (
-                <button
-                  key={m}
-                  onClick={() => toggleMethodFilter(m)}
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm transition ${
-                    active
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                  title={`Filtrar por ${label}`}
-                >
-                  <span className="text-xs font-medium">{label}</span>
-                  <span className="text-[11px] px-1.5 py-0.5 rounded-full border bg-white/70 text-gray-700">
-                    {countsByMethod[m]}
-                  </span>
-                </button>
-              );
-            })}
-
-            {/* Limpar filtros de método */}
-            <button
-              onClick={() => setMethodFilters([])}
-              className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
-              title="Limpar filtros de método"
-            >
-              Limpar filtros de método
-            </button>
-          </div>
-
-          {(isFilteringMethods) && (
-            <div className="mt-2 text-xs text-gray-600">
-              * Filtro por método ativo; a busca e contagens acima consideram apenas os métodos selecionados.
-            </div>
-          )}
-        </div>
-
-        {/* Filtros de busca/campanha */}
-        <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg mb-8">
-          <div className="flex flex-col lg:flex-row gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-              <input
-                className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
-                placeholder="Buscar por criança, padrinho ou ponto de coleta..."
-                value={q}
-                onChange={(e) => { setQ(e.target.value); }}
-              />
             </div>
 
-            <div className="relative lg:w-64">
-              <Calendar className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+            <div className="relative lg:w-72">
+              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <select
-                className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 appearance-none cursor-pointer"
+                className="w-full pl-9 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
                 value={campaignId}
-                onChange={(e) => { setCampaignId(e.target.value); }}
+                onChange={(e) => setCampaignId(e.target.value)}
               >
                 <option value="">Todas as campanhas</option>
                 {campaigns.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {campaignLabel(c)}
-                  </option>
+                  <option key={c.id} value={c.id}>{campaignLabel(c)}</option>
                 ))}
               </select>
             </div>
 
-            <div className="flex items-center gap-2 ml-auto">
-              <button
-                onClick={() => setViewMode(viewMode === 'agrupado' ? 'table' : 'agrupado')}
-                className="px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm text-gray-700"
-                title="Alternar visualização"
-              >
-                {viewMode === 'agrupado' ? 'Ver como Tabela' : 'Ver Agrupado'}
-              </button>
+            {/* visualização */}
+            <div className="inline-flex rounded-xl border border-gray-200 bg-white p-1 self-start lg:self-auto">
+              {([['agrupado', 'Por padrinho', <Users key="i" className="w-4 h-4" />], ['table', 'Tabela', <LayoutList key="i" className="w-4 h-4" />]] as const).map(([mode, label, icon]) => (
+                <button
+                  key={mode}
+                  onClick={() => setViewMode(mode)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                    viewMode === mode ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {icon} {label}
+                </button>
+              ))}
             </div>
+          </div>
+
+          {/* status */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-gray-500 w-16">Status</span>
+            <button onClick={() => setStatusFilters([])} className={chipCls(statusFilters.length === 0)}>
+              Todos <span className={countCls(statusFilters.length === 0)}>{allRows.length}</span>
+            </button>
+            {ALL_STATUSES.map(s => {
+              const active = statusFilters.includes(s);
+              return (
+                <button key={s} onClick={() => toggleStatusFilter(s)} className={chipCls(active)} title={`Filtrar por ${STATUS_PT[s]}`}>
+                  {STATUS_PT[s]} <span className={countCls(active)}>{countsAll[s]}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* método */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-gray-500 w-16">Método</span>
+            <button onClick={() => setMethodFilters([])} className={chipCls(!isFilteringMethods)}>Todos</button>
+            {METHOD_OPTIONS.map(m => {
+              const active = methodFilters.includes(m);
+              return (
+                <button key={m} onClick={() => toggleMethodFilter(m)} className={chipCls(active)}>
+                  {m === 'PIX' ? 'PIX' : 'Presente no ponto'} <span className={countCls(active)}>{countsByMethod[m]}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-gray-100 text-sm text-gray-600">
+            <span className="pt-2">
+              {loading ? 'Carregando…' : (
+                <>
+                  <strong className="text-gray-900">{visibleRows.length.toLocaleString('pt-BR')}</strong> apadrinhamento{visibleRows.length === 1 ? '' : 's'}
+                  {' · '}<strong className="text-gray-900">{sponsorsInView}</strong> padrinho{sponsorsInView === 1 ? '' : 's'}
+                </>
+              )}
+            </span>
+            {hasFilters && (
+              <button onClick={clearFilters} className="pt-2 inline-flex items-center gap-1 text-gray-500 hover:text-gray-900">
+                <X className="w-4 h-4" /> Limpar filtros
+              </button>
+            )}
+            {viewMode === 'agrupado' && groupedBySponsor.length > 1 && (
+              <span className="pt-2 ml-auto inline-flex gap-3">
+                <button onClick={() => setAllGroupsOpen(true)} className="text-gray-500 hover:text-gray-900 underline">Expandir todos</button>
+                <button onClick={() => setAllGroupsOpen(false)} className="text-gray-500 hover:text-gray-900 underline">Recolher todos</button>
+              </span>
+            )}
           </div>
         </div>
 
@@ -1197,24 +1201,16 @@ export default function AdminSponsorshipsPage() {
             {!loading && !noRows && groupedBySponsor.map(group => {
               const sid = group.sponsorId;
               const bulkBusy = !!bulkLoading[sid];
-              const bulkValue = bulkChoice[sid] ?? 'PENDING';
+              const bulkValue = bulkChoice[sid] ?? 'IN_PROGRESS';
+              const open = openGroups[sid] ?? groupsDefaultOpen ?? groupedBySponsor.length <= 5;
+              const groupIds = group.items.map(x => x.id);
+              const groupSelected = groupIds.length > 0 && groupIds.every(id => isSelected(id));
 
               async function applyBulk() {
-                if (!confirm(`Alterar o status de TODOS os ${group.total} apadrinhamentos deste padrinho?`)) return;
+                if (!confirm(`Alterar para "${STATUS_PT[bulkValue]}" os ${group.total} apadrinhamento(s) deste padrinho que aparecem no filtro?`)) return;
                 setBulkLoading(prev => ({ ...prev, [sid]: true }));
                 try {
-                  const ops = group.items.map(it =>
-                    fetch(`/api/admin/sponsorships/${it.id}`, {
-                      method: 'PATCH',
-                      credentials: 'include',
-                      headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ status: bulkValue }),
-                    })
-                  );
-                  const results = await Promise.allSettled(ops);
-                  const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !(r.value as any)?.ok)).length;
-                  if (failed > 0) alert(`Algumas atualizações falharam (${failed}/${group.total}).`);
-                  await load();
+                  await changeStatusMany(groupIds, bulkValue);
                 } finally {
                   setBulkLoading(prev => ({ ...prev, [sid]: false }));
                 }
@@ -1223,121 +1219,89 @@ export default function AdminSponsorshipsPage() {
               return (
                 <div
                   key={sid}
-                  className="bg-white/70 backdrop-blur-sm rounded-2xl border border-white/20 shadow-lg"
+                  className="bg-white/80 rounded-2xl border border-gray-100 shadow-sm overflow-hidden"
                 >
-                  {/* Cabeçalho do padrinho + ações */}
-                  <div className="flex flex-col gap-3 px-6 py-4 border-b border-gray-100 bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-blue-100 rounded-lg">
-                        <UserCheck className="w-5 h-5 text-blue-600" />
-                      </div>
-                      <div>
-                        <div className="text-base font-semibold text-gray-900">
-                          {group.sponsor?.name || 'Sem padrinho'}
+                  {/* Cabeçalho do padrinho (clique para abrir/fechar) + ações */}
+                  <div className={`flex flex-col gap-3 px-5 py-4 bg-gray-50 ${open ? 'border-b border-gray-100' : ''}`}>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button
+                        className="p-1 rounded hover:bg-gray-100"
+                        onClick={() => selectMany(groupIds, !groupSelected)}
+                        title={groupSelected ? 'Desmarcar padrinho' : 'Selecionar todos deste padrinho'}
+                      >
+                        {groupSelected ? <CheckSquare className="w-5 h-5 text-emerald-600" /> : <Square className="w-5 h-5 text-gray-400" />}
+                      </button>
+                      <button
+                        onClick={() => setOpenGroups(prev => ({ ...prev, [sid]: !open }))}
+                        className="flex flex-1 min-w-0 items-center gap-3 text-left"
+                        aria-expanded={open}
+                      >
+                        {open ? <ChevronDown className="w-5 h-5 text-gray-500 shrink-0" /> : <ChevronRight className="w-5 h-5 text-gray-500 shrink-0" />}
+                        <div className="p-2 bg-blue-100 rounded-lg shrink-0">
+                          <UserCheck className="w-5 h-5 text-blue-600" />
                         </div>
-                        {group.sponsor?.email && (
-                          <div className="text-xs text-gray-600">{group.sponsor.email}</div>
-                        )}
+                        <div className="min-w-0">
+                          <div className="text-base font-semibold text-gray-900 truncate">
+                            {group.sponsor?.name || 'Sem padrinho'}
+                          </div>
+                          {group.sponsor?.email && (
+                            <div className="text-xs text-gray-600 truncate">{group.sponsor.email}</div>
+                          )}
+                        </div>
+                      </button>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge className="bg-white text-gray-700 border-gray-200">
+                          {group.total} criança{group.total > 1 ? 's' : ''}
+                        </Badge>
+                        {countByStatus(group.items).map(([st, n]) => (
+                          <span key={st} className="inline-flex items-center gap-1">
+                            <StatusBadge status={st} />{n > 1 && <span className="text-xs text-gray-600">×{n}</span>}
+                          </span>
+                        ))}
                       </div>
                     </div>
 
                     {/* Linha de ações */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge className="bg-gray-50 text-gray-700 border-gray-200">
-                        {group.total} apadrinhamento{group.total > 1 ? 's' : ''}
-                      </Badge>
-
-                      {/* === EXPORTAÇÕES === */}
+                    {open && (
+                    <div className="flex flex-wrap items-center gap-2 pl-10">
                       <button
                         onClick={() =>
                           openExportModal(group.items, group.sponsor?.name || 'Sem padrinho', group.sponsor?.id)
                         }
                         className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                        title="Exportar todos os apadrinhamentos deste padrinho em PDF"
+                        title="Exportar os apadrinhamentos deste padrinho em PDF"
                       >
                         <FileText className="w-4 h-4" /> PDF padrinho
                       </button>
 
-                      <button
-                        onClick={() => {
-                          const selectedItems = visibleRows.filter((s) => isSelected(s.id));
-                          if (selectedItems.length === 0) {
-                            alert('Nenhum apadrinhamento selecionado.');
-                            return;
-                          }
-                          openExportModal(
-                            selectedItems,
-                            `${group.sponsor?.name || 'Sem padrinho'} - seleção`,
-                            group.sponsor?.id
-                          );
-                        }}
-                        className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                        title="Exportar apenas os apadrinhamentos selecionados"
-                      >
-                        <FileText className="w-4 h-4" /> PDF seleção
-                      </button>
-
-                      {/* Bulk status padrinho */}
-                      <select
-                        className="px-3 py-1.5 text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg cursor-pointer appearance-none"
-                        value={bulkValue}
-                        onChange={(e) =>
-                          setBulkChoice((prev) => ({
-                            ...prev,
-                            [sid]: e.target.value as SponsorshipStatus,
-                          }))
-                        }
-                        disabled={bulkBusy}
-                        title="Selecionar novo status para todos"
-                      >
-                        {(
-                          [
-                            'PENDING',
-                            'IN_PROGRESS',
-                            'IN_PURCHASE',
-                            'PACKED',
-                            'BOXED',
-                            'AWAITING_DELIVERY',
-                            'COMPLETED',
-                            'ENDED',
-                            'CANCELLED',
-                          ] as SponsorshipStatus[]
-                        ).map((st) => (
-                          <option key={st} value={st}>{STATUS_PT[st]}</option>
-                        ))}
-                      </select>
+                      {/* status de todos do padrinho (no filtro atual) */}
+                      <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white overflow-hidden">
+                        <select
+                          className="px-2.5 py-1.5 text-xs bg-white border-r border-gray-200 cursor-pointer outline-none"
+                          value={bulkValue}
+                          onChange={(e) => setBulkChoice(prev => ({ ...prev, [sid]: e.target.value as SponsorshipStatus }))}
+                          disabled={bulkBusy}
+                          title="Novo status para todos deste padrinho"
+                        >
+                          {ALL_STATUSES.map(st => <option key={st} value={st}>{STATUS_PT[st]}</option>)}
+                        </select>
+                        <button
+                          onClick={applyBulk}
+                          disabled={bulkBusy}
+                          className="px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:text-gray-400"
+                        >
+                          {bulkBusy ? 'Aplicando…' : 'Aplicar a todos'}
+                        </button>
+                      </div>
 
                       <button
-                        onClick={applyBulk}
-                        disabled={bulkBusy}
-                        className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-                          bulkBusy
-                            ? 'bg-gray-100 text-gray-400 border-gray-200'
-                            : 'bg-white hover:bg-gray-50 text-gray-700 border-gray-200'
-                        }`}
-                      >
-                        {bulkBusy ? 'Aplicando…' : 'Aplicar a todos'}
-                      </button>
-
-                      {/* Transferência padrinho */}
-                      <button
-                        onClick={() => beginTransfer(group.items.map((x) => x.id))}
+                        onClick={() => beginTransfer(groupIds)}
                         className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                        title="Transferir todos os apadrinhamentos deste padrinho"
+                        title="Transferir os apadrinhamentos deste padrinho"
                       >
-                        <ArrowRightLeft className="w-4 h-4" /> Transferir padrinho
+                        <ArrowRightLeft className="w-4 h-4" /> Transferir
                       </button>
 
-                      {/* Exclusão de todos do padrinho */}
-                      <button
-                        onClick={() => beginDeleteSponsor(group)}
-                        className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
-                        title="Excluir todos os apadrinhamentos deste padrinho"
-                      >
-                        <Trash2 className="w-4 h-4" /> Excluir todos
-                      </button>
-
-                      {/* Detalhes */}
                       {group.sponsor?.id && (
                         <button
                           onClick={() => openSponsor(group.sponsor!.id)}
@@ -1346,10 +1310,20 @@ export default function AdminSponsorshipsPage() {
                           <Eye className="w-4 h-4" /> Detalhes
                         </button>
                       )}
+
+                      <button
+                        onClick={() => beginDeleteSponsor(group)}
+                        className="ml-auto inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                        title="Excluir apadrinhamentos deste padrinho"
+                      >
+                        <Trash2 className="w-4 h-4" /> Excluir todos
+                      </button>
                     </div>
+                    )}
                   </div>
 
                   {/* Subgrupos: Cidade ➜ Comunidade */}
+                  {open && (
                   <div className="p-6 space-y-6">
                     {group.byCity.map((cityGroup) => (
                       <div
@@ -1579,6 +1553,7 @@ export default function AdminSponsorshipsPage() {
                       </div>
                     ))}
                   </div>
+                  )}
                 </div>
               );
 
@@ -1587,6 +1562,59 @@ export default function AdminSponsorshipsPage() {
         )}
 
       </div>
+
+      {/* Barra da seleção */}
+      {selectedCount > 0 && (
+        <div className="fixed bottom-4 inset-x-0 z-50 px-4">
+          <div className="max-w-5xl mx-auto flex flex-wrap items-center gap-2 rounded-2xl bg-gray-900 text-white shadow-2xl px-4 py-3">
+            <span className="text-sm font-semibold mr-2">{selectedCount} selecionado(s)</span>
+            <div className="inline-flex items-center rounded-lg bg-white/10 overflow-hidden">
+              <select
+                value={selStatus}
+                onChange={(e) => setSelStatus(e.target.value as SponsorshipStatus)}
+                disabled={selBusy}
+                className="bg-transparent text-sm px-2.5 py-1.5 outline-none [&>option]:text-gray-900"
+                title="Novo status para a seleção"
+              >
+                {ALL_STATUSES.map(st => <option key={st} value={st}>{STATUS_PT[st]}</option>)}
+              </select>
+              <button onClick={applySelectionStatus} disabled={selBusy} className="px-3 py-1.5 text-sm hover:bg-white/10 border-l border-white/10 disabled:opacity-50">
+                Aplicar status
+              </button>
+            </div>
+            <button
+              onClick={() => beginTransfer(selectedRows.map(r => r.id))}
+              disabled={selBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+            >
+              <ArrowRightLeft className="w-4 h-4" /> Transferir
+            </button>
+            <button
+              onClick={exportSelection}
+              disabled={selBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+            >
+              <FileText className="w-4 h-4" /> PDF
+            </button>
+            <button
+              onClick={deleteSelection}
+              disabled={selBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-sm disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4" /> Excluir
+            </button>
+            <button onClick={() => setSelectedIds({})} disabled={selBusy} className="ml-auto inline-flex items-center gap-1 text-sm text-white/70 hover:text-white">
+              <X className="w-4 h-4" /> Limpar seleção
+            </button>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className={`fixed right-6 z-50 flex items-center gap-2 rounded-xl bg-gray-900 text-white text-sm px-4 py-3 shadow-lg ${selectedCount ? 'bottom-24' : 'bottom-6'}`}>
+          <CheckCircle2 className="w-4 h-4 text-emerald-400" /> {toast}
+        </div>
+      )}
 
       {/* Modal CRIANÇA */}
       <Modal
