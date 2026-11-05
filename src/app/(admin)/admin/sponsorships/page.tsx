@@ -142,6 +142,18 @@ function countByStatus(items: Sponsorship[]) {
   for (const it of items) m.set(it.status, (m.get(it.status) ?? 0) + 1);
   return [...m.entries()];
 }
+/** "3 pendente · 2 concluído" com o ponto na cor de cada status */
+function StatusCounts({ items }: { items: Sponsorship[] }) {
+  return (
+    <div className="flex flex-wrap gap-x-2.5 gap-y-0.5">
+      {countByStatus(items).map(([st, n]) => (
+        <span key={st} className={`inline-flex items-center gap-1 text-[11px] font-semibold ${STATUS_STYLE[st].text}`} title={STATUS_PT[st]}>
+          <span className={`w-2 h-2 rounded-full ${STATUS_STYLE[st].bar}`} />{n} {STATUS_PT[st].toLowerCase()}
+        </span>
+      ))}
+    </div>
+  );
+}
 /** Iniciais da criança num círculo (cor fixa por nome, para reconhecer de relance) */
 function ChildAvatar({ name }: { name?: string | null }) {
   const parts = (name || '?').trim().split(/\s+/);
@@ -977,11 +989,17 @@ export default function AdminSponsorshipsPage() {
 
           <StatusDistribution counts={countsAll} onSelect={(s) => setStatusFilters([s])} className="h-3" />
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          {/* celular: faixa que rola de lado (com encerrado/cancelado no fim); a partir do tablet, grade */}
+          <div className="sm:hidden -mx-4 px-4 flex gap-2 overflow-x-auto no-scrollbar snap-x pb-1">
+            {[...FLOW_STEPS, ...OFF_FLOW].map(s => (
+              <div key={s} className="snap-start shrink-0 w-32"><StepTile s={s} compact /></div>
+            ))}
+          </div>
+          <div className="hidden sm:grid grid-cols-4 lg:grid-cols-7 gap-2">
             {FLOW_STEPS.map(s => <StepTile key={s} s={s} />)}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 pt-1">
+          <div className="hidden sm:flex flex-wrap items-center gap-2 pt-1">
             <span className="text-xs font-semibold text-gray-500">Fora do fluxo:</span>
             {OFF_FLOW.map(s => (
               <div key={s} className="w-44"><StepTile s={s} compact /></div>
@@ -1307,10 +1325,11 @@ export default function AdminSponsorshipsPage() {
                   className="bg-white/80 rounded-2xl border border-gray-100 shadow-sm overflow-hidden"
                 >
                   {/* Cabeçalho do padrinho (clique para abrir/fechar) + ações */}
-                  <div className={`flex flex-col gap-3 px-5 py-4 bg-gray-50 ${open ? 'border-b border-gray-100' : ''}`}>
-                    <div className="flex flex-wrap items-center gap-3">
+                  <div className={`flex flex-col gap-2.5 sm:gap-3 px-3 sm:px-5 py-3 sm:py-4 bg-gray-50 ${open ? 'border-b border-gray-100' : ''}`}>
+                    {/* linha 1: seleção + nome (sempre com espaço) + total */}
+                    <div className="flex items-center gap-2 sm:gap-3">
                       <button
-                        className="p-1 rounded hover:bg-gray-100"
+                        className="p-1 rounded hover:bg-gray-100 shrink-0"
                         onClick={() => selectMany(groupIds, !groupSelected)}
                         title={groupSelected ? 'Desmarcar padrinho' : 'Selecionar todos deste padrinho'}
                       >
@@ -1318,15 +1337,15 @@ export default function AdminSponsorshipsPage() {
                       </button>
                       <button
                         onClick={() => setOpenGroups(prev => ({ ...prev, [sid]: !open }))}
-                        className="flex flex-1 min-w-0 items-center gap-3 text-left"
+                        className="flex flex-1 min-w-0 items-center gap-2 sm:gap-3 text-left"
                         aria-expanded={open}
                       >
                         {open ? <ChevronDown className="w-5 h-5 text-gray-500 shrink-0" /> : <ChevronRight className="w-5 h-5 text-gray-500 shrink-0" />}
-                        <div className="p-2 bg-blue-100 rounded-lg shrink-0">
+                        <div className="hidden sm:block p-2 bg-blue-100 rounded-lg shrink-0">
                           <UserCheck className="w-5 h-5 text-blue-600" />
                         </div>
                         <div className="min-w-0">
-                          <div className="text-base font-semibold text-gray-900 truncate">
+                          <div className="text-sm sm:text-base font-semibold text-gray-900 truncate">
                             {group.sponsor?.name || 'Sem padrinho'}
                           </div>
                           {group.sponsor?.email && (
@@ -1334,26 +1353,25 @@ export default function AdminSponsorshipsPage() {
                           )}
                         </div>
                       </button>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge className="bg-white text-gray-700 border-gray-200">
-                          {group.total} criança{group.total > 1 ? 's' : ''}
-                        </Badge>
-                        <div className="flex flex-col gap-1 w-56">
-                          <StatusDistribution counts={Object.fromEntries(countByStatus(group.items))} />
-                          <div className="flex flex-wrap gap-x-2.5 gap-y-0.5">
-                            {countByStatus(group.items).map(([st, n]) => (
-                              <span key={st} className={`inline-flex items-center gap-1 text-[11px] font-semibold ${STATUS_STYLE[st].text}`} title={STATUS_PT[st]}>
-                                <span className={`w-2 h-2 rounded-full ${STATUS_STYLE[st].bar}`} />{n} {STATUS_PT[st].toLowerCase()}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
+                      <Badge className="shrink-0 bg-white text-gray-700 border-gray-200">
+                        {group.total} <span className="hidden sm:inline">&nbsp;criança{group.total > 1 ? 's' : ''}</span>
+                      </Badge>
+                      {/* computador: resumo dos status ao lado do nome */}
+                      <div className="hidden md:flex flex-col gap-1 w-56 shrink-0">
+                        <StatusDistribution counts={Object.fromEntries(countByStatus(group.items))} />
+                        <StatusCounts items={group.items} />
                       </div>
+                    </div>
+
+                    {/* celular: resumo dos status embaixo, na largura toda */}
+                    <div className="md:hidden flex flex-col gap-1 pl-8">
+                      <StatusDistribution counts={Object.fromEntries(countByStatus(group.items))} className="h-1.5" />
+                      <StatusCounts items={group.items} />
                     </div>
 
                     {/* Linha de ações */}
                     {open && (
-                    <div className="flex flex-wrap items-center gap-2 pl-10">
+                    <div className="flex flex-wrap items-center gap-2 sm:pl-10">
                       <button
                         onClick={() =>
                           openExportModal(group.items, group.sponsor?.name || 'Sem padrinho', group.sponsor?.id)
@@ -1414,14 +1432,14 @@ export default function AdminSponsorshipsPage() {
 
                   {/* Subgrupos: Cidade ➜ Comunidade */}
                   {open && (
-                  <div className="p-6 space-y-6">
+                  <div className="p-2 sm:p-6 space-y-3 sm:space-y-6">
                     {group.byCity.map((cityGroup) => (
                       <div
                         key={cityGroup.city}
                         className="rounded-2xl border border-gray-200 overflow-hidden"
                       >
                         {/* Cabeçalho da cidade */}
-                        <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 bg-gray-50 border-b border-gray-200">
+                        <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-5 py-2.5 sm:py-3 bg-gray-50 border-b border-gray-200">
                           <div className="flex items-center gap-2">
                             <MapPin className="w-4 h-4 text-indigo-600" />
                             <div className="text-sm font-semibold text-gray-900">
@@ -1448,7 +1466,7 @@ export default function AdminSponsorshipsPage() {
                         </div>
 
                         {/* Comunidades dentro da cidade */}
-                        <div className="p-4 space-y-4">
+                        <div className="p-2 sm:p-4 space-y-3 sm:space-y-4">
                           {cityGroup.byCommunity.map((comm) => {
                             const commIds = comm.items.map((x) => x.id);
                             const allSelected = commIds.every((id) => isSelected(id));
@@ -1458,7 +1476,7 @@ export default function AdminSponsorshipsPage() {
                                 className="rounded-xl border border-gray-200"
                               >
                                 {/* Cabeçalho comunidade */}
-                                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2 bg-gray-50 rounded-t-xl border-b border-gray-200">
+                                <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 px-3 sm:px-4 py-2 bg-gray-50 rounded-t-xl border-b border-gray-200">
                                   <div className="flex items-center gap-3">
                                     <button
                                       className="p-1 rounded hover:bg-gray-100"
@@ -1516,7 +1534,7 @@ export default function AdminSponsorshipsPage() {
                                     return (
                                       <li
                                         key={s.id}
-                                        className={`border-l-4 ${STATUS_STYLE[s.status]?.border ?? 'border-l-gray-300'} px-4 py-3.5 transition ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}
+                                        className={`border-l-4 ${STATUS_STYLE[s.status]?.border ?? 'border-l-gray-300'} px-3 sm:px-4 py-3 sm:py-3.5 transition ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}
                                       >
                                         <div className="flex flex-col gap-2.5">
                                           {/* Linha 1: criança + status com a trilha de etapas */}
@@ -1546,14 +1564,14 @@ export default function AdminSponsorshipsPage() {
                                               </div>
                                             </div>
 
-                                            <div className="flex flex-col items-end gap-1.5 w-48 shrink-0">
+                                            <div className="flex flex-col sm:items-end gap-1.5 w-full sm:w-48 sm:shrink-0 pl-11 sm:pl-0">
                                               <StatusBadge status={s.status} size="md" />
                                               <StatusSteps status={s.status} className="w-full" />
                                             </div>
                                           </div>
 
                                           {/* Linha 2: método/ponto de coleta + ações */}
-                                          <div className="flex flex-wrap items-center justify-between gap-2 pl-11">
+                                          <div className="flex flex-wrap items-center justify-between gap-2 sm:pl-11">
                                             <div className="flex flex-wrap items-center gap-2 text-xs text-gray-700">
                                               <MethodBadge method={s.method ?? null} />
                                               {s.method === 'GIFT' && cp && (
