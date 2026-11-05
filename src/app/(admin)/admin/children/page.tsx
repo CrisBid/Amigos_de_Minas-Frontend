@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Search, Plus, Edit, Trash2, Upload, Heart, Baby, MapPin, Gift, ChevronLeft, ChevronRight, Camera, Loader2,
-  Clock, ScanFace, List, FilterX, School,
+  Clock, ScanFace, List, FilterX, School, ImagePlus,
 } from 'lucide-react';
 import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 import LocationFilter, { EMPTY_LOCATION, useLocationLabel, type LocationValue } from '@/components/Admin/LocationFilter';
@@ -12,6 +12,7 @@ import { apiPath } from '@/lib/api';
 import { composeConfigForFrame } from '@/components/media/composeConfig';
 import { STATUS_PT, type SponsorshipStatus } from '@/lib/sponsorship-status';
 import PhotoReview from './PhotoReview';
+import BulkPhotoUpload from './BulkPhotoUpload';
 
 type Sponsorship = { id: string; status: SponsorshipStatus };
 type ChildImageLite = { id: string | null; campaignId?: string | null; createdAt?: string; placeholder?: boolean };
@@ -38,7 +39,9 @@ type ChildListItem = {
   cityId?: string | null;
 };
 
-type Tab = 'list' | 'photos';
+type Tab = 'list' | 'photos' | 'upload';
+// valor de ?tab= na URL
+const TAB_PARAM: Partial<Record<Tab, string>> = { photos: 'fotos', upload: 'enviar-fotos' };
 
 const STATUS_STYLE: Partial<Record<SponsorshipStatus, { className: string; dot: string }>> = {
   PENDING: { className: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' },
@@ -82,7 +85,7 @@ function calcAge(birthDate?: string | null, fallback?: number | null) {
 export default function AdminChildrenPage() {
   const { campaigns, campaignId, setCampaignId, ready } = useAdminCampaign();
 
-  // aba e filtros (a aba fica na URL: ?tab=fotos)
+  // aba e filtros (a aba fica na URL: ?tab=fotos / ?tab=enviar-fotos)
   const [tab, setTab] = useState<Tab>('list');
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
@@ -97,12 +100,14 @@ export default function AdminChildrenPage() {
     const sp = new URLSearchParams(window.location.search);
     const p = sp.get('photo');
     if (p === 'without' || p === 'with') setPhotoFilter(p); // link do dashboard
-    if (sp.get('tab') === 'fotos') setTab('photos');
+    const t = (Object.keys(TAB_PARAM) as Tab[]).find((k) => TAB_PARAM[k] === sp.get('tab'));
+    if (t) setTab(t);
   }, []);
   const changeTab = (t: Tab) => {
     setTab(t);
     const url = new URL(window.location.href);
-    if (t === 'photos') url.searchParams.set('tab', 'fotos'); else url.searchParams.delete('tab');
+    const param = TAB_PARAM[t];
+    if (param) url.searchParams.set('tab', param); else url.searchParams.delete('tab');
     window.history.replaceState(null, '', url.toString());
   };
 
@@ -323,8 +328,8 @@ export default function AdminChildrenPage() {
                 value={photoFilter}
                 onChange={(e) => { setPage(1); setPhotoFilter(e.target.value as typeof photoFilter); }}
                 className={inputCls}
-                disabled={tab === 'photos'}
-                title={tab === 'photos' ? 'A conferência mostra só quem tem foto' : undefined}
+                disabled={tab !== 'list'}
+                title={tab === 'photos' ? 'A conferência mostra só quem tem foto' : tab === 'upload' ? 'O envio em lote mostra só quem está sem foto' : undefined}
               >
                 <option value="">Todas</option>
                 <option value="without">Sem foto{campaignId ? ' na campanha' : ''}</option>
@@ -344,6 +349,14 @@ export default function AdminChildrenPage() {
                 {missingPhotos} sem foto{campaignId ? ' nesta campanha' : ''}{locationLabel ? ` · ${locationLabel}` : ''}
               </button>
             )}
+            {!!missingPhotos && !!campaignId && tab !== 'upload' && (
+              <button
+                onClick={() => changeTab('upload')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+              >
+                <ImagePlus className="w-4 h-4" /> Enviar fotos em lote
+              </button>
+            )}
             {hasFilters && (
               <button onClick={clearFilters} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border border-gray-200 bg-white text-gray-600 hover:bg-gray-50">
                 <FilterX className="w-4 h-4" /> Limpar filtros
@@ -357,6 +370,7 @@ export default function AdminChildrenPage() {
           {([
             ['list', 'Crianças', <List key="i" className="w-4 h-4" />],
             ['photos', 'Verificar fotos', <ScanFace key="i" className="w-4 h-4" />],
+            ['upload', 'Enviar fotos em lote', <ImagePlus key="i" className="w-4 h-4" />],
           ] as [Tab, string, ReactNode][]).map(([key, label, icon]) => (
             <button
               key={key}
@@ -370,7 +384,21 @@ export default function AdminChildrenPage() {
           ))}
         </div>
 
-        {tab === 'photos' ? (
+        {tab === 'upload' ? (
+          campaignId ? (
+            <BulkPhotoUpload
+              campaignId={campaignId}
+              location={location}
+              locationLabel={locationLabel}
+              q={q}
+              onUploaded={loadMissingCount}
+            />
+          ) : (
+            <div className="py-16 text-center text-gray-600 bg-white/80 rounded-2xl border border-gray-100">
+              Escolha uma campanha no filtro acima para enviar as fotos que faltam nela.
+            </div>
+          )
+        ) : tab === 'photos' ? (
           campaignId ? (
             <PhotoReview campaignId={campaignId} location={location} locationLabel={locationLabel} q={q} />
           ) : (
