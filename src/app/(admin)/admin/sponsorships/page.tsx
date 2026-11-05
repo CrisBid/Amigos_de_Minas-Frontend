@@ -21,11 +21,15 @@ import {
   ArrowRightLeft,
   FileText,
   RefreshCw,
-  XCircle,
   LayoutList,
   ChevronDown,
   ChevronRight,
   CheckCircle2,
+  ArrowRight,
+  Code2,
+  Gift,
+  QrCode,
+  FilterX,
 } from 'lucide-react';
 
 // >>> PDF exporter
@@ -37,7 +41,8 @@ import {
   STATUS_PT,
   type SponsorshipStatus,
 } from '@/lib/sponsorship-status';
-import StatusBadge from '@/components/Sponsorship/StatusBadge';
+import StatusBadge, { StatusDistribution, StatusSteps } from '@/components/Sponsorship/StatusBadge';
+import { FLOW_STEPS, OFF_FLOW, STATUS_STYLE } from '@/components/Sponsorship/statusStyle';
 import { normalizeText } from '@/lib/sheetImport';
 
 /* ===================== */
@@ -136,6 +141,57 @@ function countByStatus(items: Sponsorship[]) {
   const m = new Map<SponsorshipStatus, number>();
   for (const it of items) m.set(it.status, (m.get(it.status) ?? 0) + 1);
   return [...m.entries()];
+}
+/** Iniciais da criança num círculo (cor fixa por nome, para reconhecer de relance) */
+function ChildAvatar({ name }: { name?: string | null }) {
+  const parts = (name || '?').trim().split(/\s+/);
+  const ini = (parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : parts[0].slice(0, 2)).toUpperCase();
+  const tones = ['bg-pink-100 text-pink-700', 'bg-sky-100 text-sky-700', 'bg-amber-100 text-amber-700', 'bg-violet-100 text-violet-700', 'bg-teal-100 text-teal-700', 'bg-orange-100 text-orange-700'];
+  const tone = tones[[...(name || '')].reduce((a, c) => a + c.charCodeAt(0), 0) % tones.length];
+  return <div className={`w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${tone}`}>{ini}</div>;
+}
+function IconBtn({ title, onClick, className = '', children }: { title: string; onClick: () => void; className?: string; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} title={title} aria-label={title} className={`p-2 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition ${className}`}>
+      {children}
+    </button>
+  );
+}
+/** Select de status pintado com a cor do status atual */
+function StatusPicker({ value, onChange }: { value: SponsorshipStatus; onChange: (s: SponsorshipStatus) => void }) {
+  const st = STATUS_STYLE[value];
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as SponsorshipStatus)}
+      title="Mudar status"
+      className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg ring-1 ring-inset cursor-pointer outline-none ${st?.soft ?? 'bg-gray-50 ring-gray-200'}`}
+    >
+      {ALL_STATUSES.map((s) => (
+        <option key={s} value={s} className="bg-white text-gray-900">
+          {STATUS_STYLE[s].step ? `${STATUS_STYLE[s].step}. ` : '× '}{STATUS_PT[s]}
+        </option>
+      ))}
+    </select>
+  );
+}
+/** Atalho para a próxima etapa do fluxo (ex.: Pendente → Em andamento) */
+function NextStepButton({ status, onClick }: { status: SponsorshipStatus; onClick: (next: SponsorshipStatus) => void }) {
+  const step = STATUS_STYLE[status]?.step;
+  if (!step || step >= FLOW_STEPS.length) return null;
+  const next = FLOW_STEPS[step];
+  const st = STATUS_STYLE[next];
+  const Icon = st.icon;
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(next)}
+      title={`Avançar para "${STATUS_PT[next]}" — ${st.hint}`}
+      className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold ring-1 ring-inset transition hover:brightness-95 ${st.soft}`}
+    >
+      <ArrowRight className="w-3.5 h-3.5" /> <Icon className="w-3.5 h-3.5" /> {STATUS_PT[next]}
+    </button>
+  );
 }
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -513,9 +569,10 @@ export default function AdminSponsorshipsPage() {
 
   /* ===== Método ===== */
   function MethodBadge({ method }: { method?: SponsorshipMethod | null }) {
-    if (!method) return <Badge className="bg-gray-50 text-gray-600 border-gray-200">—</Badge>;
-    if (method === 'PIX') return <Badge className="bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200">PIX</Badge>;
-    return <Badge className="bg-sky-50 text-sky-700 border-sky-200">Presente no ponto (GIFT)</Badge>;
+    // neutro (contorno + ícone) para não competir com as cores dos status
+    if (!method) return <Badge className="bg-white text-gray-500 border-gray-200">—</Badge>;
+    if (method === 'PIX') return <Badge className="bg-white text-gray-700 border-gray-300 gap-1"><QrCode className="w-3 h-3" /> PIX</Badge>;
+    return <Badge className="bg-white text-gray-700 border-gray-300 gap-1"><Gift className="w-3 h-3" /> Presente no ponto</Badge>;
   }
 
   /* ===== Helpers de Ponto de Coleta ===== */
@@ -820,21 +877,47 @@ export default function AdminSponsorshipsPage() {
 
   const sponsorsInView = useMemo(() => new Set(visibleRows.map(r => r.sponsor?.id ?? '')).size, [visibleRows]);
   const sumOf = (list: SponsorshipStatus[]) => list.reduce((acc, s) => acc + (countsAll[s] ?? 0), 0);
-
-  // indicadores da campanha inteira; clicar filtra a lista por aquele grupo de status
-  const statCards: { label: string; statuses: SponsorshipStatus[]; value: number; hint: string; icon: React.ReactNode; tone: string; text: string }[] = [
-    { label: 'Total', statuses: [], value: allRows.length, hint: `${new Set(allRows.map(r => r.sponsor?.id)).size} padrinho(s)`, icon: <Heart className="w-5 h-5 text-blue-600" />, tone: 'bg-blue-100', text: 'text-gray-900' },
-    { label: 'Pendentes', statuses: ['PENDING'], value: countsAll.PENDING, hint: 'aguardando aprovação', icon: <Clock className="w-5 h-5 text-amber-600" />, tone: 'bg-amber-100', text: 'text-amber-700' },
-    { label: 'Em andamento', statuses: IN_FLOW, value: sumOf(IN_FLOW), hint: 'compra, embalagem e entrega', icon: <Users className="w-5 h-5 text-cyan-600" />, tone: 'bg-cyan-100', text: 'text-cyan-700' },
-    { label: 'Concluídos', statuses: ['COMPLETED'], value: countsAll.COMPLETED, hint: 'presente entregue', icon: <UserCheck className="w-5 h-5 text-emerald-600" />, tone: 'bg-emerald-100', text: 'text-emerald-700' },
-    { label: 'Encerrados / cancelados', statuses: ['ENDED', 'CANCELLED'], value: countsAll.ENDED + countsAll.CANCELLED, hint: 'fora do fluxo', icon: <XCircle className="w-5 h-5 text-slate-600" />, tone: 'bg-slate-100', text: 'text-slate-700' },
-  ];
+  const totalSponsors = useMemo(() => new Set(allRows.map(r => r.sponsor?.id)).size, [allRows]);
+  const inFlowTotal = allRows.length - sumOf(OFF_FLOW);
+  const deliveredPct = inFlowTotal ? Math.round((countsAll.COMPLETED / inFlowTotal) * 100) : 0;
+  const pct = (n: number) => (allRows.length ? Math.round((n / allRows.length) * 100) : 0);
 
   const chipCls = (active: boolean) =>
     `inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm transition ${
       active ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
     }`;
   const countCls = (active: boolean) => `text-xs px-1.5 rounded-full ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-600'}`;
+
+  /** Cartão de uma etapa: cor e ícone do status, quantidade e % do total; clique liga/desliga o filtro */
+  const StepTile = ({ s, compact }: { s: SponsorshipStatus; compact?: boolean }) => {
+    const st = STATUS_STYLE[s];
+    const Icon = st.icon;
+    const active = statusFilters.includes(s);
+    const n = countsAll[s] ?? 0;
+    return (
+      <button
+        onClick={() => toggleStatusFilter(s)}
+        title={`${st.hint} — clique para ${active ? 'tirar do' : 'incluir no'} filtro`}
+        className={`group relative w-full text-left rounded-2xl ring-1 transition ${compact ? 'p-3' : 'p-3.5'} ${
+          active ? `${st.soft} ring-2 shadow-md` : 'bg-white ring-gray-200 hover:ring-gray-300 hover:shadow-sm'
+        } ${n === 0 && !active ? 'opacity-60' : ''}`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <span className={`inline-flex items-center justify-center rounded-xl ${compact ? 'w-8 h-8' : 'w-9 h-9'} ${st.solid}`}>
+            <Icon className="w-4 h-4" />
+          </span>
+          {st.step && <span className="text-[10px] font-bold text-gray-400">ETAPA {st.step}</span>}
+          {active && <CheckCircle2 className={`w-4 h-4 ${st.text}`} />}
+        </div>
+        <div className={`mt-2 font-bold leading-none ${compact ? 'text-xl' : 'text-2xl'} ${n ? st.text : 'text-gray-400'}`}>
+          {n.toLocaleString('pt-BR')}
+          <span className="ml-1 text-xs font-medium text-gray-400">{pct(n)}%</span>
+        </div>
+        <div className="mt-1 text-sm font-semibold text-gray-900 truncate">{STATUS_PT[s]}</div>
+        {!compact && <div className="text-[11px] text-gray-500 truncate">{st.hint}</div>}
+      </button>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
@@ -845,37 +928,64 @@ export default function AdminSponsorshipsPage() {
             <h1 className="text-3xl font-bold text-gray-900">Apadrinhamentos</h1>
             <p className="text-gray-600 mt-1">Acompanhe e gerencie os vínculos entre padrinhos e crianças</p>
           </div>
-          <button
-            onClick={load}
-            disabled={loading}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 shadow-sm"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* resumo */}
+            <div className="flex items-center divide-x divide-gray-200 rounded-xl border border-gray-200 bg-white shadow-sm text-sm">
+              <div className="px-4 py-2">
+                <div className="text-[11px] uppercase tracking-wide text-gray-500">Apadrinhamentos</div>
+                <div className="font-bold text-gray-900 inline-flex items-center gap-1.5"><Heart className="w-4 h-4 text-pink-500" />{allRows.length.toLocaleString('pt-BR')}</div>
+              </div>
+              <div className="px-4 py-2">
+                <div className="text-[11px] uppercase tracking-wide text-gray-500">Padrinhos</div>
+                <div className="font-bold text-gray-900 inline-flex items-center gap-1.5"><Users className="w-4 h-4 text-blue-500" />{totalSponsors.toLocaleString('pt-BR')}</div>
+              </div>
+              <div className="px-4 py-2 min-w-[9rem]">
+                <div className="text-[11px] uppercase tracking-wide text-gray-500">Entregues</div>
+                <div className="font-bold text-emerald-700">{deliveredPct}%</div>
+                <div className="mt-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                  <div className="h-full bg-emerald-500" style={{ width: `${deliveredPct}%` }} />
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={load}
+              disabled={loading}
+              className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 shadow-sm"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
+            </button>
+          </div>
         </div>
 
-        {/* Indicadores (clicáveis) */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
-          {statCards.map(c => {
-            const active = sameStatuses(statusFilters, c.statuses);
-            return (
-              <button
-                key={c.label}
-                onClick={() => setStatusFilters(c.statuses)}
-                className={`text-left bg-white/80 rounded-2xl p-4 border shadow-sm transition hover:shadow-md flex items-center justify-between gap-3 ${
-                  active ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-100'
-                }`}
-                title={`Mostrar ${c.label.toLowerCase()}`}
-              >
-                <div className="min-w-0">
-                  <p className="text-sm text-gray-600 truncate">{c.label}</p>
-                  <p className={`text-2xl font-bold ${c.text}`}>{c.value.toLocaleString('pt-BR')}</p>
-                  <p className="text-xs text-gray-500 truncate">{c.hint}</p>
-                </div>
-                <div className={`p-2.5 rounded-xl shrink-0 ${c.tone}`}>{c.icon}</div>
+        {/* Fluxo: cada etapa com sua cor e ícone; clicar filtra */}
+        <div className="bg-white/80 rounded-2xl p-4 border border-gray-100 shadow-sm mb-4 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-900">Caminho até a entrega</h2>
+              <p className="text-xs text-gray-500">Clique nas etapas para filtrar a lista (dá para marcar várias).</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={() => setStatusFilters([])} className={chipCls(statusFilters.length === 0)}>
+                Todos <span className={countCls(statusFilters.length === 0)}>{allRows.length}</span>
               </button>
-            );
-          })}
+              <button onClick={() => setStatusFilters(IN_FLOW)} className={chipCls(sameStatuses(statusFilters, IN_FLOW))} title="Etapas 2 a 6">
+                Em andamento <span className={countCls(sameStatuses(statusFilters, IN_FLOW))}>{sumOf(IN_FLOW)}</span>
+              </button>
+            </div>
+          </div>
+
+          <StatusDistribution counts={countsAll} onSelect={(s) => setStatusFilters([s])} className="h-3" />
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+            {FLOW_STEPS.map(s => <StepTile key={s} s={s} />)}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <span className="text-xs font-semibold text-gray-500">Fora do fluxo:</span>
+            {OFF_FLOW.map(s => (
+              <div key={s} className="w-44"><StepTile s={s} compact /></div>
+            ))}
+          </div>
         </div>
 
         {/* Filtros */}
@@ -930,22 +1040,6 @@ export default function AdminSponsorshipsPage() {
             </div>
           </div>
 
-          {/* status */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold text-gray-500 w-16">Status</span>
-            <button onClick={() => setStatusFilters([])} className={chipCls(statusFilters.length === 0)}>
-              Todos <span className={countCls(statusFilters.length === 0)}>{allRows.length}</span>
-            </button>
-            {ALL_STATUSES.map(s => {
-              const active = statusFilters.includes(s);
-              return (
-                <button key={s} onClick={() => toggleStatusFilter(s)} className={chipCls(active)} title={`Filtrar por ${STATUS_PT[s]}`}>
-                  {STATUS_PT[s]} <span className={countCls(active)}>{countsAll[s]}</span>
-                </button>
-              );
-            })}
-          </div>
-
           {/* método */}
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold text-gray-500 w-16">Método</span>
@@ -954,14 +1048,15 @@ export default function AdminSponsorshipsPage() {
               const active = methodFilters.includes(m);
               return (
                 <button key={m} onClick={() => toggleMethodFilter(m)} className={chipCls(active)}>
+                  {m === 'PIX' ? <QrCode className="w-4 h-4" /> : <Gift className="w-4 h-4" />}
                   {m === 'PIX' ? 'PIX' : 'Presente no ponto'} <span className={countCls(active)}>{countsByMethod[m]}</span>
                 </button>
               );
             })}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-gray-100 text-sm text-gray-600">
-            <span className="pt-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-3 border-t border-gray-100 text-sm text-gray-600">
+            <span>
               {loading ? 'Carregando…' : (
                 <>
                   <strong className="text-gray-900">{visibleRows.length.toLocaleString('pt-BR')}</strong> apadrinhamento{visibleRows.length === 1 ? '' : 's'}
@@ -969,13 +1064,19 @@ export default function AdminSponsorshipsPage() {
                 </>
               )}
             </span>
+            {/* status ativos no filtro */}
+            {statusFilters.map(s => (
+              <button key={s} onClick={() => toggleStatusFilter(s)} className="inline-flex items-center gap-0.5" title="Tirar do filtro">
+                <StatusBadge status={s} /><X className="w-3 h-3 text-gray-400" />
+              </button>
+            ))}
             {hasFilters && (
-              <button onClick={clearFilters} className="pt-2 inline-flex items-center gap-1 text-gray-500 hover:text-gray-900">
-                <X className="w-4 h-4" /> Limpar filtros
+              <button onClick={clearFilters} className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-900">
+                <FilterX className="w-4 h-4" /> Limpar filtros
               </button>
             )}
             {viewMode === 'agrupado' && groupedBySponsor.length > 1 && (
-              <span className="pt-2 ml-auto inline-flex gap-3">
+              <span className="ml-auto inline-flex gap-3">
                 <button onClick={() => setAllGroupsOpen(true)} className="text-gray-500 hover:text-gray-900 underline">Expandir todos</button>
                 <button onClick={() => setAllGroupsOpen(false)} className="text-gray-500 hover:text-gray-900 underline">Recolher todos</button>
               </span>
@@ -1030,7 +1131,7 @@ export default function AdminSponsorshipsPage() {
                     const cp = resolveCP(s);
                     const checked = isSelected(s.id);
                     return (
-                      <tr key={s.id} className="hover:bg-blue-50/50 transition-colors duration-150">
+                      <tr key={s.id} className={`hover:bg-blue-50/50 transition-colors duration-150 ${checked ? 'bg-emerald-50/60' : ''}`}>
                         <td className="px-6 py-4">
                           <button
                             className="p-1 rounded hover:bg-gray-100"
@@ -1126,8 +1227,11 @@ export default function AdminSponsorshipsPage() {
                           ) : <span className="text-sm text-gray-400">—</span>}
                         </td>
 
-                        <td className="px-6 py-4">
-                          <StatusBadge status={s.status} />
+                        <td className={`px-6 py-4 border-l-4 ${STATUS_STYLE[s.status]?.border ?? ''}`}>
+                          <div className="flex flex-col gap-1.5 w-44">
+                            <StatusBadge status={s.status} />
+                            <StatusSteps status={s.status} />
+                          </div>
                         </td>
 
                         <td className="px-6 py-4">
@@ -1140,28 +1244,8 @@ export default function AdminSponsorshipsPage() {
                               <ArrowRightLeft className="w-4 h-4" />
                               Transferir
                             </button>
-                            <select
-                              className="px-3 py-1.5 text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors duration-150 cursor-pointer appearance-none"
-                              value={s.status}
-                              onChange={(e) => changeStatus(s.id, e.target.value as SponsorshipStatus)}
-                              title="Alterar status"
-                            >
-                              {(
-                                [
-                                  'PENDING',
-                                  'IN_PROGRESS',
-                                  'IN_PURCHASE',
-                                  'PACKED',
-                                  'BOXED',
-                                  'AWAITING_DELIVERY',
-                                  'COMPLETED',
-                                  'ENDED',
-                                  'CANCELLED',
-                                ] as SponsorshipStatus[]
-                              ).map((st) => (
-                                <option key={st} value={st}>{STATUS_PT[st]}</option>
-                              ))}
-                            </select>
+                            <NextStepButton status={s.status} onClick={(next) => changeStatus(s.id, next)} />
+                            <StatusPicker value={s.status} onChange={(next) => changeStatus(s.id, next)} />
                             <button
                               onClick={() => del(s.id)}
                               className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200 transition-colors duration-150"
@@ -1253,11 +1337,16 @@ export default function AdminSponsorshipsPage() {
                         <Badge className="bg-white text-gray-700 border-gray-200">
                           {group.total} criança{group.total > 1 ? 's' : ''}
                         </Badge>
-                        {countByStatus(group.items).map(([st, n]) => (
-                          <span key={st} className="inline-flex items-center gap-1">
-                            <StatusBadge status={st} />{n > 1 && <span className="text-xs text-gray-600">×{n}</span>}
-                          </span>
-                        ))}
+                        <div className="flex flex-col gap-1 w-56">
+                          <StatusDistribution counts={Object.fromEntries(countByStatus(group.items))} />
+                          <div className="flex flex-wrap gap-x-2.5 gap-y-0.5">
+                            {countByStatus(group.items).map(([st, n]) => (
+                              <span key={st} className={`inline-flex items-center gap-1 text-[11px] font-semibold ${STATUS_STYLE[st].text}`} title={STATUS_PT[st]}>
+                                <span className={`w-2 h-2 rounded-full ${STATUS_STYLE[st].bar}`} />{n} {STATUS_PT[st].toLowerCase()}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     </div>
 
@@ -1424,14 +1513,18 @@ export default function AdminSponsorshipsPage() {
                                     const cp = resolveCP(s);
                                     const checked = isSelected(s.id);
                                     return (
-                                      <li key={s.id} className="px-4 py-4 hover:bg-gray-50 transition">
-                                        <div className="flex flex-col gap-2">
-                                          {/* Linha 1: Criança + campanha */}
-                                          <div className="flex flex-wrap items-center justify-between gap-3">
-                                            <div className="flex items-center gap-3">
+                                      <li
+                                        key={s.id}
+                                        className={`border-l-4 ${STATUS_STYLE[s.status]?.border ?? 'border-l-gray-300'} px-4 py-3.5 transition ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}
+                                      >
+                                        <div className="flex flex-col gap-2.5">
+                                          {/* Linha 1: criança + status com a trilha de etapas */}
+                                          <div className="flex flex-wrap items-start justify-between gap-3">
+                                            <div className="flex items-center gap-3 min-w-0">
                                               <button
                                                 className="p-1 rounded hover:bg-gray-100"
                                                 onClick={() => toggleOne(s.id)}
+                                                title={checked ? 'Desmarcar' : 'Selecionar'}
                                               >
                                                 {checked ? (
                                                   <CheckSquare className="w-5 h-5 text-emerald-600" />
@@ -1439,106 +1532,57 @@ export default function AdminSponsorshipsPage() {
                                                   <Square className="w-5 h-5 text-gray-400" />
                                                 )}
                                               </button>
-
-                                              <div className="p-2 bg-pink-100 rounded-lg">
-                                                <User className="w-4 h-4 text-pink-600" />
-                                              </div>
-                                              <div>
-                                                <div className="text-sm font-semibold text-gray-900">
+                                              <ChildAvatar name={s.child?.name} />
+                                              <div className="min-w-0">
+                                                <a href={s.child ? `/admin/children/${s.child.id}` : undefined} className="text-sm font-semibold text-gray-900 hover:text-blue-700 truncate block">
                                                   {s.child?.name || '—'}
-                                                </div>
-                                                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
-                                                  <span>ID: #{s.child?.publicId ?? '—'}</span>
-                                                  {s.campaign?.name && (
-                                                    <span className="inline-flex items-center gap-1">
-                                                      <ExternalLink className="w-3.5 h-3.5 text-gray-400" />
-                                                      {s.campaign.name}
-                                                      {s.campaign.year ? ` (${s.campaign.year})` : ''}
-                                                    </span>
-                                                  )}
+                                                </a>
+                                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+                                                  <span className="font-mono">#{s.child?.publicId ?? '—'}</span>
+                                                  {s.campaign?.name && <span>{s.campaign.name}{s.campaign.year ? ` (${s.campaign.year})` : ''}</span>}
+                                                  <span title={`Criado em ${fmtDateBR(s.createdAt)}`}>atualizado {fmtDateBR(s.updatedAt)}</span>
                                                 </div>
                                               </div>
                                             </div>
 
-                                            <div className="flex items-center gap-3">
-                                              <MethodBadge method={s.method ?? null} />
-                                              <StatusBadge status={s.status} />
+                                            <div className="flex flex-col items-end gap-1.5 w-48 shrink-0">
+                                              <StatusBadge status={s.status} size="md" />
+                                              <StatusSteps status={s.status} className="w-full" />
                                             </div>
                                           </div>
 
-                                          {/* Linha 2: Ponto de coleta + ações */}
-                                          <div className="flex flex-wrap items-center justify-between gap-3">
-                                            <div className="flex items-center gap-2 text-xs text-gray-700">
+                                          {/* Linha 2: método/ponto de coleta + ações */}
+                                          <div className="flex flex-wrap items-center justify-between gap-2 pl-11">
+                                            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-700">
+                                              <MethodBadge method={s.method ?? null} />
                                               {s.method === 'GIFT' && cp && (
-                                                <>
-                                                  <MapPin className="w-4 h-4 text-gray-500" />
-                                                  <span>{cpLabel(s)}</span>
-                                                </>
+                                                <span className="inline-flex items-center gap-1">
+                                                  <MapPin className="w-3.5 h-3.5 text-gray-500" />
+                                                  {cpLabel(s)}
+                                                </span>
                                               )}
                                             </div>
 
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              {/* PDF individual */}
-                                              <button
-                                                onClick={() =>
-                                                  openExportModal(
-                                                    [s],
-                                                    `${s.child?.name || 'crianca'}`,
-                                                    group.sponsor?.id
-                                                  )
-                                                }
-                                                className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                                              >
-                                                <FileText className="w-4 h-4" /> PDF
-                                              </button>
-
-                                              <button
-                                                onClick={() => openChild(s.child!.id)}
-                                                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                                              >
-                                                <Eye className="w-4 h-4" /> Detalhes
-                                              </button>
-                                              <button
-                                                onClick={() => openChildModelFromRow(s.child)}
-                                                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                                              >
-                                                Model
-                                              </button>
-                                              <button
-                                                onClick={() => beginTransfer([s.id])}
-                                                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                                              >
-                                                <ArrowRightLeft className="w-4 h-4" /> Transferir
-                                              </button>
-                                              <select
-                                                className="px-3 py-1.5 text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg appearance-none"
-                                                value={s.status}
-                                                onChange={(e) =>
-                                                  changeStatus(s.id, e.target.value as SponsorshipStatus)
-                                                }
-                                              >
-                                                {(
-                                                  [
-                                                    'PENDING',
-                                                    'IN_PROGRESS',
-                                                    'IN_PURCHASE',
-                                                    'PACKED',
-                                                    'BOXED',
-                                                    'AWAITING_DELIVERY',
-                                                    'COMPLETED',
-                                                    'ENDED',
-                                                    'CANCELLED',
-                                                  ] as SponsorshipStatus[]
-                                                ).map((st) => (
-                                                  <option key={st} value={st}>{STATUS_PT[st]}</option>
-                                                ))}
-                                              </select>
-                                              <button
-                                                onClick={() => del(s.id)}
-                                                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200"
-                                              >
-                                                <Trash2 className="w-4 h-4" /> Excluir
-                                              </button>
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                              <NextStepButton status={s.status} onClick={(next) => changeStatus(s.id, next)} />
+                                              <StatusPicker value={s.status} onChange={(next) => changeStatus(s.id, next)} />
+                                              <IconBtn title="Transferir para outro padrinho" onClick={() => beginTransfer([s.id])} className="text-emerald-700 hover:bg-emerald-50">
+                                                <ArrowRightLeft className="w-4 h-4" />
+                                              </IconBtn>
+                                              <IconBtn title="PDF desta criança" onClick={() => openExportModal([s], `${s.child?.name || 'crianca'}`, group.sponsor?.id)}>
+                                                <FileText className="w-4 h-4" />
+                                              </IconBtn>
+                                              {s.child && (
+                                                <IconBtn title="Detalhes da criança" onClick={() => openChild(s.child!.id)}>
+                                                  <Eye className="w-4 h-4" />
+                                                </IconBtn>
+                                              )}
+                                              <IconBtn title="Ver dados brutos (model)" onClick={() => openChildModelFromRow(s.child)}>
+                                                <Code2 className="w-4 h-4" />
+                                              </IconBtn>
+                                              <IconBtn title="Excluir apadrinhamento" onClick={() => del(s.id)} className="text-red-600 hover:bg-red-50">
+                                                <Trash2 className="w-4 h-4" />
+                                              </IconBtn>
                                             </div>
                                           </div>
                                         </div>
