@@ -3,7 +3,7 @@
 
 import React from 'react';
 import { STATUS_PT, type SponsorshipStatus } from '@/lib/sponsorship-status';
-import { FLOW_STEPS, STATUS_STYLE } from './statusStyle';
+import { FLOW_STEPS, STATUS_STYLE, TOTAL_STEPS } from './statusStyle';
 
 /** Pílula do status: cor e ícone próprios de cada etapa */
 export default function StatusBadge({
@@ -31,7 +31,7 @@ export default function StatusBadge({
   );
 }
 
-/** Trilha das 7 etapas: mostra em que ponto do caminho até a entrega o apadrinhamento está */
+/** Trilha das 6 etapas: mostra em que ponto do caminho até a entrega o apadrinhamento está */
 export function StatusSteps({ status, className }: { status: SponsorshipStatus; className?: string }) {
   const st = STATUS_STYLE[status];
   const current = st?.step ?? null;
@@ -39,9 +39,9 @@ export function StatusSteps({ status, className }: { status: SponsorshipStatus; 
     return <div className={`h-1.5 rounded-full ${st?.bar ?? 'bg-gray-300'} opacity-40 ${className || ''}`} title={st?.hint} />;
   }
   return (
-    <div className={`flex items-center gap-0.5 ${className || ''}`} title={`Etapa ${current} de ${FLOW_STEPS.length} · ${st.hint}`}>
-      {FLOW_STEPS.map((s, i) => (
-        <span key={s} className={`h-1.5 flex-1 rounded-full ${i < current ? st.bar : 'bg-gray-200'}`} />
+    <div className={`flex items-center gap-0.5 ${className || ''}`} title={`Etapa ${current} de ${TOTAL_STEPS} · ${st.hint}`}>
+      {Array.from({ length: TOTAL_STEPS }, (_, i) => (
+        <span key={i} className={`h-1.5 flex-1 rounded-full ${i < current ? st.bar : 'bg-gray-200'}`} />
       ))}
     </div>
   );

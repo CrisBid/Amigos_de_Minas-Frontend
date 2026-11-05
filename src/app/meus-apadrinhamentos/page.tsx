@@ -6,7 +6,7 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { AlertCircle, CalendarDays, ChevronDown, Download, Gift, Heart, Loader2, LogIn, MapPin, Package } from 'lucide-react';
 import { StatusSteps } from '@/components/Sponsorship/StatusBadge';
-import { FLOW_STEPS, STATUS_STYLE } from '@/components/Sponsorship/statusStyle';
+import { STATUS_STYLE, TOTAL_STEPS } from '@/components/Sponsorship/statusStyle';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
 import { exportSponsorshipsPdf } from '@/lib/pdf/exportSponsorshipsPdf';
 
@@ -83,6 +83,8 @@ type Sponsorship = {
 };
 
 const CLOSED: SponsorshipStatus[] = ['ENDED', 'CANCELLED'];
+// presente ainda não chegou ao galpão: o padrinho precisa levar ao ponto de coleta
+const GIFT_NOT_DELIVERED: SponsorshipStatus[] = ['PENDING', 'IN_PROGRESS', 'AWAITING_DELIVERY'];
 type View = 'all' | 'pending' | 'active' | 'done';
 const VIEW_FILTERS: { key: View; label: string }[] = [
   { key: 'all', label: 'Todos' },
@@ -473,9 +475,10 @@ function SponsorshipProgress({ sp }: { sp: Sponsorship }) {
     <div className="space-y-1.5">
       <StatusSteps status={sp.status} />
       <p className={`text-[11px] sm:text-xs font-medium ${st?.text ?? 'text-gray-600'}`}>
-        {st?.step ? `Etapa ${st.step} de ${FLOW_STEPS.length} · ` : ''}{st?.hint}
+        {st?.step ? `Etapa ${st.step} de ${TOTAL_STEPS} · ` : ''}{st?.hint}
       </p>
-      {sp.method === 'GIFT' && cp && sp.status !== 'COMPLETED' && !CLOSED.includes(sp.status) && (
+      {/* só até o presente chegar ao galpão; depois disso a equipe cuida do resto */}
+      {sp.method === 'GIFT' && cp && GIFT_NOT_DELIVERED.includes(sp.status) && (
         <p className="text-[11px] sm:text-xs text-gray-500 flex items-start gap-1" title={[cp.address, cp.district, cp.cityName].filter(Boolean).join(', ')}>
           <Package className="w-3.5 h-3.5 shrink-0 mt-px" />
           <span className="line-clamp-2">Entregar em <strong className="text-gray-700">{cp.name}</strong>{cp.cityName ? ` · ${cp.cityName}` : ''}</span>

@@ -42,7 +42,7 @@ import {
   type SponsorshipStatus,
 } from '@/lib/sponsorship-status';
 import StatusBadge, { StatusDistribution, StatusSteps } from '@/components/Sponsorship/StatusBadge';
-import { FLOW_STEPS, OFF_FLOW, STATUS_STYLE } from '@/components/Sponsorship/statusStyle';
+import { FLOW_STEPS, OFF_FLOW, STATUS_STYLE, nextStatus } from '@/components/Sponsorship/statusStyle';
 import { normalizeText } from '@/lib/sheetImport';
 
 /* ===================== */
@@ -92,11 +92,12 @@ type Sponsorship = {
   collectionPoint?: CollectionPointLite | null;
 };
 
+// ordem do fluxo: aguardando entrega (presente) e em compra (PIX) são a mesma etapa
 const ALL_STATUSES: SponsorshipStatus[] = [
-  'PENDING', 'IN_PROGRESS', 'IN_PURCHASE', 'PACKED', 'BOXED', 'AWAITING_DELIVERY', 'COMPLETED', 'ENDED', 'CANCELLED',
+  'PENDING', 'IN_PROGRESS', 'AWAITING_DELIVERY', 'IN_PURCHASE', 'PACKED', 'BOXED', 'COMPLETED', 'ENDED', 'CANCELLED',
 ];
-// "em andamento": aprovado e ainda no caminho até a entrega
-const IN_FLOW: SponsorshipStatus[] = ['IN_PROGRESS', 'IN_PURCHASE', 'PACKED', 'BOXED', 'AWAITING_DELIVERY'];
+// "em andamento": aprovado e ainda no caminho até a entrega (etapas 2 a 5)
+const IN_FLOW: SponsorshipStatus[] = ['IN_PROGRESS', 'AWAITING_DELIVERY', 'IN_PURCHASE', 'PACKED', 'BOXED'];
 
 /* ===================== */
 /* Utils                 */
@@ -181,17 +182,26 @@ function StatusPicker({ value, onChange }: { value: SponsorshipStatus; onChange:
     >
       {ALL_STATUSES.map((s) => (
         <option key={s} value={s} className="bg-white text-gray-900">
-          {STATUS_STYLE[s].step ? `${STATUS_STYLE[s].step}. ` : '× '}{STATUS_PT[s]}
+          {STATUS_STYLE[s].step ? `${STATUS_STYLE[s].step}. ` : '× '}{STATUS_PT[s]}{viaLabel(s)}
         </option>
       ))}
     </select>
   );
 }
-/** Atalho para a próxima etapa do fluxo (ex.: Pendente → Em andamento) */
-function NextStepButton({ status, onClick }: { status: SponsorshipStatus; onClick: (next: SponsorshipStatus) => void }) {
-  const step = STATUS_STYLE[status]?.step;
-  if (!step || step >= FLOW_STEPS.length) return null;
-  const next = FLOW_STEPS[step];
+/** " (presente)" / " (PIX)" nos dois caminhos da etapa 3 */
+function viaLabel(s: SponsorshipStatus) {
+  const via = STATUS_STYLE[s]?.via;
+  return via === 'GIFT' ? ' (presente)' : via === 'PIX' ? ' (PIX)' : '';
+}
+/**
+ * Atalho para a próxima etapa (ex.: Pendente → Em andamento). De "Em andamento" segue pelo
+ * método: presente no ponto → Aguardando entrega; PIX → Em compra.
+ */
+function NextStepButton({ status, method, onClick }: {
+  status: SponsorshipStatus; method?: SponsorshipMethod | null; onClick: (next: SponsorshipStatus) => void;
+}) {
+  const next = nextStatus(status, method);
+  if (!next) return null;
   const st = STATUS_STYLE[next];
   const Icon = st.icon;
   return (
@@ -919,7 +929,7 @@ export default function AdminSponsorshipsPage() {
           <span className={`inline-flex items-center justify-center rounded-xl ${compact ? 'w-8 h-8' : 'w-9 h-9'} ${st.solid}`}>
             <Icon className="w-4 h-4" />
           </span>
-          {st.step && <span className="text-[10px] font-bold text-gray-400">ETAPA {st.step}</span>}
+          {st.step && <span className="text-[10px] font-bold text-gray-400 text-right leading-tight">ETAPA {st.step}{st.via && <span className="block font-semibold">{st.via === 'GIFT' ? 'PRESENTE' : 'PIX'}</span>}</span>}
           {active && <CheckCircle2 className={`w-4 h-4 ${st.text}`} />}
         </div>
         <div className={`mt-2 font-bold leading-none ${compact ? 'text-xl' : 'text-2xl'} ${n ? st.text : 'text-gray-400'}`}>
@@ -981,7 +991,7 @@ export default function AdminSponsorshipsPage() {
               <button onClick={() => setStatusFilters([])} className={chipCls(statusFilters.length === 0)}>
                 Todos <span className={countCls(statusFilters.length === 0)}>{allRows.length}</span>
               </button>
-              <button onClick={() => setStatusFilters(IN_FLOW)} className={chipCls(sameStatuses(statusFilters, IN_FLOW))} title="Etapas 2 a 6">
+              <button onClick={() => setStatusFilters(IN_FLOW)} className={chipCls(sameStatuses(statusFilters, IN_FLOW))} title="Etapas 2 a 5: aprovado, aguardando entrega/em compra, embalado e encaixotado">
                 Em andamento <span className={countCls(sameStatuses(statusFilters, IN_FLOW))}>{sumOf(IN_FLOW)}</span>
               </button>
             </div>
@@ -1263,7 +1273,7 @@ export default function AdminSponsorshipsPage() {
                               <ArrowRightLeft className="w-4 h-4" />
                               Transferir
                             </button>
-                            <NextStepButton status={s.status} onClick={(next) => changeStatus(s.id, next)} />
+                            <NextStepButton status={s.status} method={s.method} onClick={(next) => changeStatus(s.id, next)} />
                             <StatusPicker value={s.status} onChange={(next) => changeStatus(s.id, next)} />
                             <button
                               onClick={() => del(s.id)}
@@ -1583,7 +1593,7 @@ export default function AdminSponsorshipsPage() {
                                             </div>
 
                                             <div className="flex flex-wrap items-center gap-1.5">
-                                              <NextStepButton status={s.status} onClick={(next) => changeStatus(s.id, next)} />
+                                              <NextStepButton status={s.status} method={s.method} onClick={(next) => changeStatus(s.id, next)} />
                                               <StatusPicker value={s.status} onChange={(next) => changeStatus(s.id, next)} />
                                               <IconBtn title="Transferir para outro padrinho" onClick={() => beginTransfer([s.id])} className="text-emerald-700 hover:bg-emerald-50">
                                                 <ArrowRightLeft className="w-4 h-4" />
