@@ -4,11 +4,12 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { AlertCircle, CalendarDays, ChevronDown, Download, Gift, Heart, Loader2, LogIn, MapPin, Package } from 'lucide-react';
+import { AlertCircle, CalendarDays, ChevronDown, Download, Gift, Heart, LogIn, MapPin, Package } from 'lucide-react';
 import { StatusSteps } from '@/components/Sponsorship/StatusBadge';
 import { STATUS_STYLE, TOTAL_STEPS } from '@/components/Sponsorship/statusStyle';
 import ChildCard from '@/components/Apadrinhamento/ChildCard';
-import { exportSponsorshipsPdf } from '@/lib/pdf/exportSponsorshipsPdf';
+import { sponsorshipHasPhoto, sponsorshipToPdfItem } from '@/lib/pdf/exportSponsorshipsPdf';
+import ExportPdfDialog from '@/components/Sponsorship/ExportPdfDialog';
 
 // 🔽 Core unificado de status (front-only)
 import {
@@ -112,11 +113,9 @@ export default function MeusApadrinhamentosPage() {
   const [campaignsReady, setCampaignsReady] = useState(false); // lista carregada e campanha ativa escolhida
   const [error, setError] = useState<string | null>(null);
 
-  const [exporting, setExporting] = useState(false);
-  const [progress, setProgress] = useState<{ current: number; total: number; phase: 'compose'|'pdf' } | null>(null);
 
-  const [cardsPerPage, setCardsPerPage] = useState<number>(1);
   const [view, setView] = useState<View>('all');
+  const [pdfOpen, setPdfOpen] = useState(false);
 
   // contagens por andamento (encerrados/cancelados ficam de fora)
   const counts = useMemo(() => {
@@ -197,61 +196,6 @@ export default function MeusApadrinhamentosPage() {
     })();
   }, [status, api, provider, accessToken, campaignFilter, campaignsReady, router]);
 
-  const handleExportPdf = async () => {
-    if (loading || shown.length === 0) return;
-
-    setExporting(true);
-    setProgress({ current: 0, total: shown.length, phase: 'compose' });
-
-    try {
-      const data = shown.map(sp => {
-        const ch: any = sp.child || {};
-        const processedUrl =
-          ch?.images?.[0]?.processedUrl ||
-          ch?.media?.find((m: any) => !!m.processedUrl)?.processedUrl ||
-          ch?.photoUrl || null;
-
-        const layoutUrl = ch?.images?.[0]?.layoutUrl || null;
-        const config    = ch?.images?.[0]?.Config || null;
-        const framedUrl =
-          ch?.images?.[0]?.framedUrl ||
-          ch?.media?.find((m: any) => !!m.framedUrl)?.framedUrl ||
-          null;
-
-        return {
-          sponsorshipId: sp.id,
-          status: sp.status, // já no enum correto
-          campaign: { id: sp.campaign.id, name: sp.campaign.name, year: sp.campaign.year ?? null },
-          child: {
-            id: ch.id,
-            name: ch.name,
-            publicId: typeof ch.publicId === 'number' ? ch.publicId : null,
-            age: ageOf(ch) ?? null,
-            city: ch.city?.name ?? ch.city ?? ch.cityName ?? null,
-            community: ch.community?.name ?? ch.communityName ?? null,
-            school: ch.school?.name ?? ch.school ?? ch.schoolLegacy ?? null,
-            wantedGift: ch.wantedGift ?? null,
-            processedUrl,
-            layoutUrl,
-            config,
-            framedUrl,
-            photoUrl: ch.photoUrl ?? null,
-          }
-        };
-      });
-
-      await exportSponsorshipsPdf(data, {
-        fileName: `meus-apadrinhamentos-${cardsPerPage}pp.pdf`,
-        perPage: cardsPerPage,
-        onProgress: setProgress,
-      });
-
-    } finally {
-      setExporting(false);
-      setProgress(null);
-    }
-  };
-
   const grouped = groupByCampaignThenCommunity(shown);
 
   return (
@@ -327,28 +271,14 @@ export default function MeusApadrinhamentosPage() {
         </div>
 
         <div className="flex gap-2 lg:ml-auto">
-          <select
-            value={cardsPerPage}
-            onChange={(e) => setCardsPerPage(Number(e.target.value))}
-            className="flex-1 lg:flex-none appearance-none bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#253243] hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-200"
-            title="Cartões por página no PDF"
-            aria-label="Cartões por página no PDF"
-          >
-            <option value={1}>1 por página</option>
-            <option value={2}>2 por página</option>
-            <option value={4}>4 por página (2×2)</option>
-            <option value={6}>6 por página (3×2)</option>
-            <option value={8}>8 por página (4×2)</option>
-            <option value={9}>9 por página (3×3)</option>
-          </select>
           <button
-            onClick={handleExportPdf}
-            disabled={loading || shown.length === 0 || exporting}
-            className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center justify-center gap-2 whitespace-nowrap"
+            onClick={() => setPdfOpen(true)}
+            disabled={loading || shown.length === 0}
+            className="w-full lg:w-auto px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center justify-center gap-2 whitespace-nowrap"
             title={view === 'all' ? 'Baixar os cartões em PDF' : 'Baixar os cartões do filtro atual em PDF'}
           >
-            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            {exporting ? 'Gerando…' : `Baixar PDF${shown.length ? ` (${shown.length})` : ''}`}
+            <Download className="w-4 h-4" />
+            {`Baixar PDF${shown.length ? ` (${shown.length})` : ''}`}
           </button>
         </div>
       </div>
@@ -441,26 +371,17 @@ export default function MeusApadrinhamentosPage() {
         </div>
       )}
 
-      {exporting && progress && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
-            <div className="flex items-center gap-3 mb-3">
-              <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
-              <h3 className="font-semibold text-gray-800">Gerando PDF</h3>
-            </div>
-            <p className="text-sm text-gray-600 mb-3">
-              {progress.phase === 'compose' ? 'Compondo imagens' : 'Montando documento'} — {progress.current} de {progress.total}
-            </p>
-            <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-emerald-600 transition-all"
-                style={{ width: `${Math.round((progress.current / Math.max(1, progress.total)) * 100)}%` }}
-              />
-            </div>
-            <p className="mt-2 text-xs text-gray-500">Não feche esta janela até finalizar o download.</p>
-          </div>
-        </div>
-      )}
+      <ExportPdfDialog
+        open={pdfOpen}
+        onClose={() => setPdfOpen(false)}
+        title={session?.user?.name || 'Meus apadrinhamentos'}
+        subtitle={`${shown.length} criança${shown.length === 1 ? '' : 's'}${campaignFilter ? ` · ${campaigns.find((c) => c.id === campaignFilter)?.name ?? ''}` : ''}`}
+        count={shown.length}
+        defaultSummary={shown.length > 1}
+        fileName={`meus-apadrinhamentos-${new Date().toISOString().slice(0, 10)}.pdf`}
+        // a API já manda só a imagem da campanha de cada apadrinhamento (ou só o layout, sem foto)
+        loadItems={async () => shown.map(sponsorshipToPdfItem)}
+      />
     </div>
   );
 }
@@ -540,7 +461,10 @@ function groupByCampaignThenCommunity(items: Sponsorship[]) {
     const communities = Array.from(comMap.entries())
       .map(([name, arr]) => ({
         name,
-        items: arr.sort((a, b) => a.child.name.localeCompare(b.child.name, 'pt-BR', { sensitivity: 'base' })),
+        // com foto primeiro; as sem foto (só o layout) vão para o fim, cada parte em ordem de nome
+        items: arr.sort((a, b) =>
+          Number(!sponsorshipHasPhoto(a)) - Number(!sponsorshipHasPhoto(b)) ||
+          a.child.name.localeCompare(b.child.name, 'pt-BR', { sensitivity: 'base' })),
       }))
       .sort((a, b) => {
         const aIsNone = a.name === 'Sem comunidade';

@@ -160,12 +160,13 @@ function roundRect(ctx: CanvasRenderingContext2D, x:number, y:number, w:number, 
   ctx.closePath();
 }
 
-type TextCtx = {
+export type TextCtx = {
   name: string; publicId: string; age: string;
   wantedGift: string; cityName: string; communityName: string;
 };
 
-async function composeFromUrls(
+/** Monta a arte (foto + layout + textos) como o site mostra; também usada no PDF */
+export async function composeFromUrls(
   photoUrl: string,
   layoutUrl: string,
   cfg: ComposeConfig,

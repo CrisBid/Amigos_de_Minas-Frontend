@@ -33,7 +33,8 @@ import {
 } from 'lucide-react';
 
 // >>> PDF exporter
-import { exportSponsorshipsPdf } from '@/lib/pdf/exportSponsorshipsPdf';
+import { sponsorshipToPdfItem } from '@/lib/pdf/exportSponsorshipsPdf';
+import ExportPdfDialog from '@/components/Sponsorship/ExportPdfDialog';
 import { campaignLabel, useAdminCampaign } from '@/components/Admin/CampaignFilter';
 
 // >>> Status unificado
@@ -127,6 +128,10 @@ function ImageThumb({ url, label }: { url: string; label: string }) {
       <div className="mt-1 text-[11px] text-gray-600 text-center">{label}</div>
     </a>
   );
+}
+/** "Maria da Silva" -> "maria-da-silva" (nome do arquivo) */
+function slugFile(s: string) {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'apadrinhamentos';
 }
 /** Mensagem de erro do backend ({ message }) ou o status HTTP */
 async function errorMessage(r: Response) {
@@ -290,71 +295,6 @@ function Modal({
 }
 
 /* ===================== */
-/* Helpers p/ export PDF */
-/* ===================== */
-type PdfItem = Parameters<typeof exportSponsorshipsPdf>[0][number];
-function pickComposeFromImages(images: any[] | undefined) {
-  if (!Array.isArray(images) || images.length === 0) return null;
-  const sorted = [...images].sort(
-    (a, b) =>
-      new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
-  );
-  const best = sorted.find(it => it.processedUrl) || sorted[0];
-  return {
-    processedUrl: best?.processedUrl || null,
-    layoutUrl: best?.layoutUrl || best?.framedUrl || null,
-    framedUrl: best?.framedUrl || null,
-    config: best?.Config || null,
-  };
-}
-async function enrichItemsForSponsor(items: Sponsorship[]): Promise<PdfItem[]> {
-  const byChildId: Record<string, any> = {};
-  const uniqueChildIds = Array.from(new Set(items.map(it => it.child?.id).filter(Boolean))) as string[];
-  const results = await Promise.allSettled(
-    uniqueChildIds.map(id => fetch(`/api/admin/children/${id}`, { credentials: 'include', cache: 'no-store' }))
-  );
-  for (let i = 0; i < results.length; i++) {
-    const id = uniqueChildIds[i];
-    const r = results[i];
-    if (r.status === 'fulfilled' && r.value.ok) {
-      byChildId[id] = await r.value.json();
-    }
-  }
-  const out: PdfItem[] = [];
-  for (const it of items) {
-    const c0 = it.child;
-    if (!c0) continue;
-    const full = byChildId[c0.id] ?? {};
-    const picked = pickComposeFromImages(full.images);
-    out.push({
-      sponsorshipId: it.id,
-      status: it.status,
-      campaign: {
-        id: it.campaign?.id ?? '',
-        name: it.campaign?.name ?? '',
-        year: it.campaign?.year ?? undefined,
-      },
-      child: {
-        id: c0.id,
-        name: full.name ?? c0.name ?? '—',
-        publicId: full.publicId ?? c0.publicId ?? null,
-        age: full.age ?? undefined,
-        city: full.city?.name ?? full.cityName ?? c0.city?.name ?? c0.cityName ?? null,
-        community: full.community?.name ?? undefined,
-        school: full.school?.name ?? full.schoolLegacy ?? undefined,
-        wantedGift: full.wantedGift ?? undefined,
-        processedUrl: picked?.processedUrl ?? full.photoUrl ?? null,
-        layoutUrl: picked?.layoutUrl ?? null,
-        framedUrl: picked?.framedUrl ?? null,
-        photoUrl: full.photoUrl ?? null,
-        config: picked?.config ?? null,
-      },
-    });
-  }
-  return out;
-}
-
-/* ===================== */
 /* Página principal      */
 /* ===================== */
 export default function AdminSponsorshipsPage() {
@@ -416,11 +356,6 @@ export default function AdminSponsorshipsPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportSponsor, setExportSponsor] = useState<{ id: string; name: string } | null>(null);
   const [exportItems, setExportItems] = useState<Sponsorship[]>([]);
-  const [exportBusy, setExportBusy] = useState(false);
-  const [exportProgress, setExportProgress] =
-    useState<{ current: number; total: number; phase: 'compose' | 'pdf' } | null>(null);
-  const [exportPerPage, setExportPerPage] = useState<number>(1);
-  const [exportTextScale, setExportTextScale] = useState<number>(1);
 
   // ===== Transferência
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
@@ -523,8 +458,6 @@ export default function AdminSponsorshipsPage() {
     setExportItems(items);
     setExportSponsor({ id: sponsorId ?? '', name: label });
     setExportOpen(true);
-    // reset de progresso a cada abertura
-    setExportProgress(null);
   }
 
   /* ===== Contagens por status ===== */
@@ -2021,110 +1954,27 @@ export default function AdminSponsorshipsPage() {
         </div>
       </Modal>
 
-      {/* Modal: Exportar PDF por padrinho */}
-      <Modal
+      {/* Exportar PDF (padrinho, cidade, comunidade, criança ou seleção) */}
+      <ExportPdfDialog
         open={exportOpen}
-        title={`Exportar PDF — ${exportSponsor?.name ?? ''}`}
-        onClose={() => {
-          if (exportBusy) return;
-          setExportOpen(false);
-          setExportProgress(null);
-          setExportSponsor(null);
-          setExportItems([]);
+        onClose={() => { setExportOpen(false); setExportSponsor(null); setExportItems([]); }}
+        title={exportSponsor?.name ?? ''}
+        count={exportItems.length}
+        defaultSummary={exportItems.length > 1}
+        fileName={`apadrinhamentos-${slugFile(exportSponsor?.name || 'padrinho')}.pdf`}
+        loadItems={async () => {
+          // dados com a imagem da campanha de cada apadrinhamento (sem foto nela: sai sem foto)
+          const r = await fetch('/api/admin/sponsorships/pdf-data', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ sponsorshipIds: exportItems.map((it) => it.id) }),
+          });
+          if (!r.ok) throw new Error(`Falha ao buscar os dados: ${await errorMessage(r)}`);
+          const rows: unknown[] = await r.json();
+          return rows.map(sponsorshipToPdfItem);
         }}
-      >
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Cartões por página</label>
-              <select
-                value={exportPerPage}
-                onChange={(e) => setExportPerPage(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-white"
-                disabled={exportBusy}
-              >
-                <option value={1}>1 por página</option>
-                <option value={2}>2 por página</option>
-                <option value={3}>3 por página</option>
-                <option value={4}>4 por página</option>
-                <option value={6}>6 por página</option>
-                <option value={8}>8 por página</option>
-                <option value={9}>9 por página</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Escala de texto</label>
-              <input
-                type="number"
-                step="0.05"
-                min={0.7}
-                max={1.3}
-                value={exportTextScale}
-                onChange={(e) => setExportTextScale(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-white"
-                disabled={exportBusy}
-              />
-              <div className="text-[11px] text-gray-500 mt-1">Ex.: 0.95 reduz 5% | 1.10 aumenta 10%</div>
-            </div>
-          </div>
-
-          {exportProgress ? (
-            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
-              {exportProgress.phase === 'compose' ? 'Compondo imagens' : 'Escrevendo PDF'}… {exportProgress.current}/{exportProgress.total}
-              <div className="mt-2 h-2 bg-blue-100 rounded">
-                <div
-                  className="h-2 bg-blue-600 rounded"
-                  style={{ width: `${(exportProgress.current / Math.max(1, exportProgress.total)) * 100}%` }}
-                />
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-gray-600">
-              Gera um PDF com todas as crianças apadrinhadas por este padrinho, mantendo a composição de imagem do site.
-            </p>
-          )}
-
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <button
-              onClick={() => {
-                if (exportBusy) return;
-                setExportOpen(false);
-                setExportProgress(null);
-                setExportSponsor(null);
-                setExportItems([]);
-              }}
-              className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
-              disabled={exportBusy}
-            >
-              Fechar
-            </button>
-
-            <button
-              onClick={async () => {
-                if (!exportItems.length || !exportSponsor) return;
-                setExportBusy(true);
-                setExportProgress({ current: 0, total: exportItems.length, phase: 'compose' });
-                try {
-                  const enriched = await enrichItemsForSponsor(exportItems);
-                  await exportSponsorshipsPdf(enriched, {
-                    perPage: exportPerPage,
-                    fileName: `apadrinhamentos-${(exportSponsor.name || 'padrinho').toLowerCase().replace(/\s+/g,'-')}.pdf`,
-                    onProgress: (p) => setExportProgress(p),
-                  });
-                } finally {
-                  setExportBusy(false);
-                  setExportProgress(null);
-                }
-              }}
-              className="px-4 py-2 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-              disabled={exportBusy}
-            >
-              {exportBusy ? 'Gerando…' : 'Gerar PDF'}
-            </button>
-          </div>
-        </div>
-      </Modal>
+      />
     </div>
   );
 }
