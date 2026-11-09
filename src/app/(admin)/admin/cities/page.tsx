@@ -158,10 +158,10 @@ export default function AdminCitiesPage() {
             <table className="w-full">
               <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
                 <tr>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">#</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Cidade</th>
-                  <th className="text-left px-6 py-4 text-sm font-semibold text-gray-900">Estado</th>
-                  <th className="text-right px-6 py-4 text-sm font-semibold text-gray-900">Ações</th>
+                  <th className="text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">#</th>
+                  <th className="text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">Cidade</th>
+                  <th className="text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">Estado</th>
+                  <th className="text-right px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -192,10 +192,10 @@ export default function AdminCitiesPage() {
                 
                 {rows.map((city) => (
                   <tr key={city.id} className="hover:bg-blue-50/50 transition-colors duration-150">
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 text-sm font-medium text-gray-900">
                       {city.publicId}
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4">
                       <div className="flex items-center gap-3">
                         <div className="p-2 bg-blue-100 rounded-lg">
                           <Building2 className="w-4 h-4 text-blue-600" />
@@ -203,7 +203,7 @@ export default function AdminCitiesPage() {
                         <span className="text-sm font-semibold text-gray-900">{city.name}</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4">
                       {city.state ? (
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">
                           <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
@@ -213,7 +213,7 @@ export default function AdminCitiesPage() {
                         <span className="text-sm text-gray-400">—</span>
                       )}
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4">
                       <div className="flex items-center justify-end gap-2">
                         <EditCityButton city={city} onUpdated={load} />
                         <DeleteCityButton city={city} onDeleted={load} />
@@ -394,9 +394,9 @@ function CityDialog({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg">
-        <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 rounded-t-3xl">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[60]">
+      <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-lg max-h-[92dvh] overflow-y-auto overscroll-contain">
+        <div className="sticky top-0 bg-white border-b border-gray-100 px-4 sm:px-6 py-3 sm:py-4 sm:rounded-t-3xl">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-2xl font-bold text-gray-900">{title}</h2>
@@ -411,7 +411,7 @@ function CityDialog({
           </div>
         </div>
 
-        <div className="px-6 py-6 space-y-6">
+        <div className="px-4 sm:px-6 py-5 sm:py-6 space-y-6">
           <div className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-semibold text-gray-700">ID Público (Opcional)</label>
@@ -449,7 +449,7 @@ function CityDialog({
           </div>
         </div>
 
-        <div className="sticky bottom-0 bg-white border-t border-gray-100 px-6 py-4 rounded-b-3xl">
+        <div className="sticky bottom-0 bg-white border-t border-gray-100 px-4 sm:px-6 py-3 sm:py-4 sm:rounded-b-3xl">
           <div className="flex justify-end gap-3">
             <button 
               className="px-6 py-3 text-gray-700 hover:bg-gray-100 rounded-xl font-semibold transition-all duration-200"

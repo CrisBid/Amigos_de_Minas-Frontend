@@ -198,10 +198,10 @@ export default function AdminCollectionPointsPage() {
 
 /* ===================== UI Miúdos ===================== */
 function Th({ children, className = '' }: { children: any; className?: string }) {
-  return <th className={cls('text-left px-6 py-4 text-sm font-semibold text-gray-900', className)}>{children}</th>
+  return <th className={cls('text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900', className)}>{children}</th>
 }
 function Td({ children, className = '' }: { children: any; className?: string }) {
-  return <td className={cls('px-6 py-4 text-sm align-top', className)}>{children}</td>
+  return <td className={cls('px-3 sm:px-6 py-3 sm:py-4 text-sm align-top', className)}>{children}</td>
 }
 function LoadingRow({ colSpan, label }: { colSpan: number; label: string }) {
   return (
@@ -506,8 +506,8 @@ function Modal({ title, subtitle, onClose, onConfirm, confirmText, children }: {
   title: string; subtitle?: string; onClose: () => void; onConfirm: () => void; confirmText: string; children: React.ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 z-50">
-      <div className="bg-white rounded-3xl shadow-2xl w-full sm:max-w-2xl max-h[92vh] sm:max-h-[92vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[60]">
+      <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-2xl max-h-[92dvh] flex flex-col">
         <div className="sticky top-0 bg-white border-b border-gray-100 px-4 sm:px-6 py-3 sm:py-4 rounded-t-3xl">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">

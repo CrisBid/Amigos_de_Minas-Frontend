@@ -43,7 +43,7 @@ export const STATUS_BADGE: Record<SponsorshipStatus, BadgeTone> = {
 
 // grupos úteis
 export const IN_PROGRESS_GROUP: SponsorshipStatus[] = [
-  'IN_PROGRESS', 'IN_PURCHASE', 'PACKED', 'BOXED', 'AWAITING_DELIVERY',
+  'IN_PROGRESS', 'AWAITING_DELIVERY', 'IN_PURCHASE', 'PACKED', 'BOXED',
 ];
 
 export const ACTIVE_STATUSES: SponsorshipStatus[] = [
@@ -52,9 +52,10 @@ export const ACTIVE_STATUSES: SponsorshipStatus[] = [
 
 export const CLOSED_STATUSES: SponsorshipStatus[] = ['ENDED', 'CANCELLED'];
 
-// ordem do fluxo (para ordenar/timeline)
+// ordem do fluxo (para ordenar/timeline):
+// pendente → em andamento → aguardando entrega (presente) ou em compra (PIX) → embalado → encaixotado → concluído
 export const LOGISTICS_FLOW: SponsorshipStatus[] = [
-  'PENDING','IN_PROGRESS','IN_PURCHASE','PACKED','BOXED','AWAITING_DELIVERY','COMPLETED','ENDED','CANCELLED'
+  'PENDING','IN_PROGRESS','AWAITING_DELIVERY','IN_PURCHASE','PACKED','BOXED','COMPLETED','ENDED','CANCELLED'
 ];
 
 export function isInProgress(s?: SponsorshipStatus | null): boolean {

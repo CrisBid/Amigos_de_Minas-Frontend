@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Gift, Loader2, ShieldCheck } from 'lucide-react';
+import { Cake, Gift, Loader2, MapPin, ShieldCheck } from 'lucide-react';
 import ComposedImage, { ComposeConfig } from '@/components/media/ComposedImage';
 import { pickComposeInputsFromImages } from '@/components/media/pickComposeInputs';
 
@@ -18,6 +18,7 @@ export default function ChildCard({
   child,
   onSponsor,
   sponsoring = false,
+  footer,
 }: {
   child: {
     id: string;
@@ -37,6 +38,8 @@ export default function ChildCard({
   };
   onSponsor?: () => void;
   sponsoring?: boolean;
+  /** substitui o botão "Apadrinhar" (ex.: acompanhamento em "Meus apadrinhamentos") */
+  footer?: React.ReactNode;
 }) {
   const [imgErr, setImgErr] = useState(false);
   const indisponivel = child.apadrinhado === true; // compat: vem pronto do backend
@@ -57,7 +60,7 @@ export default function ChildCard({
     : 'Indisponível';
 
   return (
-    <div className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition bg-white">
+    <div className="h-full flex flex-col border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition duration-200">
       <div className="aspect-[9/16] bg-gray-100 relative">
         {composeInputs ? (
           <ComposedImage
@@ -89,55 +92,57 @@ export default function ChildCard({
         )}
       </div>
 
-      <div className="p-4 space-y-2">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-[#253243]">
-            {child.nome} {typeof child.publicId !== 'undefined' ? `- ${child.publicId}` : ''}
+      <div className="p-2.5 sm:p-4 flex flex-col gap-1.5 sm:gap-2 flex-1">
+        {/* nome e ID; o selo fica embaixo para caber em cartões estreitos (2 colunas no celular) */}
+        <div className="min-w-0">
+          <h3 className="font-semibold text-[#253243] text-sm sm:text-base leading-snug line-clamp-2" title={child.nome}>
+            {child.nome}
           </h3>
-
-          {indisponivel ? (
-            child.status && child.status !== 'NONE' ? (
-              <StatusBadge status={child.status as SponsorshipStatus} />
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {child.publicId ? <span className="text-[11px] sm:text-xs font-mono text-gray-500">#{child.publicId}</span> : null}
+            {indisponivel ? (
+              child.status && child.status !== 'NONE' ? (
+                <StatusBadge status={child.status as SponsorshipStatus} />
+              ) : (
+                <span className="text-xs border px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border-amber-100">
+                  {fallbackBadgeText}
+                </span>
+              )
             ) : (
-              <span className="text-xs border px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border-amber-100">
-                {fallbackBadgeText}
+              <span className="text-[11px] sm:text-xs font-semibold border px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border-emerald-100">
+                Disponível
               </span>
-            )
-          ) : (
-            <span className="text-xs border px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border-emerald-100">
-              Disponível
-            </span>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-1 text-xs sm:text-sm text-gray-600">
+          {typeof child.idade === 'number' && (
+            <p className="flex items-center gap-1.5"><Cake className="w-3.5 h-3.5 text-gray-400 shrink-0" /> {ageText}</p>
+          )}
+          {metaLine && (
+            <p className="flex items-start gap-1.5" title={metaLine}>
+              <MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-0.5" /> <span className="line-clamp-2">{metaLine}</span>
+            </p>
+          )}
+          {(child.presente || child.categoria) && (
+            <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-100 px-2 py-1.5 text-amber-900" title={child.presente || child.categoria}>
+              <Gift className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" /> <span className="line-clamp-2 font-medium">{child.presente || child.categoria}</span>
+            </p>
           )}
         </div>
 
-        {typeof child.idade === 'number' && (
-          <p className="text-sm text-gray-600">Idade: {ageText}</p>
-        )}
-
-        {metaLine && <p className="text-sm text-gray-600">{metaLine}</p>}
-
-        {(child.presente || child.categoria) && (
-          <p className="text-sm text-gray-600">
-            Presente: {child.presente || child.categoria}
-          </p>
-        )}
-
-        {/* Se quiser mostrar a descrição:
-        {child.descricao && (
-          <p className="text-sm text-gray-500 line-clamp-2">{child.descricao}</p>
-        )} */}
-
-        <div className="pt-2 flex gap-2">
-          {!indisponivel ? (
+        <div className="pt-1 sm:pt-2 mt-auto">
+          {footer ? footer : !indisponivel ? (
             <button
               onClick={onSponsor}
               disabled={sponsoring}
-              className="text-sm px-3 py-1.5 bg-[#253243] text-white rounded-lg hover:bg-[#375A7F] inline-flex items-center gap-1 disabled:opacity-70"
+              className="w-full text-sm px-3 py-2 sm:py-2.5 bg-[#253243] text-white font-semibold rounded-lg hover:bg-[#375A7F] active:scale-[0.98] inline-flex items-center justify-center gap-1.5 disabled:opacity-70 transition"
             >
               {sponsoring ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Apadrinhando...</span>
+                  <span>Abrindo…</span>
                 </>
               ) : (
                 <>
@@ -149,7 +154,7 @@ export default function ChildCard({
           ) : (
             <button
               disabled
-              className="text-sm px-3 py-1.5 bg-gray-100 text-gray-500 rounded-lg inline-flex items-center gap-1 cursor-not-allowed"
+              className="w-full text-sm px-3 py-2 bg-gray-100 text-gray-500 rounded-lg inline-flex items-center justify-center gap-1.5 cursor-not-allowed"
               title="Indisponível nesta campanha"
             >
               <Gift className="w-4 h-4" /> Indisponível

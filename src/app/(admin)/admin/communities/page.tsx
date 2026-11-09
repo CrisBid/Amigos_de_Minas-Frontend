@@ -186,10 +186,10 @@ export default function AdminCommunitiesPage() {
 
 /* ===================== UI Miúdos ===================== */
 function Th({ children, className = '' }: { children: any; className?: string }) {
-  return <th className={`text-left px-6 py-4 text-sm font-semibold text-gray-900 ${className}`}>{children}</th>;
+  return <th className={`text-left px-3 sm:px-6 py-3 sm:py-4 text-sm font-semibold text-gray-900 ${className}`}>{children}</th>;
 }
 function Td({ children, className = '' }: { children: any; className?: string }) {
-  return <td className={`px-6 py-4 text-sm ${className}`}>{children}</td>;
+  return <td className={`px-3 sm:px-6 py-3 sm:py-4 text-sm ${className}`}>{children}</td>;
 }
 function LoadingRow({ colSpan, label }: { colSpan: number; label: string }) {
   return (
@@ -410,9 +410,9 @@ function Modal({ title, subtitle, onClose, onConfirm, confirmText, children }: {
   title: string; subtitle?: string; onClose: () => void; onConfirm: () => void; confirmText: string; children: React.ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg">
-        <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 rounded-t-3xl">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4 z-[60]">
+      <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-lg max-h-[92dvh] overflow-y-auto overscroll-contain">
+        <div className="sticky top-0 bg-white border-b border-gray-100 px-4 sm:px-6 py-3 sm:py-4 sm:rounded-t-3xl">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-2xl font-bold text-gray-900">{title}</h2>
@@ -424,7 +424,7 @@ function Modal({ title, subtitle, onClose, onConfirm, confirmText, children }: {
           </div>
         </div>
         <div className="px-6 py-6">{children}</div>
-        <div className="sticky bottom-0 bg-white border-t border-gray-100 px-6 py-4 rounded-b-3xl">
+        <div className="sticky bottom-0 bg-white border-t border-gray-100 px-4 sm:px-6 py-3 sm:py-4 sm:rounded-b-3xl">
           <div className="flex justify-end gap-3">
             <button className="px-6 py-3 text-gray-700 hover:bg-gray-100 rounded-xl font-semibold" onClick={onClose}>Cancelar</button>
             <button className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-fuchsia-600 hover:from-indigo-700 hover:to-fuchsia-700 text-white rounded-xl font-semibold shadow-lg transform hover:scale-105"

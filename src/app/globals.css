@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* rolagem lateral sem a barra visível (abas do painel no celular) */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 :root {
   --background: #ffffff;
   --foreground: #171717;

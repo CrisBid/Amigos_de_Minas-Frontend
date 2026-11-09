@@ -20,10 +20,21 @@ import {
   Square,
   ArrowRightLeft,
   FileText,
+  RefreshCw,
+  LayoutList,
+  ChevronDown,
+  ChevronRight,
+  CheckCircle2,
+  ArrowRight,
+  Code2,
+  Gift,
+  QrCode,
+  FilterX,
 } from 'lucide-react';
 
 // >>> PDF exporter
-import { exportSponsorshipsPdf } from '@/lib/pdf/exportSponsorshipsPdf';
+import { sponsorshipToPdfItem } from '@/lib/pdf/exportSponsorshipsPdf';
+import ExportPdfDialog from '@/components/Sponsorship/ExportPdfDialog';
 import { campaignLabel, useAdminCampaign } from '@/components/Admin/CampaignFilter';
 
 // >>> Status unificado
@@ -31,7 +42,9 @@ import {
   STATUS_PT,
   type SponsorshipStatus,
 } from '@/lib/sponsorship-status';
-import StatusBadge from '@/components/Sponsorship/StatusBadge';
+import StatusBadge, { StatusDistribution, StatusSteps } from '@/components/Sponsorship/StatusBadge';
+import { FLOW_STEPS, OFF_FLOW, STATUS_STYLE, nextStatus } from '@/components/Sponsorship/statusStyle';
+import { normalizeText } from '@/lib/sheetImport';
 
 /* ===================== */
 /* Tipos                 */
@@ -80,7 +93,12 @@ type Sponsorship = {
   collectionPoint?: CollectionPointLite | null;
 };
 
-type TabKey = Extract<SponsorshipStatus, 'PENDING' | 'IN_PROGRESS' | 'COMPLETED'>;
+// ordem do fluxo: aguardando entrega (presente) e em compra (PIX) são a mesma etapa
+const ALL_STATUSES: SponsorshipStatus[] = [
+  'PENDING', 'IN_PROGRESS', 'AWAITING_DELIVERY', 'IN_PURCHASE', 'PACKED', 'BOXED', 'COMPLETED', 'ENDED', 'CANCELLED',
+];
+// "em andamento": aprovado e ainda no caminho até a entrega (etapas 2 a 5)
+const IN_FLOW: SponsorshipStatus[] = ['IN_PROGRESS', 'AWAITING_DELIVERY', 'IN_PURCHASE', 'PACKED', 'BOXED'];
 
 /* ===================== */
 /* Utils                 */
@@ -109,6 +127,97 @@ function ImageThumb({ url, label }: { url: string; label: string }) {
       </div>
       <div className="mt-1 text-[11px] text-gray-600 text-center">{label}</div>
     </a>
+  );
+}
+/** "Maria da Silva" -> "maria-da-silva" (nome do arquivo) */
+function slugFile(s: string) {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'apadrinhamentos';
+}
+/** Mensagem de erro do backend ({ message }) ou o status HTTP */
+async function errorMessage(r: Response) {
+  const txt = await r.text().catch(() => '');
+  try {
+    const j = JSON.parse(txt);
+    const m = j?.message ?? j?.error;
+    if (m) return Array.isArray(m) ? m.join(' ') : String(m);
+  } catch {}
+  return txt.slice(0, 200) || `erro ${r.status}`;
+}
+function countByStatus(items: Sponsorship[]) {
+  const m = new Map<SponsorshipStatus, number>();
+  for (const it of items) m.set(it.status, (m.get(it.status) ?? 0) + 1);
+  return [...m.entries()];
+}
+/** "3 pendente · 2 concluído" com o ponto na cor de cada status */
+function StatusCounts({ items }: { items: Sponsorship[] }) {
+  return (
+    <div className="flex flex-wrap gap-x-2.5 gap-y-0.5">
+      {countByStatus(items).map(([st, n]) => (
+        <span key={st} className={`inline-flex items-center gap-1 text-[11px] font-semibold ${STATUS_STYLE[st].text}`} title={STATUS_PT[st]}>
+          <span className={`w-2 h-2 rounded-full ${STATUS_STYLE[st].bar}`} />{n} {STATUS_PT[st].toLowerCase()}
+        </span>
+      ))}
+    </div>
+  );
+}
+/** Iniciais da criança num círculo (cor fixa por nome, para reconhecer de relance) */
+function ChildAvatar({ name }: { name?: string | null }) {
+  const parts = (name || '?').trim().split(/\s+/);
+  const ini = (parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : parts[0].slice(0, 2)).toUpperCase();
+  const tones = ['bg-pink-100 text-pink-700', 'bg-sky-100 text-sky-700', 'bg-amber-100 text-amber-700', 'bg-violet-100 text-violet-700', 'bg-teal-100 text-teal-700', 'bg-orange-100 text-orange-700'];
+  const tone = tones[[...(name || '')].reduce((a, c) => a + c.charCodeAt(0), 0) % tones.length];
+  return <div className={`w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${tone}`}>{ini}</div>;
+}
+function IconBtn({ title, onClick, className = '', children }: { title: string; onClick: () => void; className?: string; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} title={title} aria-label={title} className={`p-2 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition ${className}`}>
+      {children}
+    </button>
+  );
+}
+/** Select de status pintado com a cor do status atual */
+function StatusPicker({ value, onChange }: { value: SponsorshipStatus; onChange: (s: SponsorshipStatus) => void }) {
+  const st = STATUS_STYLE[value];
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as SponsorshipStatus)}
+      title="Mudar status"
+      className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg ring-1 ring-inset cursor-pointer outline-none ${st?.soft ?? 'bg-gray-50 ring-gray-200'}`}
+    >
+      {ALL_STATUSES.map((s) => (
+        <option key={s} value={s} className="bg-white text-gray-900">
+          {STATUS_STYLE[s].step ? `${STATUS_STYLE[s].step}. ` : '× '}{STATUS_PT[s]}{viaLabel(s)}
+        </option>
+      ))}
+    </select>
+  );
+}
+/** " (presente)" / " (PIX)" nos dois caminhos da etapa 3 */
+function viaLabel(s: SponsorshipStatus) {
+  const via = STATUS_STYLE[s]?.via;
+  return via === 'GIFT' ? ' (presente)' : via === 'PIX' ? ' (PIX)' : '';
+}
+/**
+ * Atalho para a próxima etapa (ex.: Pendente → Em andamento). De "Em andamento" segue pelo
+ * método: presente no ponto → Aguardando entrega; PIX → Em compra.
+ */
+function NextStepButton({ status, method, onClick }: {
+  status: SponsorshipStatus; method?: SponsorshipMethod | null; onClick: (next: SponsorshipStatus) => void;
+}) {
+  const next = nextStatus(status, method);
+  if (!next) return null;
+  const st = STATUS_STYLE[next];
+  const Icon = st.icon;
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(next)}
+      title={`Avançar para "${STATUS_PT[next]}" — ${st.hint}`}
+      className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold ring-1 ring-inset transition hover:brightness-95 ${st.soft}`}
+    >
+      <ArrowRight className="w-3.5 h-3.5" /> <Icon className="w-3.5 h-3.5" /> {STATUS_PT[next]}
+    </button>
   );
 }
 function CopyButton({ text }: { text: string }) {
@@ -169,84 +278,20 @@ function Modal({
 }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+    // celular: abre de baixo (folha), com rolagem própria; computador: centralizado
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center sm:p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
-      <div className="relative z-[61] w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Fechar">
+      <div className="relative z-[61] w-full sm:max-w-2xl max-h-[92dvh] flex flex-col bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl border border-gray-100 overflow-hidden">
+        <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-100 shrink-0">
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900 min-w-0 truncate">{title}</h3>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 transition shrink-0" aria-label="Fechar">
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
-        <div className="p-6">{children}</div>
+        <div className="p-4 sm:p-6 overflow-y-auto overscroll-contain pb-[max(1rem,env(safe-area-inset-bottom))]">{children}</div>
       </div>
     </div>
   );
-}
-
-/* ===================== */
-/* Helpers p/ export PDF */
-/* ===================== */
-type PdfItem = Parameters<typeof exportSponsorshipsPdf>[0][number];
-function pickComposeFromImages(images: any[] | undefined) {
-  if (!Array.isArray(images) || images.length === 0) return null;
-  const sorted = [...images].sort(
-    (a, b) =>
-      new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
-  );
-  const best = sorted.find(it => it.processedUrl) || sorted[0];
-  return {
-    processedUrl: best?.processedUrl || null,
-    layoutUrl: best?.layoutUrl || best?.framedUrl || null,
-    framedUrl: best?.framedUrl || null,
-    config: best?.Config || null,
-  };
-}
-async function enrichItemsForSponsor(items: Sponsorship[]): Promise<PdfItem[]> {
-  const byChildId: Record<string, any> = {};
-  const uniqueChildIds = Array.from(new Set(items.map(it => it.child?.id).filter(Boolean))) as string[];
-  const results = await Promise.allSettled(
-    uniqueChildIds.map(id => fetch(`/api/admin/children/${id}`, { credentials: 'include', cache: 'no-store' }))
-  );
-  for (let i = 0; i < results.length; i++) {
-    const id = uniqueChildIds[i];
-    const r = results[i];
-    if (r.status === 'fulfilled' && r.value.ok) {
-      byChildId[id] = await r.value.json();
-    }
-  }
-  const out: PdfItem[] = [];
-  for (const it of items) {
-    const c0 = it.child;
-    if (!c0) continue;
-    const full = byChildId[c0.id] ?? {};
-    const picked = pickComposeFromImages(full.images);
-    out.push({
-      sponsorshipId: it.id,
-      status: it.status,
-      campaign: {
-        id: it.campaign?.id ?? '',
-        name: it.campaign?.name ?? '',
-        year: it.campaign?.year ?? undefined,
-      },
-      child: {
-        id: c0.id,
-        name: full.name ?? c0.name ?? '—',
-        publicId: full.publicId ?? c0.publicId ?? null,
-        age: full.age ?? undefined,
-        city: full.city?.name ?? full.cityName ?? c0.city?.name ?? c0.cityName ?? null,
-        community: full.community?.name ?? undefined,
-        school: full.school?.name ?? full.schoolLegacy ?? undefined,
-        wantedGift: full.wantedGift ?? undefined,
-        processedUrl: picked?.processedUrl ?? full.photoUrl ?? null,
-        layoutUrl: picked?.layoutUrl ?? null,
-        framedUrl: picked?.framedUrl ?? null,
-        photoUrl: full.photoUrl ?? null,
-        config: picked?.config ?? null,
-      },
-    });
-  }
-  return out;
 }
 
 /* ===================== */
@@ -254,21 +299,18 @@ async function enrichItemsForSponsor(items: Sponsorship[]): Promise<PdfItem[]> {
 /* ===================== */
 export default function AdminSponsorshipsPage() {
   // filtros
+  const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
+  // busca é feita aqui na tela: espera o usuário parar de digitar
+  useEffect(() => {
+    const t = setTimeout(() => setQ(qInput), 250);
+    return () => clearTimeout(t);
+  }, [qInput]);
   // campanha: começa com a única ativa (se houver) e é lembrada entre as telas do admin
   const { campaigns, campaignId, setCampaignId, ready: campaignReady } = useAdminCampaign();
-  const [activeTab, setActiveTab] = useState<TabKey>('PENDING');
 
-  // NOVO: filtros extras por mais status
-  const EXTRA_STATUS: SponsorshipStatus[] = [
-    'IN_PURCHASE',
-    'PACKED',
-    'BOXED',
-    'AWAITING_DELIVERY',
-    'ENDED',
-    'CANCELLED',
-  ];
-  const [statusFilters, setStatusFilters] = useState<SponsorshipStatus[]>([]); // se não-vazio, sobrepõe aba
+  // status: vazio = todos; vários podem ser marcados juntos
+  const [statusFilters, setStatusFilters] = useState<SponsorshipStatus[]>(['PENDING']);
 
   const METHOD_OPTIONS = ['PIX', 'GIFT'] as const;
   type MethodOption = (typeof METHOD_OPTIONS)[number];
@@ -314,11 +356,6 @@ export default function AdminSponsorshipsPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportSponsor, setExportSponsor] = useState<{ id: string; name: string } | null>(null);
   const [exportItems, setExportItems] = useState<Sponsorship[]>([]);
-  const [exportBusy, setExportBusy] = useState(false);
-  const [exportProgress, setExportProgress] =
-    useState<{ current: number; total: number; phase: 'compose' | 'pdf' } | null>(null);
-  const [exportPerPage, setExportPerPage] = useState<number>(1);
-  const [exportTextScale, setExportTextScale] = useState<number>(1);
 
   // ===== Transferência
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
@@ -328,6 +365,36 @@ export default function AdminSponsorshipsPage() {
   const [destQuery, setDestQuery] = useState('');
   const [destResults, setDestResults] = useState<SponsorLite[]>([]);
   const [destSponsor, setDestSponsor] = useState<SponsorLite | null>(null);
+
+  // ===== Exclusão de todos os apadrinhamentos de um padrinho
+  const [deleteSponsor, setDeleteSponsor] = useState<{
+    name: string;
+    email: string | null;
+    visible: Sponsorship[]; // os que aparecem na aba/filtro atual
+    all: Sponsorship[]; // todos do padrinho na campanha selecionada
+  } | null>(null);
+  const [deleteScope, setDeleteScope] = useState<'visible' | 'all'>('all');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  // padrinhos abertos na visão agrupada (sem escolha: abre se forem poucos)
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const [groupsDefaultOpen, setGroupsDefaultOpen] = useState<boolean | null>(null);
+  function setAllGroupsOpen(open: boolean) {
+    setOpenGroups({});
+    setGroupsDefaultOpen(open);
+  }
+
+  // seleção: status em lote
+  const [selStatus, setSelStatus] = useState<SponsorshipStatus>('IN_PROGRESS');
+  const [selBusy, setSelBusy] = useState(false);
+
+  // aviso rápido de sucesso
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   // Carrega pontos de coleta
   useEffect(() => {
@@ -350,14 +417,13 @@ export default function AdminSponsorshipsPage() {
     })();
   }, []);
 
-  // Busca SEM status; filtro por status é no cliente
+  // Busca tudo da campanha; status, método e texto são filtrados aqui na tela
   async function load() {
     setLoading(true);
     try {
       const url = new URL('/api/admin/sponsorships', window.location.origin);
       url.searchParams.set('pageSize', '100000');
       if (campaignId) url.searchParams.set('campaignId', campaignId);
-      if (q.trim()) url.searchParams.set('q', q.trim());
       const res = await fetch(url.toString(), { cache: 'no-store', credentials: 'include' });
       const ok = res.ok;
       const json = ok ? await res.json() : { items: [] as Sponsorship[] };
@@ -381,7 +447,7 @@ export default function AdminSponsorshipsPage() {
     if (!campaignReady) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, campaignId, campaignReady]);
+  }, [campaignId, campaignReady]);
 
   // ===== Export PDF helper (abre o modal padrão com as opções)
   function openExportModal(items: Sponsorship[], label: string, sponsorId?: string) {
@@ -392,8 +458,6 @@ export default function AdminSponsorshipsPage() {
     setExportItems(items);
     setExportSponsor({ id: sponsorId ?? '', name: label });
     setExportOpen(true);
-    // reset de progresso a cada abertura
-    setExportProgress(null);
   }
 
   /* ===== Contagens por status ===== */
@@ -424,17 +488,13 @@ export default function AdminSponsorshipsPage() {
 
   /* ===== Filtros no cliente ===== */
 
-  // [MODIFICAR] o bloco que calcula "filteredBySelection" e "visibleRows"
-
-  // (1) mantém como está a parte de status (aba x filtros extras)
+  // (1) status (nenhum marcado = todos)
   const filteredBySelection = useMemo(() => {
-    if (statusFilters.length > 0) {
-      return allRows.filter(r => statusFilters.includes(r.status));
-    }
-    return allRows.filter(r => r.status === activeTab);
-  }, [allRows, activeTab, statusFilters]);
+    if (statusFilters.length === 0) return allRows;
+    return allRows.filter(r => statusFilters.includes(r.status));
+  }, [allRows, statusFilters]);
 
-  // (2) [ADICIONAR] aplicar filtro por método sobre o resultado acima
+  // (2) método
   const filteredByMethod = useMemo(() => {
     if (!isFilteringMethods) return filteredBySelection;
     return filteredBySelection.filter(r => {
@@ -444,24 +504,19 @@ export default function AdminSponsorshipsPage() {
     });
   }, [filteredBySelection, isFilteringMethods, methodFilters]);
 
-  // (3) [MODIFICAR] visibleRows para usar "filteredByMethod" como base
+  // (3) texto: criança (nome ou ID), padrinho (nome ou e-mail) e ponto de coleta, sem diferença de acentos
   const visibleRows = useMemo(() => {
-    const qLower = q.trim().toLowerCase();
+    const raw = q.trim();
     const base = filteredByMethod;
-    if (!qLower) return base;
+    if (!raw) return base;
+    const needle = normalizeText(raw);
+    const idNeedle = raw.replace(/^#/, '');
+    const isId = /^\d+$/.test(idNeedle);
     return base.filter((r) => {
-      const childName = r.child?.name?.toLowerCase() ?? '';
-      const sponsorName = r.sponsor?.name?.toLowerCase() ?? '';
-      const sponsorEmail = r.sponsor?.email?.toLowerCase() ?? '';
-      const cpName =
-        (r.collectionPoint?.name ||
-          (r.collectionPointId ? cpMap.get(r.collectionPointId || '')?.name : ''))?.toLowerCase() ?? '';
-      return (
-        childName.includes(qLower) ||
-        sponsorName.includes(qLower) ||
-        sponsorEmail.includes(qLower) ||
-        cpName.includes(qLower)
-      );
+      if (isId && String(r.child?.publicId ?? '') === String(parseInt(idNeedle, 10))) return true;
+      const cpName = r.collectionPoint?.name || (r.collectionPointId ? cpMap.get(r.collectionPointId)?.name : '') || '';
+      const haystack = normalizeText([r.child?.name, r.sponsor?.name, cpName].join(' '));
+      return haystack.includes(needle) || (r.sponsor?.email ?? '').toLowerCase().includes(raw.toLowerCase());
     });
   }, [filteredByMethod, q, cpMap]);
 
@@ -470,9 +525,10 @@ export default function AdminSponsorshipsPage() {
 
   /* ===== Método ===== */
   function MethodBadge({ method }: { method?: SponsorshipMethod | null }) {
-    if (!method) return <Badge className="bg-gray-50 text-gray-600 border-gray-200">—</Badge>;
-    if (method === 'PIX') return <Badge className="bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200">PIX</Badge>;
-    return <Badge className="bg-sky-50 text-sky-700 border-sky-200">Presente no ponto (GIFT)</Badge>;
+    // neutro (contorno + ícone) para não competir com as cores dos status
+    if (!method) return <Badge className="bg-white text-gray-500 border-gray-200">—</Badge>;
+    if (method === 'PIX') return <Badge className="bg-white text-gray-700 border-gray-300 gap-1"><QrCode className="w-3 h-3" /> PIX</Badge>;
+    return <Badge className="bg-white text-gray-700 border-gray-300 gap-1"><Gift className="w-3 h-3" /> Presente no ponto</Badge>;
   }
 
   /* ===== Helpers de Ponto de Coleta ===== */
@@ -487,21 +543,73 @@ export default function AdminSponsorshipsPage() {
   }
 
   /* ===== Ações ===== */
-  async function changeStatus(id: string, newStatus: SponsorshipStatus) {
-    const r = await fetch(`/api/admin/sponsorships/${id}`, {
+  function patchStatus(id: string, status: SponsorshipStatus) {
+    return fetch(`/api/admin/sponsorships/${id}`, {
       method: 'PATCH',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ status: newStatus }),
+      body: JSON.stringify({ status }),
     });
-    if (!r.ok) { alert('Falha ao alterar status.'); return; }
-    await load();
+  }
+  // atualiza a linha na hora (sem recarregar tudo) e desfaz se o backend recusar
+  async function changeStatus(id: string, newStatus: SponsorshipStatus) {
+    const before = allRows.find(r => r.id === id)?.status;
+    setAllRows(prev => prev.map(r => (r.id === id ? { ...r, status: newStatus } : r)));
+    const r = await patchStatus(id, newStatus);
+    if (!r.ok) {
+      if (before) setAllRows(prev => prev.map(x => (x.id === id ? { ...x, status: before } : x)));
+      alert(`Falha ao alterar status: ${await errorMessage(r)}`);
+      return;
+    }
+    setToast(`Status alterado para "${STATUS_PT[newStatus]}".`);
+  }
+  /** Mesmo status para vários apadrinhamentos (padrinho inteiro ou seleção) */
+  async function changeStatusMany(ids: string[], newStatus: SponsorshipStatus) {
+    const results = await Promise.allSettled(ids.map(id => patchStatus(id, newStatus)));
+    const okIds = new Set(ids.filter((_, i) => results[i].status === 'fulfilled' && (results[i] as PromiseFulfilledResult<Response>).value.ok));
+    setAllRows(prev => prev.map(r => (okIds.has(r.id) ? { ...r, status: newStatus } : r)));
+    const failed = ids.length - okIds.size;
+    if (failed) alert(`Algumas atualizações falharam (${failed}/${ids.length}).`);
+    else setToast(`${okIds.size} apadrinhamento(s) agora em "${STATUS_PT[newStatus]}".`);
   }
   async function del(id: string) {
     if (!confirm('Excluir apadrinhamento? Esta ação não pode ser desfeita.')) return;
     const r = await fetch(`/api/admin/sponsorships/${id}`, { method: 'DELETE', credentials: 'include' });
-    if (!r.ok) return alert('Falha ao excluir.');
+    if (!r.ok) return alert(`Falha ao excluir: ${await errorMessage(r)}`);
     await load();
+  }
+
+  // ===== Excluir todos de um padrinho
+  function beginDeleteSponsor(group: { sponsorId: string; sponsor: SponsorLite | null; items: Sponsorship[] }) {
+    // todos do padrinho carregados (qualquer status), não só os da aba/filtro atual
+    const all = allRows.filter(r => (r.sponsor?.id ?? '__sem_padrinho__') === group.sponsorId);
+    setDeleteSponsor({
+      name: group.sponsor?.name || 'Sem padrinho',
+      email: group.sponsor?.email ?? null,
+      visible: group.items,
+      all,
+    });
+    setDeleteScope(all.length > group.items.length ? 'visible' : 'all');
+  }
+  async function applyDeleteSponsor() {
+    if (!deleteSponsor) return;
+    const items = deleteScope === 'all' ? deleteSponsor.all : deleteSponsor.visible;
+    if (!items.length) return;
+    setDeleteBusy(true);
+    try {
+      const r = await fetch('/api/admin/sponsorships/bulk-delete', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sponsorshipIds: items.map(it => it.id) }),
+      });
+      if (!r.ok) { alert(`Falha ao excluir: ${await errorMessage(r)}`); return; }
+      setDeleteSponsor(null);
+      setToast(`${items.length} apadrinhamento(s) excluído(s).`);
+      await load();
+    } finally {
+      setDeleteBusy(false);
+    }
   }
   function openChildModelFromRow(childObj: any) {
     setChildModelPayload(childObj ?? null);
@@ -669,6 +777,7 @@ export default function AdminSponsorshipsPage() {
         return;
       }
       setTransferOpen(false);
+      setToast(`${transferIds.length} apadrinhamento(s) transferido(s) para ${destSponsor.name}.`);
       setTransferIds([]);
       setSelectedIds({});
       await load();
@@ -677,248 +786,263 @@ export default function AdminSponsorshipsPage() {
     }
   }
 
-  const selectedCount = useMemo(() => Object.values(selectedIds).filter(Boolean).length, [selectedIds]);
+  const selectedRows = useMemo(() => allRows.filter(r => selectedIds[r.id]), [allRows, selectedIds]);
+  const selectedCount = selectedRows.length;
+
+  async function applySelectionStatus() {
+    if (!selectedCount) return;
+    if (!confirm(`Alterar para "${STATUS_PT[selStatus]}" os ${selectedCount} apadrinhamento(s) selecionado(s)?`)) return;
+    setSelBusy(true);
+    try { await changeStatusMany(selectedRows.map(r => r.id), selStatus); }
+    finally { setSelBusy(false); }
+  }
+  async function deleteSelection() {
+    if (!selectedCount) return;
+    if (!confirm(`Excluir definitivamente os ${selectedCount} apadrinhamento(s) selecionado(s)? Esta ação não pode ser desfeita.`)) return;
+    setSelBusy(true);
+    try {
+      const r = await fetch('/api/admin/sponsorships/bulk-delete', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sponsorshipIds: selectedRows.map(x => x.id) }),
+      });
+      if (!r.ok) { alert(`Falha ao excluir: ${await errorMessage(r)}`); return; }
+      setToast(`${selectedCount} apadrinhamento(s) excluído(s).`);
+      await load();
+    } finally {
+      setSelBusy(false);
+    }
+  }
+  function exportSelection() {
+    const sponsors = new Set(selectedRows.map(r => r.sponsor?.id ?? ''));
+    const only = sponsors.size === 1 ? selectedRows[0]?.sponsor : null;
+    openExportModal(selectedRows, only?.name ? `${only.name} - seleção` : 'Seleção', only?.id);
+  }
 
   /* ===== UI ===== */
-  function Tab({ id, label, count, active, onClick }: { id: TabKey; label: string; count?: number; active: boolean; onClick: () => void }) {
-    return (
-      <button
-        onClick={onClick}
-        className={`px-4 py-2 rounded-xl border text-sm font-medium transition
-          ${active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}
-        `}
-      >
-        {label} {Number.isFinite(count) ? `(${count})` : ''}
-      </button>
-    );
+  function toggleStatusFilter(s: SponsorshipStatus) {
+    setStatusFilters(prev => (prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]));
+  }
+  const sameStatuses = (a: SponsorshipStatus[], b: SponsorshipStatus[]) =>
+    a.length === b.length && a.every(s => b.includes(s));
+  const hasFilters = !!qInput.trim() || isFilteringMethods || !sameStatuses(statusFilters, ['PENDING']);
+  function clearFilters() {
+    setQInput(''); setQ(''); setMethodFilters([]); setStatusFilters(['PENDING']);
   }
 
-  // helpers botão de filtro extra
-  function toggleStatusFilter(s: SponsorshipStatus) {
-    setStatusFilters(prev => {
-      const has = prev.includes(s);
-      if (has) return prev.filter(x => x !== s);
-      return [...prev, s];
-    });
-  }
-  const isFilteringExtras = statusFilters.length > 0;
+  const sponsorsInView = useMemo(() => new Set(visibleRows.map(r => r.sponsor?.id ?? '')).size, [visibleRows]);
+  const sumOf = (list: SponsorshipStatus[]) => list.reduce((acc, s) => acc + (countsAll[s] ?? 0), 0);
+  const totalSponsors = useMemo(() => new Set(allRows.map(r => r.sponsor?.id)).size, [allRows]);
+  const inFlowTotal = allRows.length - sumOf(OFF_FLOW);
+  const deliveredPct = inFlowTotal ? Math.round((countsAll.COMPLETED / inFlowTotal) * 100) : 0;
+  const pct = (n: number) => (allRows.length ? Math.round((n / allRows.length) * 100) : 0);
+
+  const chipCls = (active: boolean) =>
+    `inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm transition ${
+      active ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+    }`;
+  const countCls = (active: boolean) => `text-xs px-1.5 rounded-full ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-600'}`;
+
+  /** Cartão de uma etapa: cor e ícone do status, quantidade e % do total; clique liga/desliga o filtro */
+  const StepTile = ({ s, compact }: { s: SponsorshipStatus; compact?: boolean }) => {
+    const st = STATUS_STYLE[s];
+    const Icon = st.icon;
+    const active = statusFilters.includes(s);
+    const n = countsAll[s] ?? 0;
+    return (
+      <button
+        onClick={() => toggleStatusFilter(s)}
+        title={`${st.hint} — clique para ${active ? 'tirar do' : 'incluir no'} filtro`}
+        className={`group relative w-full text-left rounded-2xl ring-1 transition ${compact ? 'p-3' : 'p-3.5'} ${
+          active ? `${st.soft} ring-2 shadow-md` : 'bg-white ring-gray-200 hover:ring-gray-300 hover:shadow-sm'
+        } ${n === 0 && !active ? 'opacity-60' : ''}`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <span className={`inline-flex items-center justify-center rounded-xl ${compact ? 'w-8 h-8' : 'w-9 h-9'} ${st.solid}`}>
+            <Icon className="w-4 h-4" />
+          </span>
+          {st.step && <span className="text-[10px] font-bold text-gray-400 text-right leading-tight">ETAPA {st.step}{st.via && <span className="block font-semibold">{st.via === 'GIFT' ? 'PRESENTE' : 'PIX'}</span>}</span>}
+          {active && <CheckCircle2 className={`w-4 h-4 ${st.text}`} />}
+        </div>
+        <div className={`mt-2 font-bold leading-none ${compact ? 'text-xl' : 'text-2xl'} ${n ? st.text : 'text-gray-400'}`}>
+          {n.toLocaleString('pt-BR')}
+          <span className="ml-1 text-xs font-medium text-gray-400">{pct(n)}%</span>
+        </div>
+        <div className="mt-1 text-sm font-semibold text-gray-900 truncate">{STATUS_PT[s]}</div>
+        {!compact && <div className="text-[11px] text-gray-500 truncate">{st.hint}</div>}
+      </button>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-28">
         {/* Header */}
-        <div className="mb-8">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">
-                Apadrinhamentos dos Amigos de Minas
-              </h1>
-              <p className="text-gray-600 text-lg">
-                Acompanhe e gerencie os vínculos entre padrinhos e crianças
-              </p>
+        <div className="mb-6 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Apadrinhamentos</h1>
+            <p className="text-gray-600 mt-1">Acompanhe e gerencie os vínculos entre padrinhos e crianças</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* resumo */}
+            <div className="flex items-center divide-x divide-gray-200 rounded-xl border border-gray-200 bg-white shadow-sm text-sm">
+              <div className="px-4 py-2">
+                <div className="text-[11px] uppercase tracking-wide text-gray-500">Apadrinhamentos</div>
+                <div className="font-bold text-gray-900 inline-flex items-center gap-1.5"><Heart className="w-4 h-4 text-pink-500" />{allRows.length.toLocaleString('pt-BR')}</div>
+              </div>
+              <div className="px-4 py-2">
+                <div className="text-[11px] uppercase tracking-wide text-gray-500">Padrinhos</div>
+                <div className="font-bold text-gray-900 inline-flex items-center gap-1.5"><Users className="w-4 h-4 text-blue-500" />{totalSponsors.toLocaleString('pt-BR')}</div>
+              </div>
+              <div className="px-4 py-2 min-w-[9rem]">
+                <div className="text-[11px] uppercase tracking-wide text-gray-500">Entregues</div>
+                <div className="font-bold text-emerald-700">{deliveredPct}%</div>
+                <div className="mt-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                  <div className="h-full bg-emerald-500" style={{ width: `${deliveredPct}%` }} />
+                </div>
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              {selectedCount > 0 && (
+            <button
+              onClick={load}
+              disabled={loading}
+              className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 shadow-sm"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
+            </button>
+          </div>
+        </div>
+
+        {/* Fluxo: cada etapa com sua cor e ícone; clicar filtra */}
+        <div className="bg-white/80 rounded-2xl p-4 border border-gray-100 shadow-sm mb-4 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-900">Caminho até a entrega</h2>
+              <p className="text-xs text-gray-500">Clique nas etapas para filtrar a lista (dá para marcar várias).</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={() => setStatusFilters([])} className={chipCls(statusFilters.length === 0)}>
+                Todos <span className={countCls(statusFilters.length === 0)}>{allRows.length}</span>
+              </button>
+              <button onClick={() => setStatusFilters(IN_FLOW)} className={chipCls(sameStatuses(statusFilters, IN_FLOW))} title="Etapas 2 a 5: aprovado, aguardando entrega/em compra, embalado e encaixotado">
+                Em andamento <span className={countCls(sameStatuses(statusFilters, IN_FLOW))}>{sumOf(IN_FLOW)}</span>
+              </button>
+            </div>
+          </div>
+
+          <StatusDistribution counts={countsAll} onSelect={(s) => setStatusFilters([s])} className="h-3" />
+
+          {/* celular: faixa que rola de lado (com encerrado/cancelado no fim); a partir do tablet, grade */}
+          <div className="sm:hidden -mx-4 px-4 flex gap-2 overflow-x-auto no-scrollbar snap-x pb-1">
+            {[...FLOW_STEPS, ...OFF_FLOW].map(s => (
+              <div key={s} className="snap-start shrink-0 w-32"><StepTile s={s} compact /></div>
+            ))}
+          </div>
+          <div className="hidden sm:grid grid-cols-4 lg:grid-cols-7 gap-2">
+            {FLOW_STEPS.map(s => <StepTile key={s} s={s} />)}
+          </div>
+
+          <div className="hidden sm:flex flex-wrap items-center gap-2 pt-1">
+            <span className="text-xs font-semibold text-gray-500">Fora do fluxo:</span>
+            {OFF_FLOW.map(s => (
+              <div key={s} className="w-44"><StepTile s={s} compact /></div>
+            ))}
+          </div>
+        </div>
+
+        {/* Filtros */}
+        <div className="bg-white/80 rounded-2xl p-4 border border-gray-100 shadow-sm mb-6 space-y-3">
+          <div className="flex flex-col lg:flex-row gap-3">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                className="w-full pl-9 pr-9 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="Buscar por criança (nome ou ID), padrinho (nome ou e-mail) ou ponto de coleta…"
+                value={qInput}
+                onChange={(e) => setQInput(e.target.value)}
+              />
+              {qInput && (
                 <button
-                  onClick={() => beginTransfer(Object.keys(selectedIds).filter(id => selectedIds[id]))}
-                  className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-sm"
-                  title="Transferir itens selecionados"
+                  onClick={() => { setQInput(''); setQ(''); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-gray-100 text-gray-500"
+                  aria-label="Limpar busca"
                 >
-                  <ArrowRightLeft className="w-4 h-4" />
-                  Transferir selecionados ({selectedCount})
+                  <X className="w-4 h-4" />
                 </button>
               )}
-              <div className="text-sm text-gray-500 px-4 py-2 bg-white/50 rounded-xl border border-white/20">
-                Funcionalidades extras em breve
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Stats (da aba/filtro atual) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Total (filtro atual)</p>
-                <p className="text-3xl font-bold text-gray-900">{visibleRows.length}</p>
-              </div>
-              <div className="p-3 bg-blue-100 rounded-xl">
-                <Heart className="w-6 h-6 text-blue-600" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Concluídos (filtro)</p>
-                <p className="text-3xl font-bold text-emerald-600">
-                  {visibleRows.filter(r => r.status === 'COMPLETED').length}
-                </p>
-              </div>
-              <div className="p-3 bg-emerald-100 rounded-xl">
-                <UserCheck className="w-6 h-6 text-emerald-600" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Pendentes (filtro)</p>
-                <p className="text-3xl font-bold text-amber-600">
-                  {visibleRows.filter(r => r.status === 'PENDING').length}
-                </p>
-              </div>
-              <div className="p-3 bg-amber-100 rounded-xl">
-                <Clock className="w-6 h-6 text-amber-600" />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg hover:shadow-xl transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Em processo/andamento (filtro)</p>
-                <p className="text-3xl font-bold text-cyan-600">
-                  {visibleRows.filter(r => r.status === 'IN_PROGRESS').length}
-                </p>
-              </div>
-              <div className="p-3 bg-cyan-100 rounded-xl">
-                <Users className="w-6 h-6 text-cyan-600" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Abas principais */}
-        <div className="mb-3">
-          <div className="flex flex-wrap gap-2">
-            <Tab id="PENDING" label="Pendentes" count={countsAll.PENDING} active={!isFilteringExtras && activeTab === 'PENDING'} onClick={() => setActiveTab('PENDING')} />
-            <Tab id="IN_PROGRESS" label="Em andamento" count={countsAll.IN_PROGRESS} active={!isFilteringExtras && activeTab === 'IN_PROGRESS'} onClick={() => setActiveTab('IN_PROGRESS')} />
-            <Tab id="COMPLETED" label="Concluídos" count={countsAll.COMPLETED} active={!isFilteringExtras && activeTab === 'COMPLETED'} onClick={() => setActiveTab('COMPLETED')} />
-          </div>
-          {isFilteringExtras && (
-            <div className="mt-2 text-xs text-gray-600">
-              * Filtro extra por status ativo; as abas ficam desabilitadas enquanto os filtros abaixo estiverem selecionados.
-            </div>
-          )}
-        </div>
-
-        {/* NOVO: Botões de filtro para mais status */}
-        <div className="mb-6 bg-white/70 backdrop-blur-sm rounded-2xl p-4 border border-white/20 shadow-lg">
-          <div className="flex flex-wrap items-center gap-2">
-            {EXTRA_STATUS.map((s) => {
-              const active = statusFilters.includes(s);
-              return (
-                <button
-                  key={s}
-                  onClick={() => toggleStatusFilter(s)}
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm transition ${
-                    active
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                  title={`Filtrar por ${STATUS_PT[s]}`}
-                >
-                  <StatusBadge status={s} />
-                  <span className="text-xs">{countsAll[s]}</span>
-                </button>
-              );
-            })}
-
-            {/* Botão para limpar filtros extras */}
-            <button
-              onClick={() => setStatusFilters([])}
-              className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
-              title="Limpar filtros de status"
-            >
-              Limpar filtros
-            </button>
-          </div>
-        </div>
-
-        {/* === Filtros por método === */}
-        <div className="mb-6 bg-white/70 backdrop-blur-sm rounded-2xl p-4 border border-white/20 shadow-lg">
-          <div className="flex flex-wrap items-center gap-2">
-            {METHOD_OPTIONS.map((m) => {
-              const active = methodFilters.includes(m);
-              const label = m === 'PIX' ? 'PIX' : 'Presente no ponto (GIFT)';
-              return (
-                <button
-                  key={m}
-                  onClick={() => toggleMethodFilter(m)}
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm transition ${
-                    active
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                  }`}
-                  title={`Filtrar por ${label}`}
-                >
-                  <span className="text-xs font-medium">{label}</span>
-                  <span className="text-[11px] px-1.5 py-0.5 rounded-full border bg-white/70 text-gray-700">
-                    {countsByMethod[m]}
-                  </span>
-                </button>
-              );
-            })}
-
-            {/* Limpar filtros de método */}
-            <button
-              onClick={() => setMethodFilters([])}
-              className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
-              title="Limpar filtros de método"
-            >
-              Limpar filtros de método
-            </button>
-          </div>
-
-          {(isFilteringMethods) && (
-            <div className="mt-2 text-xs text-gray-600">
-              * Filtro por método ativo; a busca e contagens acima consideram apenas os métodos selecionados.
-            </div>
-          )}
-        </div>
-
-        {/* Filtros de busca/campanha */}
-        <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 border border-white/20 shadow-lg mb-8">
-          <div className="flex flex-col lg:flex-row gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-              <input
-                className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200"
-                placeholder="Buscar por criança, padrinho ou ponto de coleta..."
-                value={q}
-                onChange={(e) => { setQ(e.target.value); }}
-              />
             </div>
 
-            <div className="relative lg:w-64">
-              <Calendar className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+            <div className="relative lg:w-72">
+              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <select
-                className="w-full pl-10 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all duration-200 appearance-none cursor-pointer"
+                className="w-full pl-9 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
                 value={campaignId}
-                onChange={(e) => { setCampaignId(e.target.value); }}
+                onChange={(e) => setCampaignId(e.target.value)}
               >
                 <option value="">Todas as campanhas</option>
                 {campaigns.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {campaignLabel(c)}
-                  </option>
+                  <option key={c.id} value={c.id}>{campaignLabel(c)}</option>
                 ))}
               </select>
             </div>
 
-            <div className="flex items-center gap-2 ml-auto">
-              <button
-                onClick={() => setViewMode(viewMode === 'agrupado' ? 'table' : 'agrupado')}
-                className="px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm text-gray-700"
-                title="Alternar visualização"
-              >
-                {viewMode === 'agrupado' ? 'Ver como Tabela' : 'Ver Agrupado'}
-              </button>
+            {/* visualização */}
+            <div className="inline-flex rounded-xl border border-gray-200 bg-white p-1 self-start lg:self-auto">
+              {([['agrupado', 'Por padrinho', <Users key="i" className="w-4 h-4" />], ['table', 'Tabela', <LayoutList key="i" className="w-4 h-4" />]] as const).map(([mode, label, icon]) => (
+                <button
+                  key={mode}
+                  onClick={() => setViewMode(mode)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                    viewMode === mode ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {icon} {label}
+                </button>
+              ))}
             </div>
+          </div>
+
+          {/* método */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-gray-500 w-16">Método</span>
+            <button onClick={() => setMethodFilters([])} className={chipCls(!isFilteringMethods)}>Todos</button>
+            {METHOD_OPTIONS.map(m => {
+              const active = methodFilters.includes(m);
+              return (
+                <button key={m} onClick={() => toggleMethodFilter(m)} className={chipCls(active)}>
+                  {m === 'PIX' ? <QrCode className="w-4 h-4" /> : <Gift className="w-4 h-4" />}
+                  {m === 'PIX' ? 'PIX' : 'Presente no ponto'} <span className={countCls(active)}>{countsByMethod[m]}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-3 border-t border-gray-100 text-sm text-gray-600">
+            <span>
+              {loading ? 'Carregando…' : (
+                <>
+                  <strong className="text-gray-900">{visibleRows.length.toLocaleString('pt-BR')}</strong> apadrinhamento{visibleRows.length === 1 ? '' : 's'}
+                  {' · '}<strong className="text-gray-900">{sponsorsInView}</strong> padrinho{sponsorsInView === 1 ? '' : 's'}
+                </>
+              )}
+            </span>
+            {/* status ativos no filtro */}
+            {statusFilters.map(s => (
+              <button key={s} onClick={() => toggleStatusFilter(s)} className="inline-flex items-center gap-0.5" title="Tirar do filtro">
+                <StatusBadge status={s} /><X className="w-3 h-3 text-gray-400" />
+              </button>
+            ))}
+            {hasFilters && (
+              <button onClick={clearFilters} className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-900">
+                <FilterX className="w-4 h-4" /> Limpar filtros
+              </button>
+            )}
+            {viewMode === 'agrupado' && groupedBySponsor.length > 1 && (
+              <span className="ml-auto inline-flex gap-3">
+                <button onClick={() => setAllGroupsOpen(true)} className="text-gray-500 hover:text-gray-900 underline">Expandir todos</button>
+                <button onClick={() => setAllGroupsOpen(false)} className="text-gray-500 hover:text-gray-900 underline">Recolher todos</button>
+              </span>
+            )}
           </div>
         </div>
 
@@ -969,7 +1093,7 @@ export default function AdminSponsorshipsPage() {
                     const cp = resolveCP(s);
                     const checked = isSelected(s.id);
                     return (
-                      <tr key={s.id} className="hover:bg-blue-50/50 transition-colors duration-150">
+                      <tr key={s.id} className={`hover:bg-blue-50/50 transition-colors duration-150 ${checked ? 'bg-emerald-50/60' : ''}`}>
                         <td className="px-6 py-4">
                           <button
                             className="p-1 rounded hover:bg-gray-100"
@@ -1065,8 +1189,11 @@ export default function AdminSponsorshipsPage() {
                           ) : <span className="text-sm text-gray-400">—</span>}
                         </td>
 
-                        <td className="px-6 py-4">
-                          <StatusBadge status={s.status} />
+                        <td className={`px-6 py-4 border-l-4 ${STATUS_STYLE[s.status]?.border ?? ''}`}>
+                          <div className="flex flex-col gap-1.5 w-44">
+                            <StatusBadge status={s.status} />
+                            <StatusSteps status={s.status} />
+                          </div>
                         </td>
 
                         <td className="px-6 py-4">
@@ -1079,28 +1206,8 @@ export default function AdminSponsorshipsPage() {
                               <ArrowRightLeft className="w-4 h-4" />
                               Transferir
                             </button>
-                            <select
-                              className="px-3 py-1.5 text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors duration-150 cursor-pointer appearance-none"
-                              value={s.status}
-                              onChange={(e) => changeStatus(s.id, e.target.value as SponsorshipStatus)}
-                              title="Alterar status"
-                            >
-                              {(
-                                [
-                                  'PENDING',
-                                  'IN_PROGRESS',
-                                  'IN_PURCHASE',
-                                  'PACKED',
-                                  'BOXED',
-                                  'AWAITING_DELIVERY',
-                                  'COMPLETED',
-                                  'ENDED',
-                                  'CANCELLED',
-                                ] as SponsorshipStatus[]
-                              ).map((st) => (
-                                <option key={st} value={st}>{STATUS_PT[st]}</option>
-                              ))}
-                            </select>
+                            <NextStepButton status={s.status} method={s.method} onClick={(next) => changeStatus(s.id, next)} />
+                            <StatusPicker value={s.status} onChange={(next) => changeStatus(s.id, next)} />
                             <button
                               onClick={() => del(s.id)}
                               className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200 transition-colors duration-150"
@@ -1140,24 +1247,16 @@ export default function AdminSponsorshipsPage() {
             {!loading && !noRows && groupedBySponsor.map(group => {
               const sid = group.sponsorId;
               const bulkBusy = !!bulkLoading[sid];
-              const bulkValue = bulkChoice[sid] ?? 'PENDING';
+              const bulkValue = bulkChoice[sid] ?? 'IN_PROGRESS';
+              const open = openGroups[sid] ?? groupsDefaultOpen ?? groupedBySponsor.length <= 5;
+              const groupIds = group.items.map(x => x.id);
+              const groupSelected = groupIds.length > 0 && groupIds.every(id => isSelected(id));
 
               async function applyBulk() {
-                if (!confirm(`Alterar o status de TODOS os ${group.total} apadrinhamentos deste padrinho?`)) return;
+                if (!confirm(`Alterar para "${STATUS_PT[bulkValue]}" os ${group.total} apadrinhamento(s) deste padrinho que aparecem no filtro?`)) return;
                 setBulkLoading(prev => ({ ...prev, [sid]: true }));
                 try {
-                  const ops = group.items.map(it =>
-                    fetch(`/api/admin/sponsorships/${it.id}`, {
-                      method: 'PATCH',
-                      credentials: 'include',
-                      headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ status: bulkValue }),
-                    })
-                  );
-                  const results = await Promise.allSettled(ops);
-                  const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !(r.value as any)?.ok)).length;
-                  if (failed > 0) alert(`Algumas atualizações falharam (${failed}/${group.total}).`);
-                  await load();
+                  await changeStatusMany(groupIds, bulkValue);
                 } finally {
                   setBulkLoading(prev => ({ ...prev, [sid]: false }));
                 }
@@ -1166,112 +1265,94 @@ export default function AdminSponsorshipsPage() {
               return (
                 <div
                   key={sid}
-                  className="bg-white/70 backdrop-blur-sm rounded-2xl border border-white/20 shadow-lg"
+                  className="bg-white/80 rounded-2xl border border-gray-100 shadow-sm overflow-hidden"
                 >
-                  {/* Cabeçalho do padrinho + ações */}
-                  <div className="flex flex-col gap-3 px-6 py-4 border-b border-gray-100 bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-blue-100 rounded-lg">
-                        <UserCheck className="w-5 h-5 text-blue-600" />
-                      </div>
-                      <div>
-                        <div className="text-base font-semibold text-gray-900">
-                          {group.sponsor?.name || 'Sem padrinho'}
+                  {/* Cabeçalho do padrinho (clique para abrir/fechar) + ações */}
+                  <div className={`flex flex-col gap-2.5 sm:gap-3 px-3 sm:px-5 py-3 sm:py-4 bg-gray-50 ${open ? 'border-b border-gray-100' : ''}`}>
+                    {/* linha 1: seleção + nome (sempre com espaço) + total */}
+                    <div className="flex items-center gap-2 sm:gap-3">
+                      <button
+                        className="p-1 rounded hover:bg-gray-100 shrink-0"
+                        onClick={() => selectMany(groupIds, !groupSelected)}
+                        title={groupSelected ? 'Desmarcar padrinho' : 'Selecionar todos deste padrinho'}
+                      >
+                        {groupSelected ? <CheckSquare className="w-5 h-5 text-emerald-600" /> : <Square className="w-5 h-5 text-gray-400" />}
+                      </button>
+                      <button
+                        onClick={() => setOpenGroups(prev => ({ ...prev, [sid]: !open }))}
+                        className="flex flex-1 min-w-0 items-center gap-2 sm:gap-3 text-left"
+                        aria-expanded={open}
+                      >
+                        {open ? <ChevronDown className="w-5 h-5 text-gray-500 shrink-0" /> : <ChevronRight className="w-5 h-5 text-gray-500 shrink-0" />}
+                        <div className="hidden sm:block p-2 bg-blue-100 rounded-lg shrink-0">
+                          <UserCheck className="w-5 h-5 text-blue-600" />
                         </div>
-                        {group.sponsor?.email && (
-                          <div className="text-xs text-gray-600">{group.sponsor.email}</div>
-                        )}
+                        <div className="min-w-0">
+                          <div className="text-sm sm:text-base font-semibold text-gray-900 truncate">
+                            {group.sponsor?.name || 'Sem padrinho'}
+                          </div>
+                          {group.sponsor?.email && (
+                            <div className="text-xs text-gray-600 truncate">{group.sponsor.email}</div>
+                          )}
+                        </div>
+                      </button>
+                      <Badge className="shrink-0 bg-white text-gray-700 border-gray-200">
+                        {group.total} <span className="hidden sm:inline">&nbsp;criança{group.total > 1 ? 's' : ''}</span>
+                      </Badge>
+                      {/* computador: resumo dos status ao lado do nome */}
+                      <div className="hidden md:flex flex-col gap-1 w-56 shrink-0">
+                        <StatusDistribution counts={Object.fromEntries(countByStatus(group.items))} />
+                        <StatusCounts items={group.items} />
                       </div>
                     </div>
 
-                    {/* Linha de ações */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge className="bg-gray-50 text-gray-700 border-gray-200">
-                        {group.total} apadrinhamento{group.total > 1 ? 's' : ''}
-                      </Badge>
+                    {/* celular: resumo dos status embaixo, na largura toda */}
+                    <div className="md:hidden flex flex-col gap-1 pl-8">
+                      <StatusDistribution counts={Object.fromEntries(countByStatus(group.items))} className="h-1.5" />
+                      <StatusCounts items={group.items} />
+                    </div>
 
-                      {/* === EXPORTAÇÕES === */}
+                    {/* Linha de ações */}
+                    {open && (
+                    <div className="flex flex-wrap items-center gap-2 sm:pl-10">
                       <button
                         onClick={() =>
                           openExportModal(group.items, group.sponsor?.name || 'Sem padrinho', group.sponsor?.id)
                         }
                         className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                        title="Exportar todos os apadrinhamentos deste padrinho em PDF"
+                        title="Exportar os apadrinhamentos deste padrinho em PDF"
                       >
                         <FileText className="w-4 h-4" /> PDF padrinho
                       </button>
 
-                      <button
-                        onClick={() => {
-                          const selectedItems = visibleRows.filter((s) => isSelected(s.id));
-                          if (selectedItems.length === 0) {
-                            alert('Nenhum apadrinhamento selecionado.');
-                            return;
-                          }
-                          openExportModal(
-                            selectedItems,
-                            `${group.sponsor?.name || 'Sem padrinho'} - seleção`,
-                            group.sponsor?.id
-                          );
-                        }}
-                        className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                        title="Exportar apenas os apadrinhamentos selecionados"
-                      >
-                        <FileText className="w-4 h-4" /> PDF seleção
-                      </button>
-
-                      {/* Bulk status padrinho */}
-                      <select
-                        className="px-3 py-1.5 text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg cursor-pointer appearance-none"
-                        value={bulkValue}
-                        onChange={(e) =>
-                          setBulkChoice((prev) => ({
-                            ...prev,
-                            [sid]: e.target.value as SponsorshipStatus,
-                          }))
-                        }
-                        disabled={bulkBusy}
-                        title="Selecionar novo status para todos"
-                      >
-                        {(
-                          [
-                            'PENDING',
-                            'IN_PROGRESS',
-                            'IN_PURCHASE',
-                            'PACKED',
-                            'BOXED',
-                            'AWAITING_DELIVERY',
-                            'COMPLETED',
-                            'ENDED',
-                            'CANCELLED',
-                          ] as SponsorshipStatus[]
-                        ).map((st) => (
-                          <option key={st} value={st}>{STATUS_PT[st]}</option>
-                        ))}
-                      </select>
+                      {/* status de todos do padrinho (no filtro atual) */}
+                      <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white overflow-hidden">
+                        <select
+                          className="px-2.5 py-1.5 text-xs bg-white border-r border-gray-200 cursor-pointer outline-none"
+                          value={bulkValue}
+                          onChange={(e) => setBulkChoice(prev => ({ ...prev, [sid]: e.target.value as SponsorshipStatus }))}
+                          disabled={bulkBusy}
+                          title="Novo status para todos deste padrinho"
+                        >
+                          {ALL_STATUSES.map(st => <option key={st} value={st}>{STATUS_PT[st]}</option>)}
+                        </select>
+                        <button
+                          onClick={applyBulk}
+                          disabled={bulkBusy}
+                          className="px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:text-gray-400"
+                        >
+                          {bulkBusy ? 'Aplicando…' : 'Aplicar a todos'}
+                        </button>
+                      </div>
 
                       <button
-                        onClick={applyBulk}
-                        disabled={bulkBusy}
-                        className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-                          bulkBusy
-                            ? 'bg-gray-100 text-gray-400 border-gray-200'
-                            : 'bg-white hover:bg-gray-50 text-gray-700 border-gray-200'
-                        }`}
-                      >
-                        {bulkBusy ? 'Aplicando…' : 'Aplicar a todos'}
-                      </button>
-
-                      {/* Transferência padrinho */}
-                      <button
-                        onClick={() => beginTransfer(group.items.map((x) => x.id))}
+                        onClick={() => beginTransfer(groupIds)}
                         className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                        title="Transferir todos os apadrinhamentos deste padrinho"
+                        title="Transferir os apadrinhamentos deste padrinho"
                       >
-                        <ArrowRightLeft className="w-4 h-4" /> Transferir padrinho
+                        <ArrowRightLeft className="w-4 h-4" /> Transferir
                       </button>
 
-                      {/* Detalhes */}
                       {group.sponsor?.id && (
                         <button
                           onClick={() => openSponsor(group.sponsor!.id)}
@@ -1280,18 +1361,28 @@ export default function AdminSponsorshipsPage() {
                           <Eye className="w-4 h-4" /> Detalhes
                         </button>
                       )}
+
+                      <button
+                        onClick={() => beginDeleteSponsor(group)}
+                        className="ml-auto inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                        title="Excluir apadrinhamentos deste padrinho"
+                      >
+                        <Trash2 className="w-4 h-4" /> Excluir todos
+                      </button>
                     </div>
+                    )}
                   </div>
 
                   {/* Subgrupos: Cidade ➜ Comunidade */}
-                  <div className="p-6 space-y-6">
+                  {open && (
+                  <div className="p-2 sm:p-6 space-y-3 sm:space-y-6">
                     {group.byCity.map((cityGroup) => (
                       <div
                         key={cityGroup.city}
                         className="rounded-2xl border border-gray-200 overflow-hidden"
                       >
                         {/* Cabeçalho da cidade */}
-                        <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 bg-gray-50 border-b border-gray-200">
+                        <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-5 py-2.5 sm:py-3 bg-gray-50 border-b border-gray-200">
                           <div className="flex items-center gap-2">
                             <MapPin className="w-4 h-4 text-indigo-600" />
                             <div className="text-sm font-semibold text-gray-900">
@@ -1318,7 +1409,7 @@ export default function AdminSponsorshipsPage() {
                         </div>
 
                         {/* Comunidades dentro da cidade */}
-                        <div className="p-4 space-y-4">
+                        <div className="p-2 sm:p-4 space-y-3 sm:space-y-4">
                           {cityGroup.byCommunity.map((comm) => {
                             const commIds = comm.items.map((x) => x.id);
                             const allSelected = commIds.every((id) => isSelected(id));
@@ -1328,7 +1419,7 @@ export default function AdminSponsorshipsPage() {
                                 className="rounded-xl border border-gray-200"
                               >
                                 {/* Cabeçalho comunidade */}
-                                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2 bg-gray-50 rounded-t-xl border-b border-gray-200">
+                                <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 px-3 sm:px-4 py-2 bg-gray-50 rounded-t-xl border-b border-gray-200">
                                   <div className="flex items-center gap-3">
                                     <button
                                       className="p-1 rounded hover:bg-gray-100"
@@ -1384,14 +1475,18 @@ export default function AdminSponsorshipsPage() {
                                     const cp = resolveCP(s);
                                     const checked = isSelected(s.id);
                                     return (
-                                      <li key={s.id} className="px-4 py-4 hover:bg-gray-50 transition">
-                                        <div className="flex flex-col gap-2">
-                                          {/* Linha 1: Criança + campanha */}
-                                          <div className="flex flex-wrap items-center justify-between gap-3">
-                                            <div className="flex items-center gap-3">
+                                      <li
+                                        key={s.id}
+                                        className={`border-l-4 ${STATUS_STYLE[s.status]?.border ?? 'border-l-gray-300'} px-3 sm:px-4 py-3 sm:py-3.5 transition ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}
+                                      >
+                                        <div className="flex flex-col gap-2.5">
+                                          {/* Linha 1: criança + status com a trilha de etapas */}
+                                          <div className="flex flex-wrap items-start justify-between gap-3">
+                                            <div className="flex items-center gap-3 min-w-0">
                                               <button
                                                 className="p-1 rounded hover:bg-gray-100"
                                                 onClick={() => toggleOne(s.id)}
+                                                title={checked ? 'Desmarcar' : 'Selecionar'}
                                               >
                                                 {checked ? (
                                                   <CheckSquare className="w-5 h-5 text-emerald-600" />
@@ -1399,106 +1494,57 @@ export default function AdminSponsorshipsPage() {
                                                   <Square className="w-5 h-5 text-gray-400" />
                                                 )}
                                               </button>
-
-                                              <div className="p-2 bg-pink-100 rounded-lg">
-                                                <User className="w-4 h-4 text-pink-600" />
-                                              </div>
-                                              <div>
-                                                <div className="text-sm font-semibold text-gray-900">
+                                              <ChildAvatar name={s.child?.name} />
+                                              <div className="min-w-0">
+                                                <a href={s.child ? `/admin/children/${s.child.id}` : undefined} className="text-sm font-semibold text-gray-900 hover:text-blue-700 truncate block">
                                                   {s.child?.name || '—'}
-                                                </div>
-                                                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
-                                                  <span>ID: #{s.child?.publicId ?? '—'}</span>
-                                                  {s.campaign?.name && (
-                                                    <span className="inline-flex items-center gap-1">
-                                                      <ExternalLink className="w-3.5 h-3.5 text-gray-400" />
-                                                      {s.campaign.name}
-                                                      {s.campaign.year ? ` (${s.campaign.year})` : ''}
-                                                    </span>
-                                                  )}
+                                                </a>
+                                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+                                                  <span className="font-mono">#{s.child?.publicId ?? '—'}</span>
+                                                  {s.campaign?.name && <span>{s.campaign.name}{s.campaign.year ? ` (${s.campaign.year})` : ''}</span>}
+                                                  <span title={`Criado em ${fmtDateBR(s.createdAt)}`}>atualizado {fmtDateBR(s.updatedAt)}</span>
                                                 </div>
                                               </div>
                                             </div>
 
-                                            <div className="flex items-center gap-3">
-                                              <MethodBadge method={s.method ?? null} />
-                                              <StatusBadge status={s.status} />
+                                            <div className="flex flex-col sm:items-end gap-1.5 w-full sm:w-48 sm:shrink-0 pl-11 sm:pl-0">
+                                              <StatusBadge status={s.status} size="md" />
+                                              <StatusSteps status={s.status} className="w-full" />
                                             </div>
                                           </div>
 
-                                          {/* Linha 2: Ponto de coleta + ações */}
-                                          <div className="flex flex-wrap items-center justify-between gap-3">
-                                            <div className="flex items-center gap-2 text-xs text-gray-700">
+                                          {/* Linha 2: método/ponto de coleta + ações */}
+                                          <div className="flex flex-wrap items-center justify-between gap-2 sm:pl-11">
+                                            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-700">
+                                              <MethodBadge method={s.method ?? null} />
                                               {s.method === 'GIFT' && cp && (
-                                                <>
-                                                  <MapPin className="w-4 h-4 text-gray-500" />
-                                                  <span>{cpLabel(s)}</span>
-                                                </>
+                                                <span className="inline-flex items-center gap-1">
+                                                  <MapPin className="w-3.5 h-3.5 text-gray-500" />
+                                                  {cpLabel(s)}
+                                                </span>
                                               )}
                                             </div>
 
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              {/* PDF individual */}
-                                              <button
-                                                onClick={() =>
-                                                  openExportModal(
-                                                    [s],
-                                                    `${s.child?.name || 'crianca'}`,
-                                                    group.sponsor?.id
-                                                  )
-                                                }
-                                                className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                                              >
-                                                <FileText className="w-4 h-4" /> PDF
-                                              </button>
-
-                                              <button
-                                                onClick={() => openChild(s.child!.id)}
-                                                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                                              >
-                                                <Eye className="w-4 h-4" /> Detalhes
-                                              </button>
-                                              <button
-                                                onClick={() => openChildModelFromRow(s.child)}
-                                                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                                              >
-                                                Model
-                                              </button>
-                                              <button
-                                                onClick={() => beginTransfer([s.id])}
-                                                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                                              >
-                                                <ArrowRightLeft className="w-4 h-4" /> Transferir
-                                              </button>
-                                              <select
-                                                className="px-3 py-1.5 text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg appearance-none"
-                                                value={s.status}
-                                                onChange={(e) =>
-                                                  changeStatus(s.id, e.target.value as SponsorshipStatus)
-                                                }
-                                              >
-                                                {(
-                                                  [
-                                                    'PENDING',
-                                                    'IN_PROGRESS',
-                                                    'IN_PURCHASE',
-                                                    'PACKED',
-                                                    'BOXED',
-                                                    'AWAITING_DELIVERY',
-                                                    'COMPLETED',
-                                                    'ENDED',
-                                                    'CANCELLED',
-                                                  ] as SponsorshipStatus[]
-                                                ).map((st) => (
-                                                  <option key={st} value={st}>{STATUS_PT[st]}</option>
-                                                ))}
-                                              </select>
-                                              <button
-                                                onClick={() => del(s.id)}
-                                                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200"
-                                              >
-                                                <Trash2 className="w-4 h-4" /> Excluir
-                                              </button>
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                              <NextStepButton status={s.status} method={s.method} onClick={(next) => changeStatus(s.id, next)} />
+                                              <StatusPicker value={s.status} onChange={(next) => changeStatus(s.id, next)} />
+                                              <IconBtn title="Transferir para outro padrinho" onClick={() => beginTransfer([s.id])} className="text-emerald-700 hover:bg-emerald-50">
+                                                <ArrowRightLeft className="w-4 h-4" />
+                                              </IconBtn>
+                                              <IconBtn title="PDF desta criança" onClick={() => openExportModal([s], `${s.child?.name || 'crianca'}`, group.sponsor?.id)}>
+                                                <FileText className="w-4 h-4" />
+                                              </IconBtn>
+                                              {s.child && (
+                                                <IconBtn title="Detalhes da criança" onClick={() => openChild(s.child!.id)}>
+                                                  <Eye className="w-4 h-4" />
+                                                </IconBtn>
+                                              )}
+                                              <IconBtn title="Ver dados brutos (model)" onClick={() => openChildModelFromRow(s.child)}>
+                                                <Code2 className="w-4 h-4" />
+                                              </IconBtn>
+                                              <IconBtn title="Excluir apadrinhamento" onClick={() => del(s.id)} className="text-red-600 hover:bg-red-50">
+                                                <Trash2 className="w-4 h-4" />
+                                              </IconBtn>
                                             </div>
                                           </div>
                                         </div>
@@ -1513,6 +1559,7 @@ export default function AdminSponsorshipsPage() {
                       </div>
                     ))}
                   </div>
+                  )}
                 </div>
               );
 
@@ -1521,6 +1568,59 @@ export default function AdminSponsorshipsPage() {
         )}
 
       </div>
+
+      {/* Barra da seleção */}
+      {selectedCount > 0 && (
+        <div className="fixed bottom-4 inset-x-0 z-50 px-4">
+          <div className="max-w-5xl mx-auto flex flex-wrap items-center gap-2 rounded-2xl bg-gray-900 text-white shadow-2xl px-4 py-3">
+            <span className="text-sm font-semibold mr-2">{selectedCount} selecionado(s)</span>
+            <div className="inline-flex items-center rounded-lg bg-white/10 overflow-hidden">
+              <select
+                value={selStatus}
+                onChange={(e) => setSelStatus(e.target.value as SponsorshipStatus)}
+                disabled={selBusy}
+                className="bg-transparent text-sm px-2.5 py-1.5 outline-none [&>option]:text-gray-900"
+                title="Novo status para a seleção"
+              >
+                {ALL_STATUSES.map(st => <option key={st} value={st}>{STATUS_PT[st]}</option>)}
+              </select>
+              <button onClick={applySelectionStatus} disabled={selBusy} className="px-3 py-1.5 text-sm hover:bg-white/10 border-l border-white/10 disabled:opacity-50">
+                Aplicar status
+              </button>
+            </div>
+            <button
+              onClick={() => beginTransfer(selectedRows.map(r => r.id))}
+              disabled={selBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+            >
+              <ArrowRightLeft className="w-4 h-4" /> Transferir
+            </button>
+            <button
+              onClick={exportSelection}
+              disabled={selBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+            >
+              <FileText className="w-4 h-4" /> PDF
+            </button>
+            <button
+              onClick={deleteSelection}
+              disabled={selBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-sm disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4" /> Excluir
+            </button>
+            <button onClick={() => setSelectedIds({})} disabled={selBusy} className="ml-auto inline-flex items-center gap-1 text-sm text-white/70 hover:text-white">
+              <X className="w-4 h-4" /> Limpar seleção
+            </button>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className={`fixed right-6 z-50 flex items-center gap-2 rounded-xl bg-gray-900 text-white text-sm px-4 py-3 shadow-lg ${selectedCount ? 'bottom-24' : 'bottom-6'}`}>
+          <CheckCircle2 className="w-4 h-4 text-emerald-400" /> {toast}
+        </div>
+      )}
 
       {/* Modal CRIANÇA */}
       <Modal
@@ -1709,6 +1809,85 @@ export default function AdminSponsorshipsPage() {
 
       {/* Modal: Transferir padrinho */}
       <Modal
+        open={!!deleteSponsor}
+        title="Excluir apadrinhamentos do padrinho"
+        onClose={() => { if (!deleteBusy) setDeleteSponsor(null); }}
+      >
+        {deleteSponsor && (() => {
+          const chosen = deleteScope === 'all' ? deleteSponsor.all : deleteSponsor.visible;
+          const campaignText = campaignId ? 'nesta campanha' : 'em todas as campanhas';
+          const options: { key: 'visible' | 'all'; label: string; items: Sponsorship[] }[] = [
+            { key: 'visible', label: 'Somente os que aparecem no filtro atual', items: deleteSponsor.visible },
+            { key: 'all', label: `Todos do padrinho ${campaignText} (qualquer status)`, items: deleteSponsor.all },
+          ];
+          return (
+            <div className="space-y-4">
+              <div>
+                <div className="text-base font-semibold text-gray-900">{deleteSponsor.name}</div>
+                {deleteSponsor.email && <div className="text-sm text-gray-600">{deleteSponsor.email}</div>}
+              </div>
+
+              <div className="space-y-2">
+                {options
+                  // os dois são iguais: mostra só uma opção
+                  .filter(o => o.key === 'all' || deleteSponsor.visible.length !== deleteSponsor.all.length)
+                  .map(o => (
+                    <label
+                      key={o.key}
+                      className={`block rounded-xl border px-4 py-3 cursor-pointer transition ${
+                        deleteScope === o.key ? 'border-red-400 bg-red-50' : 'border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="delete-scope"
+                          checked={deleteScope === o.key}
+                          onChange={() => setDeleteScope(o.key)}
+                          disabled={deleteBusy}
+                        />
+                        <span className="text-sm font-medium text-gray-900">{o.label}</span>
+                        <span className="ml-auto text-sm font-semibold text-gray-700">{o.items.length}</span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5 pl-6">
+                        {countByStatus(o.items).map(([st, n]) => (
+                          <span key={st} className="inline-flex items-center gap-1">
+                            <StatusBadge status={st} /> <span className="text-xs text-gray-600">{n}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </label>
+                  ))}
+              </div>
+
+              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                {chosen.length} apadrinhamento{chosen.length === 1 ? '' : 's'} será{chosen.length === 1 ? '' : 'ão'} excluído{chosen.length === 1 ? '' : 's'} definitivamente
+                e as crianças deixam de ter este padrinho. Esta ação não pode ser desfeita.
+              </p>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeleteSponsor(null)}
+                  disabled={deleteBusy}
+                  className="px-4 py-2 rounded-xl border border-gray-200 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={applyDeleteSponsor}
+                  disabled={deleteBusy || chosen.length === 0}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {deleteBusy ? 'Excluindo…' : `Excluir ${chosen.length}`}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      <Modal
         open={transferOpen}
         title={`Transferir ${transferIds.length} apadrinhamento${transferIds.length > 1 ? 's' : ''}`}
         onClose={() => { if (!transferBusy) setTransferOpen(false); }}
@@ -1775,110 +1954,27 @@ export default function AdminSponsorshipsPage() {
         </div>
       </Modal>
 
-      {/* Modal: Exportar PDF por padrinho */}
-      <Modal
+      {/* Exportar PDF (padrinho, cidade, comunidade, criança ou seleção) */}
+      <ExportPdfDialog
         open={exportOpen}
-        title={`Exportar PDF — ${exportSponsor?.name ?? ''}`}
-        onClose={() => {
-          if (exportBusy) return;
-          setExportOpen(false);
-          setExportProgress(null);
-          setExportSponsor(null);
-          setExportItems([]);
+        onClose={() => { setExportOpen(false); setExportSponsor(null); setExportItems([]); }}
+        title={exportSponsor?.name ?? ''}
+        count={exportItems.length}
+        defaultSummary={exportItems.length > 1}
+        fileName={`apadrinhamentos-${slugFile(exportSponsor?.name || 'padrinho')}.pdf`}
+        loadItems={async () => {
+          // dados com a imagem da campanha de cada apadrinhamento (sem foto nela: sai sem foto)
+          const r = await fetch('/api/admin/sponsorships/pdf-data', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ sponsorshipIds: exportItems.map((it) => it.id) }),
+          });
+          if (!r.ok) throw new Error(`Falha ao buscar os dados: ${await errorMessage(r)}`);
+          const rows: unknown[] = await r.json();
+          return rows.map(sponsorshipToPdfItem);
         }}
-      >
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Cartões por página</label>
-              <select
-                value={exportPerPage}
-                onChange={(e) => setExportPerPage(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-white"
-                disabled={exportBusy}
-              >
-                <option value={1}>1 por página</option>
-                <option value={2}>2 por página</option>
-                <option value={3}>3 por página</option>
-                <option value={4}>4 por página</option>
-                <option value={6}>6 por página</option>
-                <option value={8}>8 por página</option>
-                <option value={9}>9 por página</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Escala de texto</label>
-              <input
-                type="number"
-                step="0.05"
-                min={0.7}
-                max={1.3}
-                value={exportTextScale}
-                onChange={(e) => setExportTextScale(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-white"
-                disabled={exportBusy}
-              />
-              <div className="text-[11px] text-gray-500 mt-1">Ex.: 0.95 reduz 5% | 1.10 aumenta 10%</div>
-            </div>
-          </div>
-
-          {exportProgress ? (
-            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
-              {exportProgress.phase === 'compose' ? 'Compondo imagens' : 'Escrevendo PDF'}… {exportProgress.current}/{exportProgress.total}
-              <div className="mt-2 h-2 bg-blue-100 rounded">
-                <div
-                  className="h-2 bg-blue-600 rounded"
-                  style={{ width: `${(exportProgress.current / Math.max(1, exportProgress.total)) * 100}%` }}
-                />
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-gray-600">
-              Gera um PDF com todas as crianças apadrinhadas por este padrinho, mantendo a composição de imagem do site.
-            </p>
-          )}
-
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <button
-              onClick={() => {
-                if (exportBusy) return;
-                setExportOpen(false);
-                setExportProgress(null);
-                setExportSponsor(null);
-                setExportItems([]);
-              }}
-              className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
-              disabled={exportBusy}
-            >
-              Fechar
-            </button>
-
-            <button
-              onClick={async () => {
-                if (!exportItems.length || !exportSponsor) return;
-                setExportBusy(true);
-                setExportProgress({ current: 0, total: exportItems.length, phase: 'compose' });
-                try {
-                  const enriched = await enrichItemsForSponsor(exportItems);
-                  await exportSponsorshipsPdf(enriched, {
-                    perPage: exportPerPage,
-                    fileName: `apadrinhamentos-${(exportSponsor.name || 'padrinho').toLowerCase().replace(/\s+/g,'-')}.pdf`,
-                    onProgress: (p) => setExportProgress(p),
-                  });
-                } finally {
-                  setExportBusy(false);
-                  setExportProgress(null);
-                }
-              }}
-              className="px-4 py-2 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
-              disabled={exportBusy}
-            >
-              {exportBusy ? 'Gerando…' : 'Gerar PDF'}
-            </button>
-          </div>
-        </div>
-      </Modal>
+      />
     </div>
   );
 }

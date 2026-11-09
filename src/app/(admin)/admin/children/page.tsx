@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Search, Plus, Edit, Trash2, Upload, Heart, Baby, MapPin, Gift, ChevronLeft, ChevronRight, Camera, Loader2,
-  Clock, ScanFace, List, FilterX, School, GitCompareArrows,
+  Clock, ScanFace, List, FilterX, School, GitCompareArrows, ImagePlus,
 } from 'lucide-react';
 import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 import LocationFilter, { EMPTY_LOCATION, useLocationLabel, type LocationValue } from '@/components/Admin/LocationFilter';
@@ -12,6 +12,7 @@ import { apiPath } from '@/lib/api';
 import { composeConfigForFrame } from '@/components/media/composeConfig';
 import { STATUS_PT, type SponsorshipStatus } from '@/lib/sponsorship-status';
 import PhotoReview from './PhotoReview';
+import BulkPhotoUpload from './BulkPhotoUpload';
 
 type Sponsorship = { id: string; status: SponsorshipStatus };
 type ChildImageLite = { id: string | null; campaignId?: string | null; createdAt?: string; placeholder?: boolean };
@@ -38,7 +39,9 @@ type ChildListItem = {
   cityId?: string | null;
 };
 
-type Tab = 'list' | 'photos';
+type Tab = 'list' | 'photos' | 'upload';
+// valor de ?tab= na URL
+const TAB_PARAM: Partial<Record<Tab, string>> = { photos: 'fotos', upload: 'enviar-fotos' };
 
 const STATUS_STYLE: Partial<Record<SponsorshipStatus, { className: string; dot: string }>> = {
   PENDING: { className: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' },
@@ -82,7 +85,7 @@ function calcAge(birthDate?: string | null, fallback?: number | null) {
 export default function AdminChildrenPage() {
   const { campaigns, campaignId, setCampaignId, ready } = useAdminCampaign();
 
-  // aba e filtros (a aba fica na URL: ?tab=fotos)
+  // aba e filtros (a aba fica na URL: ?tab=fotos / ?tab=enviar-fotos)
   const [tab, setTab] = useState<Tab>('list');
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
@@ -97,12 +100,14 @@ export default function AdminChildrenPage() {
     const sp = new URLSearchParams(window.location.search);
     const p = sp.get('photo');
     if (p === 'without' || p === 'with') setPhotoFilter(p); // link do dashboard
-    if (sp.get('tab') === 'fotos') setTab('photos');
+    const t = (Object.keys(TAB_PARAM) as Tab[]).find((k) => TAB_PARAM[k] === sp.get('tab'));
+    if (t) setTab(t);
   }, []);
   const changeTab = (t: Tab) => {
     setTab(t);
     const url = new URL(window.location.href);
-    if (t === 'photos') url.searchParams.set('tab', 'fotos'); else url.searchParams.delete('tab');
+    const param = TAB_PARAM[t];
+    if (param) url.searchParams.set('tab', param); else url.searchParams.delete('tab');
     window.history.replaceState(null, '', url.toString());
   };
 
@@ -326,8 +331,8 @@ export default function AdminChildrenPage() {
                 value={photoFilter}
                 onChange={(e) => { setPage(1); setPhotoFilter(e.target.value as typeof photoFilter); }}
                 className={inputCls}
-                disabled={tab === 'photos'}
-                title={tab === 'photos' ? 'A conferência mostra só quem tem foto' : undefined}
+                disabled={tab !== 'list'}
+                title={tab === 'photos' ? 'A conferência mostra só quem tem foto' : tab === 'upload' ? 'O envio em lote mostra só quem está sem foto' : undefined}
               >
                 <option value="">Todas</option>
                 <option value="without">Sem foto{campaignId ? ' na campanha' : ''}</option>
@@ -347,6 +352,14 @@ export default function AdminChildrenPage() {
                 {missingPhotos} sem foto{campaignId ? ' nesta campanha' : ''}{locationLabel ? ` · ${locationLabel}` : ''}
               </button>
             )}
+            {!!missingPhotos && !!campaignId && tab !== 'upload' && (
+              <button
+                onClick={() => changeTab('upload')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+              >
+                <ImagePlus className="w-4 h-4" /> Enviar fotos em lote
+              </button>
+            )}
             {hasFilters && (
               <button onClick={clearFilters} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border border-gray-200 bg-white text-gray-600 hover:bg-gray-50">
                 <FilterX className="w-4 h-4" /> Limpar filtros
@@ -356,15 +369,16 @@ export default function AdminChildrenPage() {
         </div>
 
         {/* Abas */}
-        <div className="flex items-center gap-1 border-b border-gray-200">
+        <div className="flex items-center gap-1 border-b border-gray-200 overflow-x-auto no-scrollbar">
           {([
             ['list', 'Crianças', <List key="i" className="w-4 h-4" />],
             ['photos', 'Verificar fotos', <ScanFace key="i" className="w-4 h-4" />],
+            ['upload', 'Enviar fotos em lote', <ImagePlus key="i" className="w-4 h-4" />],
           ] as [Tab, string, ReactNode][]).map(([key, label, icon]) => (
             <button
               key={key}
               onClick={() => changeTab(key)}
-              className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition ${
+              className={`shrink-0 whitespace-nowrap inline-flex items-center gap-2 px-3 sm:px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition ${
                 tab === key ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-800'
               }`}
             >
@@ -373,7 +387,21 @@ export default function AdminChildrenPage() {
           ))}
         </div>
 
-        {tab === 'photos' ? (
+        {tab === 'upload' ? (
+          campaignId ? (
+            <BulkPhotoUpload
+              campaignId={campaignId}
+              location={location}
+              locationLabel={locationLabel}
+              q={q}
+              onUploaded={loadMissingCount}
+            />
+          ) : (
+            <div className="py-16 text-center text-gray-600 bg-white/80 rounded-2xl border border-gray-100">
+              Escolha uma campanha no filtro acima para enviar as fotos que faltam nela.
+            </div>
+          )
+        ) : tab === 'photos' ? (
           campaignId ? (
             <PhotoReview campaignId={campaignId} location={location} locationLabel={locationLabel} q={q} />
           ) : (
@@ -396,7 +424,66 @@ export default function AdminChildrenPage() {
                   </select>
                 </label>
               </div>
-              <div className="overflow-x-auto">
+              {/* celular: cartões em vez da tabela */}
+              <ul className="md:hidden divide-y divide-gray-100">
+                {loading && <li className="px-4 py-12 text-center text-gray-500"><Loader2 className="w-6 h-6 animate-spin inline" /></li>}
+                {!loading && rows.length === 0 && (
+                  <li className="px-4 py-12 text-center">
+                    <p className="text-gray-600 font-medium">Nenhuma criança encontrada</p>
+                    <p className="text-gray-400 text-sm">Ajuste os filtros ou cadastre uma nova criança</p>
+                  </li>
+                )}
+                {!loading && rows.map((child) => {
+                  const age = calcAge(child.birthDate, child.age);
+                  const st = statusOf(child.sponsorships?.[0]?.status);
+                  const thumb = thumbUrl(child.id, child.images, campaignId, 160);
+                  const city = child.city?.name ? `${child.city.name}${child.city.state ? `/${child.city.state}` : ''}` : child.cityName || '—';
+                  return (
+                    <li key={child.id} className="p-3 flex gap-3">
+                      <Link href={`/admin/children/${child.id}`} className="relative w-20 h-20 shrink-0 rounded-xl overflow-hidden bg-gray-100 flex items-center justify-center">
+                        {thumb ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={thumb} alt={child.name} width={80} height={80} loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                        ) : uploadingId === child.id ? (
+                          <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                        ) : (
+                          <Camera className="w-6 h-6 text-gray-400" />
+                        )}
+                      </Link>
+                      <div className="min-w-0 flex-1">
+                        <Link href={`/admin/children/${child.id}`} className="block text-sm font-semibold text-gray-900 leading-snug">
+                          <span className="text-gray-500 font-medium">{child.publicId}</span> · {child.name}
+                        </Link>
+                        <p className="mt-0.5 text-xs text-gray-600 truncate">
+                          {age !== undefined ? `${age} ${age === 1 ? 'ano' : 'anos'} · ` : ''}{child.community?.name ?? city}
+                        </p>
+                        {child.wantedGift && <p className="text-xs text-gray-500 line-clamp-1">🎁 {child.wantedGift}</p>}
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full border whitespace-nowrap ${st.className}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} /> {st.label}
+                          </span>
+                          {child.category && <span className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">{child.category}</span>}
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <Link href={`/admin/children/${child.id}`} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-50 text-blue-700 rounded-lg border border-blue-200">
+                            <Edit className="w-4 h-4" /> Editar
+                          </Link>
+                          {!thumb && campaignId && (
+                            <label className={`inline-flex items-center gap-1 px-3 py-1.5 text-sm text-gray-700 rounded-lg border border-gray-200 bg-white cursor-pointer ${uploadingId ? 'pointer-events-none opacity-50' : ''}`}>
+                              <Upload className="w-4 h-4" /> Foto
+                              {/* no celular o seletor já oferece câmera ou galeria */}
+                              <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadPhoto(child, f); }} />
+                            </label>
+                          )}
+                          <span className="ml-auto"><DeleteChildButton id={child.id} name={child.name} onDone={load} /></span>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-100">
                     <tr className="text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">
