@@ -70,6 +70,17 @@ export function parseSheetDate(raw?: string | null): string | null {
   return date.toISOString().slice(0, 10);
 }
 
+/** Idade da planilha: "7", "7 anos", "7.0", "1 + 10M" (1 ano e 10 meses); só meses ("8M") vira 0. Não reconhecida = undefined. */
+export function parseSheetAge(raw?: string | null): number | undefined {
+  const s = (raw ?? '').trim().toLowerCase();
+  if (!s) return undefined;
+  if (/^\d+\s*(m|mes|meses)$/.test(s)) return 0;
+  const yearsAndMonths = s.match(/^(\d{1,3})\s*(?:anos?)?\s*(?:\+|e)\s*\d+\s*(?:m|mes|meses)$/);
+  if (yearsAndMonths) return parseInt(yearsAndMonths[1], 10);
+  const m = s.match(/^(\d{1,3})(?:[.,]0+)?(?:\s*anos?)?$/);
+  return m ? parseInt(m[1], 10) : undefined;
+}
+
 /**
  * Associa cada campo à coluna do cabeçalho: nome igual a um apelido > começa com o apelido
  * (apelidos com 4+ letras) > contém o apelido como palavra. Cada coluna é usada uma vez.
