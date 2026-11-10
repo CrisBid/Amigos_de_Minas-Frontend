@@ -1992,11 +1992,6 @@ export default function AdminSponsorshipsPage() {
 
             })}
           </div>
-        )}                </div>
-              );
-
-            })}
-          </div>
         )}
 
       </div>
