@@ -30,6 +30,11 @@ import {
   Gift,
   QrCode,
   FilterX,
+  Pencil,
+  Building2,
+  Undo2,
+  Loader2,
+  Store,
 } from 'lucide-react';
 
 // >>> PDF exporter
@@ -91,7 +96,27 @@ type Sponsorship = {
 
   collectionPointId?: string | null;
   collectionPoint?: CollectionPointLite | null;
+
+  donationAmount?: string | number | null;
+  pixTxid?: string | null;
+  pixPaidAt?: string | null;
 };
+
+type UserLite = SponsorLite & { phone?: string | null; roles?: string[] };
+
+/** Edição de um apadrinhamento (forma, ponto, PIX, etapa e observação) */
+type EditForm = {
+  method: SponsorshipMethod;
+  collectionPointId: string;
+  donationAmount: string;
+  pixPaidAt: string; // yyyy-mm-dd
+  pixTxid: string;
+  status: SponsorshipStatus;
+  note: string;
+};
+
+type ViewMode = 'agrupado' | 'cidade' | 'ponto' | 'table';
+const VIEW_KEY = 'admin:sponsorships:view';
 
 // ordem do fluxo: aguardando entrega (presente) e em compra (PIX) são a mesma etapa
 const ALL_STATUSES: SponsorshipStatus[] = [
@@ -103,6 +128,18 @@ const IN_FLOW: SponsorshipStatus[] = ['IN_PROGRESS', 'AWAITING_DELIVERY', 'IN_PU
 /* ===================== */
 /* Utils                 */
 /* ===================== */
+/**
+ * A etapa 3 é diferente em cada forma (presente: aguardando entrega; PIX: em compra).
+ * Ao trocar a forma, leva para a etapa equivalente da outra.
+ */
+function statusForMethod(status: SponsorshipStatus, method: SponsorshipMethod): SponsorshipStatus {
+  if (method === 'PIX' && status === 'AWAITING_DELIVERY') return 'IN_PURCHASE';
+  if (method === 'GIFT' && status === 'IN_PURCHASE') return 'AWAITING_DELIVERY';
+  return status;
+}
+const moneyBR = (v?: string | number | null) =>
+  v == null || v === '' || isNaN(Number(v)) ? '' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const digits = (s?: string | null) => (s ?? '').replace(/\D/g, '');
 function fmtDateBR(s?: string | null) {
   if (!s) return '—';
   const d = new Date(s);
@@ -294,6 +331,64 @@ function Modal({
   );
 }
 
+/**
+ * Grupo que abre e fecha (cidade ou comunidade): título, quantidade, resumo dos status,
+ * selecionar todos, PDF e transferir.
+ */
+function SubGroup({
+  level, open, onToggle, title, subtitle, items, selected, onSelect, onPdf, onTransfer, children, icon,
+}: {
+  level: 'top' | 'city' | 'community';
+  /** ícone no lugar do padrão (ex.: ponto de coleta) */
+  icon?: React.ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  title: string;
+  subtitle?: string;
+  items: Sponsorship[];
+  selected: boolean;
+  onSelect: (on: boolean) => void;
+  onPdf: () => void;
+  onTransfer: () => void;
+  children: React.ReactNode;
+}) {
+  const big = level === 'top';
+  const Icon = level === 'community' ? Users : MapPin;
+  return (
+    <div className={`${big ? 'bg-white/80 rounded-2xl shadow-sm border border-gray-100' : 'rounded-xl border border-gray-200 bg-white'} overflow-hidden`}>
+      <div className={`flex flex-wrap items-center gap-2 px-3 sm:px-4 ${big ? 'py-3 bg-gray-50' : 'py-2 bg-gray-50/70'} ${open ? 'border-b border-gray-200' : ''}`}>
+        <button className="p-1 rounded hover:bg-gray-100 shrink-0" onClick={() => onSelect(!selected)} title={selected ? 'Desmarcar todos' : 'Selecionar todos'}>
+          {selected ? <CheckSquare className="w-5 h-5 text-emerald-600" /> : <Square className="w-5 h-5 text-gray-400" />}
+        </button>
+        <button onClick={onToggle} className="flex flex-1 min-w-0 items-center gap-2 text-left" aria-expanded={open}>
+          {open ? <ChevronDown className="w-4 h-4 text-gray-500 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-500 shrink-0" />}
+          {icon ?? <Icon className={`w-4 h-4 shrink-0 ${level === 'community' ? 'text-teal-600' : 'text-indigo-600'}`} />}
+          <span className="min-w-0">
+            <span className={`block truncate ${big ? 'text-base font-semibold' : 'text-sm font-semibold'} text-gray-900`}>{title}</span>
+            {subtitle && <span className="block text-xs text-gray-500 truncate">{subtitle}</span>}
+          </span>
+        </button>
+        <Badge className="shrink-0 bg-white text-gray-700 border-gray-200">{items.length}</Badge>
+        <div className="hidden md:block w-44 shrink-0">
+          <StatusDistribution counts={Object.fromEntries(countByStatus(items))} className="h-1.5" />
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <IconBtn title="PDF deste grupo" onClick={onPdf}><FileText className="w-4 h-4" /></IconBtn>
+          <IconBtn title="Transferir os apadrinhamentos deste grupo" onClick={onTransfer} className="text-emerald-700 hover:bg-emerald-50">
+            <ArrowRightLeft className="w-4 h-4" />
+          </IconBtn>
+        </div>
+      </div>
+      {!open && (
+        <div className="px-3 sm:px-4 py-1.5 pl-12 bg-white">
+          <StatusCounts items={items} />
+        </div>
+      )}
+      {open && <div className={level === 'community' ? '' : 'p-2 sm:p-3 space-y-2'}>{children}</div>}
+    </div>
+  );
+}
+
 /* ===================== */
 /* Página principal      */
 /* ===================== */
@@ -346,7 +441,27 @@ export default function AdminSponsorshipsPage() {
   const [childModelPayload, setChildModelPayload] = useState<any | null>(null);
 
   // UI
-  const [viewMode, setViewMode] = useState<'table' | 'agrupado'>('agrupado');
+  // modo de visualização, lembrado neste navegador
+  const [viewMode, setViewModeState] = useState<ViewMode>('agrupado');
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(VIEW_KEY);
+      if (v === 'agrupado' || v === 'cidade' || v === 'ponto' || v === 'table') setViewModeState(v);
+    } catch {}
+  }, []);
+  function setViewMode(v: ViewMode) {
+    setViewModeState(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch {}
+  }
+
+  // edição de um apadrinhamento
+  const [editing, setEditing] = useState<Sponsorship | null>(null);
+  const [editForm, setEditForm] = useState<EditForm | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+
+  // forma de apadrinhamento em lote (seleção)
+  const [methodBulkOpen, setMethodBulkOpen] = useState(false);
+  const [methodBulk, setMethodBulk] = useState<{ method: SponsorshipMethod; collectionPointId: string }>({ method: 'GIFT', collectionPointId: '' });
 
   // estado para ação em massa por padrinho
   const [bulkChoice, setBulkChoice] = useState<Record<string, SponsorshipStatus>>({});
@@ -363,8 +478,12 @@ export default function AdminSponsorshipsPage() {
   const [transferBusy, setTransferBusy] = useState(false);
   const [transferIds, setTransferIds] = useState<string[]>([]);
   const [destQuery, setDestQuery] = useState('');
-  const [destResults, setDestResults] = useState<SponsorLite[]>([]);
-  const [destSponsor, setDestSponsor] = useState<SponsorLite | null>(null);
+  const [destSponsor, setDestSponsor] = useState<UserLite | null>(null);
+  // todos os usuários (a busca é feita aqui: sem diferença de acento, por nome, e-mail ou telefone)
+  const [users, setUsers] = useState<UserLite[] | null>(null);
+  const [usersError, setUsersError] = useState(false);
+  // última transferência, para poder desfazer
+  const [lastTransfer, setLastTransfer] = useState<{ label: string; groups: { toSponsorId: string; ids: string[] }[] } | null>(null);
 
   // ===== Exclusão de todos os apadrinhamentos de um padrinho
   const [deleteSponsor, setDeleteSponsor] = useState<{
@@ -379,10 +498,17 @@ export default function AdminSponsorshipsPage() {
   // padrinhos abertos na visão agrupada (sem escolha: abre se forem poucos)
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [groupsDefaultOpen, setGroupsDefaultOpen] = useState<boolean | null>(null);
+  // cidades e comunidades dentro dos grupos (abertas até alguém fechar)
+  const [openNested, setOpenNested] = useState<Record<string, boolean>>({});
+  const [nestedDefaultOpen, setNestedDefaultOpen] = useState(true);
   function setAllGroupsOpen(open: boolean) {
     setOpenGroups({});
     setGroupsDefaultOpen(open);
+    setOpenNested({});
+    setNestedDefaultOpen(open);
   }
+  const isNestedOpen = (key: string) => openNested[key] ?? nestedDefaultOpen;
+  const toggleNested = (key: string) => setOpenNested((prev) => ({ ...prev, [key]: !(prev[key] ?? nestedDefaultOpen) }));
 
   // seleção: status em lote
   const [selStatus, setSelStatus] = useState<SponsorshipStatus>('IN_PROGRESS');
@@ -572,6 +698,104 @@ export default function AdminSponsorshipsPage() {
     if (failed) alert(`Algumas atualizações falharam (${failed}/${ids.length}).`);
     else setToast(`${okIds.size} apadrinhamento(s) agora em "${STATUS_PT[newStatus]}".`);
   }
+  /* ===== Editar apadrinhamento ===== */
+  function beginEdit(s: Sponsorship) {
+    setEditing(s);
+    setEditForm({
+      method: (s.method as SponsorshipMethod) ?? 'GIFT',
+      collectionPointId: s.collectionPointId ?? s.collectionPoint?.id ?? '',
+      donationAmount: s.donationAmount != null && s.donationAmount !== '' ? String(Number(s.donationAmount)) : '',
+      pixPaidAt: s.pixPaidAt ? new Date(s.pixPaidAt).toISOString().slice(0, 10) : '',
+      pixTxid: s.pixTxid ?? '',
+      status: s.status,
+      note: s.note ?? '',
+    });
+  }
+  /** Campos alterados, no formato do backend; null = nada mudou */
+  function editPayload(s: Sponsorship, f: EditForm) {
+    const body: Record<string, unknown> = {};
+    if (f.method !== s.method) body.method = f.method;
+    const cp = f.method === 'GIFT' ? f.collectionPointId || null : null;
+    if (cp !== (s.collectionPointId ?? null)) body.collectionPointId = cp;
+    if (f.status !== s.status) body.status = f.status;
+    if ((f.note ?? '') !== (s.note ?? '')) body.note = f.note;
+    if (f.method === 'PIX') {
+      const amount = f.donationAmount.trim() ? Number(f.donationAmount.replace(',', '.')) : null;
+      if (amount != null && !isNaN(amount) && amount !== Number(s.donationAmount ?? NaN)) body.donationAmount = amount;
+      if (f.pixPaidAt && f.pixPaidAt !== (s.pixPaidAt ? new Date(s.pixPaidAt).toISOString().slice(0, 10) : '')) body.pixPaidAt = `${f.pixPaidAt}T12:00:00.000Z`;
+      if (f.pixTxid.trim() !== (s.pixTxid ?? '')) body.pixTxid = f.pixTxid.trim();
+    }
+    return Object.keys(body).length ? body : null;
+  }
+  /** Atualiza a linha na tela com o que o backend gravou (sem recarregar tudo) */
+  function mergeSaved(id: string, saved: any) {
+    setAllRows((prev) => prev.map((r) => (r.id === id ? {
+      ...r,
+      method: saved.method ?? r.method,
+      status: saved.status ?? r.status,
+      note: saved.note ?? null,
+      collectionPointId: saved.collectionPointId ?? null,
+      collectionPoint: saved.collectionPoint ?? null,
+      donationAmount: saved.donationAmount ?? null,
+      pixTxid: saved.pixTxid ?? null,
+      pixPaidAt: saved.pixPaidAt ?? null,
+      startDate: saved.startDate ?? r.startDate,
+      endDate: saved.endDate ?? r.endDate,
+      updatedAt: saved.updatedAt ?? r.updatedAt,
+    } : r)));
+  }
+  async function saveEdit() {
+    if (!editing || !editForm) return;
+    if (editForm.method === 'GIFT' && !editForm.collectionPointId) { alert('Escolha o ponto de coleta do presente.'); return; }
+    const body = editPayload(editing, editForm);
+    if (!body) { setEditing(null); return; }
+    setEditBusy(true);
+    try {
+      const r = await fetch(`/api/admin/sponsorships/${editing.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { alert(`Falha ao salvar: ${await errorMessage(r)}`); return; }
+      mergeSaved(editing.id, await r.json());
+      setToast('Apadrinhamento atualizado.');
+      setEditing(null);
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  /** Mesma forma (e ponto de coleta) para a seleção; a etapa 3 acompanha a forma */
+  async function applyMethodBulk() {
+    if (methodBulk.method === 'GIFT' && !methodBulk.collectionPointId) { alert('Escolha o ponto de coleta.'); return; }
+    const targets = selectedRows;
+    if (!confirm(`Mudar para ${methodBulk.method === 'PIX' ? 'PIX' : 'presente no ponto'} os ${targets.length} apadrinhamento(s) selecionado(s)?`)) return;
+    setSelBusy(true);
+    let ok = 0;
+    try {
+      for (let i = 0; i < targets.length; i += 6) {
+        await Promise.all(targets.slice(i, i + 6).map(async (s) => {
+          const status = statusForMethod(s.status, methodBulk.method);
+          const body: Record<string, unknown> = {
+            method: methodBulk.method,
+            collectionPointId: methodBulk.method === 'GIFT' ? methodBulk.collectionPointId : null,
+            ...(status !== s.status ? { status } : {}),
+          };
+          const r = await fetch(`/api/admin/sponsorships/${s.id}`, {
+            method: 'PATCH', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+          });
+          if (r.ok) { mergeSaved(s.id, await r.json()); ok++; }
+        }));
+      }
+    } finally {
+      setSelBusy(false);
+      setMethodBulkOpen(false);
+      if (ok < targets.length) alert(`${targets.length - ok} de ${targets.length} não puderam ser alterados.`);
+      else setToast(`${ok} apadrinhamento(s) agora ${methodBulk.method === 'PIX' ? 'em PIX' : 'com presente no ponto'}.`);
+    }
+  }
+
   async function del(id: string) {
     if (!confirm('Excluir apadrinhamento? Esta ação não pode ser desfeita.')) return;
     const r = await fetch(`/api/admin/sponsorships/${id}`, { method: 'DELETE', credentials: 'include' });
@@ -718,6 +942,76 @@ export default function AdminSponsorshipsPage() {
     });
   }, [visibleRows]);
 
+  /* ===== Agrupamento (Cidade → Comunidade) ===== */
+  const groupedByCity = useMemo(() => {
+    const cityMap = new Map<string, Map<string, Sponsorship[]>>();
+    for (const it of visibleRows) {
+      const city = deriveCityName(it);
+      const comm = cityMap.get(city) ?? new Map<string, Sponsorship[]>();
+      const community = deriveCommunityName(it);
+      comm.set(community, [...(comm.get(community) ?? []), it]);
+      cityMap.set(city, comm);
+    }
+    return [...cityMap.entries()]
+      .map(([city, comm]) => {
+        const byCommunity = [...comm.entries()]
+          .map(([community, items]) => ({
+            community,
+            items: items.sort((a, b) => (a.child?.name || '').localeCompare(b.child?.name || '', 'pt-BR')),
+          }))
+          .sort((a, b) => a.community.localeCompare(b.community, 'pt-BR'));
+        return { city, items: byCommunity.flatMap((c) => c.items), byCommunity };
+      })
+      .sort((a, b) => a.city.localeCompare(b.city, 'pt-BR'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleRows]);
+
+  /* ===== Agrupamento (Ponto de coleta → Cidade → Comunidade) ===== */
+  // PIX e presente ainda sem ponto ficam em grupos próprios, no fim
+  const groupedByPoint = useMemo(() => {
+    const NO_POINT = '__sem_ponto__', PIX = '__pix__';
+    const pointMap = new Map<string, Sponsorship[]>();
+    for (const it of visibleRows) {
+      const k = it.method === 'PIX' ? PIX : resolveCP(it)?.id ?? NO_POINT;
+      pointMap.set(k, [...(pointMap.get(k) ?? []), it]);
+    }
+    const nest = (items: Sponsorship[]) => {
+      const cityMap = new Map<string, Map<string, Sponsorship[]>>();
+      for (const it of items) {
+        const comm = cityMap.get(deriveCityName(it)) ?? new Map<string, Sponsorship[]>();
+        const c = deriveCommunityName(it);
+        comm.set(c, [...(comm.get(c) ?? []), it]);
+        cityMap.set(deriveCityName(it), comm);
+      }
+      return [...cityMap.entries()]
+        .map(([city, comm]) => {
+          const byCommunity = [...comm.entries()]
+            .map(([community, list]) => ({
+              community,
+              items: list.sort((a, b) => (a.child?.name || '').localeCompare(b.child?.name || '', 'pt-BR')),
+            }))
+            .sort((a, b) => a.community.localeCompare(b.community, 'pt-BR'));
+          return { city, items: byCommunity.flatMap((c) => c.items), byCommunity };
+        })
+        .sort((a, b) => a.city.localeCompare(b.city, 'pt-BR'));
+    };
+    return [...pointMap.entries()]
+      .map(([key, items]) => {
+        const cp = key === PIX || key === NO_POINT ? null : resolveCP(items[0]);
+        const where = cp ? [cp.address, cp.district, cp.cityName ? `${cp.cityName}${cp.state ? `/${cp.state}` : ''}` : ''].filter(Boolean).join(' · ') : '';
+        return {
+          key,
+          kind: key === PIX ? ('pix' as const) : key === NO_POINT ? ('none' as const) : ('point' as const),
+          title: key === PIX ? 'PIX (sem entrega em ponto)' : key === NO_POINT ? 'Presente sem ponto de coleta' : cp?.name ?? 'Ponto de coleta',
+          where,
+          items,
+          byCity: nest(items),
+        };
+      })
+      .sort((a, b) => (a.kind === 'point' ? 0 : a.kind === 'none' ? 1 : 2) - (b.kind === 'point' ? 0 : b.kind === 'none' ? 1 : 2) || a.title.localeCompare(b.title, 'pt-BR'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleRows, cpMap]);
+
   /* ====== Seleção & Transfer ====== */
   function isSelected(id: string) { return !!selectedIds[id]; }
   function toggleOne(id: string) {
@@ -735,55 +1029,95 @@ export default function AdminSponsorshipsPage() {
     setTransferIds(uniq);
     setDestSponsor(null);
     setDestQuery('');
-    setDestResults([]);
     setTransferOpen(true);
+    if (!users) loadUsers();
   }
-  async function searchSponsors(q: string) {
+  async function loadUsers() {
+    setUsersError(false);
     try {
-      const url = new URL('/api/admin/users', window.location.origin);
-      url.searchParams.set('q', q);
-      url.searchParams.set('roles', 'SPONSOR');
-      url.searchParams.set('pageSize', '20');
-      const r = await fetch(url.toString(), { credentials: 'include', cache: 'no-store' });
-      if (!r.ok) return setDestResults([]);
+      const r = await fetch('/api/admin/users', { credentials: 'include', cache: 'no-store' });
+      if (!r.ok) throw new Error();
       const js = await r.json();
-      const items: SponsorLite[] = Array.isArray(js?.items) ? js.items : (Array.isArray(js) ? js : []);
-      setDestResults(items);
+      setUsers(Array.isArray(js?.items) ? js.items : Array.isArray(js) ? js : []);
     } catch {
-      setDestResults([]);
+      setUsersError(true);
+      setUsers([]);
     }
   }
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (destQuery.trim().length >= 2) searchSponsors(destQuery.trim());
-      else setDestResults([]);
-    }, 300);
-    return () => clearTimeout(t);
-  }, [destQuery]);
+  // quantos apadrinhamentos cada padrinho já tem nesta lista (ajuda a escolher o destino)
+  const countBySponsor = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of allRows) if (r.sponsor?.id) m.set(r.sponsor.id, (m.get(r.sponsor.id) ?? 0) + 1);
+    return m;
+  }, [allRows]);
+  const transferRows = useMemo(() => allRows.filter((r) => transferIds.includes(r.id)), [allRows, transferIds]);
+  const transferFrom = useMemo(() => {
+    const m = new Map<string, { sponsor: SponsorLite | null; n: number }>();
+    for (const r of transferRows) {
+      const k = r.sponsor?.id ?? '';
+      m.set(k, { sponsor: r.sponsor ?? null, n: (m.get(k)?.n ?? 0) + 1 });
+    }
+    return [...m.values()];
+  }, [transferRows]);
+  // busca: palavras em qualquer ordem, sem acento; telefone pelos dígitos
+  const destMatches = useMemo(() => {
+    const q = normalizeText(destQuery);
+    if (!users || q.length < 2) return [];
+    const words = q.split(' ').filter(Boolean);
+    const qDigits = digits(destQuery);
+    return users
+      .filter((u) => {
+        const text = normalizeText(`${u.name} ${u.email ?? ''}`);
+        return words.every((w) => text.includes(w)) || (qDigits.length >= 4 && digits(u.phone).includes(qDigits));
+      })
+      .sort((a, b) => (countBySponsor.get(b.id) ?? 0) - (countBySponsor.get(a.id) ?? 0) || a.name.localeCompare(b.name, 'pt-BR'))
+      .slice(0, 30);
+  }, [users, destQuery, countBySponsor]);
 
   async function applyTransfer() {
     if (!transferIds.length || !destSponsor?.id) return;
+    const moving = transferRows.filter((r) => r.sponsor?.id !== destSponsor.id);
+    if (!moving.length) { alert('Esses apadrinhamentos já são deste padrinho.'); return; }
     setTransferBusy(true);
     try {
       const res = await fetch('/api/admin/sponsorships/transfer', {
         method: 'POST',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sponsorshipIds: transferIds, toSponsorId: destSponsor.id }),
+        body: JSON.stringify({ sponsorshipIds: moving.map((r) => r.id), toSponsorId: destSponsor.id }),
       });
       if (!res.ok) {
-        const txt = await res.text().catch(() => '');
-        alert(`Falha ao transferir.\n${txt || ''}`);
+        alert(`Falha ao transferir: ${await errorMessage(res)}`);
         return;
       }
+      // para desfazer: cada apadrinhamento volta para o padrinho de antes
+      const back = new Map<string, string[]>();
+      for (const r of moving) if (r.sponsor?.id) back.set(r.sponsor.id, [...(back.get(r.sponsor.id) ?? []), r.id]);
+      setLastTransfer({
+        label: `${moving.length} apadrinhamento(s) transferido(s) para ${destSponsor.name}.`,
+        groups: [...back.entries()].map(([toSponsorId, ids]) => ({ toSponsorId, ids })),
+      });
       setTransferOpen(false);
-      setToast(`${transferIds.length} apadrinhamento(s) transferido(s) para ${destSponsor.name}.`);
       setTransferIds([]);
       setSelectedIds({});
       await load();
     } finally {
       setTransferBusy(false);
     }
+  }
+  async function undoTransfer() {
+    if (!lastTransfer) return;
+    const groups = lastTransfer.groups;
+    setLastTransfer(null);
+    const results = await Promise.all(groups.map((g) => fetch('/api/admin/sponsorships/transfer', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sponsorshipIds: g.ids, toSponsorId: g.toSponsorId }),
+    })));
+    if (results.some((r) => !r.ok)) alert('Não foi possível desfazer toda a transferência.');
+    else setToast('Transferência desfeita.');
+    await load();
   }
 
   const selectedRows = useMemo(() => allRows.filter(r => selectedIds[r.id]), [allRows, selectedIds]);
@@ -818,6 +1152,93 @@ export default function AdminSponsorshipsPage() {
     const sponsors = new Set(selectedRows.map(r => r.sponsor?.id ?? ''));
     const only = sponsors.size === 1 ? selectedRows[0]?.sponsor : null;
     openExportModal(selectedRows, only?.name ? `${only.name} - seleção` : 'Seleção', only?.id);
+  }
+
+  /** Uma criança apadrinhada (visões agrupadas): status, forma, ponto e ações */
+  function renderItem(s: Sponsorship, opts: { showSponsor?: boolean; sponsorId?: string }) {
+    const cp = resolveCP(s);
+    const checked = isSelected(s.id);
+    return (
+      <li
+        key={s.id}
+        className={`border-l-4 ${STATUS_STYLE[s.status]?.border ?? 'border-l-gray-300'} px-3 sm:px-4 py-3 sm:py-3.5 transition ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}
+      >
+        <div className="flex flex-col gap-2.5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <button className="p-1 rounded hover:bg-gray-100" onClick={() => toggleOne(s.id)} title={checked ? 'Desmarcar' : 'Selecionar'}>
+                {checked ? <CheckSquare className="w-5 h-5 text-emerald-600" /> : <Square className="w-5 h-5 text-gray-400" />}
+              </button>
+              <ChildAvatar name={s.child?.name} />
+              <div className="min-w-0">
+                <a href={s.child ? `/admin/children/${s.child.id}` : undefined} className="text-sm font-semibold text-gray-900 hover:text-blue-700 truncate block">
+                  {s.child?.name || '—'}
+                </a>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+                  <span className="font-mono">#{s.child?.publicId ?? '—'}</span>
+                  {s.campaign?.name && <span>{s.campaign.name}{s.campaign.year ? ` (${s.campaign.year})` : ''}</span>}
+                  <span title={`Criado em ${fmtDateBR(s.createdAt)}`}>atualizado {fmtDateBR(s.updatedAt)}</span>
+                </div>
+                {opts.showSponsor && (
+                  <button
+                    onClick={() => s.sponsor && openSponsor(s.sponsor.id)}
+                    className="mt-0.5 inline-flex items-center gap-1 text-xs text-blue-700 hover:underline max-w-full"
+                    title="Ver detalhes do padrinho"
+                  >
+                    <UserCheck className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{s.sponsor?.name || 'Sem padrinho'}{s.sponsor?.email ? ` · ${s.sponsor.email}` : ''}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:items-end gap-1.5 w-full sm:w-48 sm:shrink-0 pl-11 sm:pl-0">
+              <StatusBadge status={s.status} size="md" />
+              <StatusSteps status={s.status} className="w-full" />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 sm:pl-11">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-700">
+              <MethodBadge method={s.method ?? null} />
+              {s.method === 'GIFT' && cp && (
+                <span className="inline-flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-gray-500" />
+                  {cpLabel(s)}
+                </span>
+              )}
+              {s.method === 'PIX' && s.donationAmount != null && <span>{moneyBR(s.donationAmount)}{s.pixPaidAt ? ` · pago em ${fmtDateBR(s.pixPaidAt)}` : ''}</span>}
+              {s.note && <span className="italic text-gray-500 truncate max-w-[16rem]" title={s.note}>“{s.note}”</span>}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <NextStepButton status={s.status} method={s.method} onClick={(next) => changeStatus(s.id, next)} />
+              <StatusPicker value={s.status} onChange={(next) => changeStatus(s.id, next)} />
+              <IconBtn title="Editar forma, ponto de coleta, PIX e observação" onClick={() => beginEdit(s)}>
+                <Pencil className="w-4 h-4" />
+              </IconBtn>
+              <IconBtn title="Transferir para outro padrinho" onClick={() => beginTransfer([s.id])} className="text-emerald-700 hover:bg-emerald-50">
+                <ArrowRightLeft className="w-4 h-4" />
+              </IconBtn>
+              <IconBtn title="PDF desta criança" onClick={() => openExportModal([s], `${s.child?.name || 'crianca'}`, opts.sponsorId ?? s.sponsor?.id)}>
+                <FileText className="w-4 h-4" />
+              </IconBtn>
+              {s.child && (
+                <IconBtn title="Detalhes da criança" onClick={() => openChild(s.child!.id)}>
+                  <Eye className="w-4 h-4" />
+                </IconBtn>
+              )}
+              <IconBtn title="Ver dados brutos (model)" onClick={() => openChildModelFromRow(s.child)}>
+                <Code2 className="w-4 h-4" />
+              </IconBtn>
+              <IconBtn title="Excluir apadrinhamento" onClick={() => del(s.id)} className="text-red-600 hover:bg-red-50">
+                <Trash2 className="w-4 h-4" />
+              </IconBtn>
+            </div>
+          </div>
+        </div>
+      </li>
+    );
   }
 
   /* ===== UI ===== */
@@ -988,7 +1409,12 @@ export default function AdminSponsorshipsPage() {
 
             {/* visualização */}
             <div className="inline-flex rounded-xl border border-gray-200 bg-white p-1 self-start lg:self-auto">
-              {([['agrupado', 'Por padrinho', <Users key="i" className="w-4 h-4" />], ['table', 'Tabela', <LayoutList key="i" className="w-4 h-4" />]] as const).map(([mode, label, icon]) => (
+              {([
+                ['agrupado', 'Por padrinho', <Users key="i" className="w-4 h-4" />],
+                ['cidade', 'Por cidade', <Building2 key="i" className="w-4 h-4" />],
+                ['ponto', 'Por ponto de coleta', <Store key="i" className="w-4 h-4" />],
+                ['table', 'Tabela', <LayoutList key="i" className="w-4 h-4" />],
+              ] as const).map(([mode, label, icon]) => (
                 <button
                   key={mode}
                   onClick={() => setViewMode(mode)}
@@ -1037,7 +1463,7 @@ export default function AdminSponsorshipsPage() {
                 <FilterX className="w-4 h-4" /> Limpar filtros
               </button>
             )}
-            {viewMode === 'agrupado' && groupedBySponsor.length > 1 && (
+            {viewMode !== 'table' && (viewMode === 'agrupado' ? groupedBySponsor.length > 1 : viewMode === 'ponto' ? groupedByPoint.length > 0 : groupedByCity.length > 0) && (
               <span className="ml-auto inline-flex gap-3">
                 <button onClick={() => setAllGroupsOpen(true)} className="text-gray-500 hover:text-gray-900 underline">Expandir todos</button>
                 <button onClick={() => setAllGroupsOpen(false)} className="text-gray-500 hover:text-gray-900 underline">Recolher todos</button>
@@ -1208,6 +1634,9 @@ export default function AdminSponsorshipsPage() {
                             </button>
                             <NextStepButton status={s.status} method={s.method} onClick={(next) => changeStatus(s.id, next)} />
                             <StatusPicker value={s.status} onChange={(next) => changeStatus(s.id, next)} />
+                            <IconBtn title="Editar forma, ponto de coleta, PIX e observação" onClick={() => beginEdit(s)}>
+                              <Pencil className="w-4 h-4" />
+                            </IconBtn>
                             <button
                               onClick={() => del(s.id)}
                               className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-50 hover:bg-red-100 text-red-700 rounded-lg border border-red-200 transition-colors duration-150"
@@ -1223,6 +1652,146 @@ export default function AdminSponsorshipsPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        ) : viewMode === 'ponto' ? (
+          /* === POR PONTO DE COLETA (Ponto → Cidade → Comunidade), com o padrinho em cada criança === */
+          <div className="space-y-4">
+            {loading && (
+              <div className="bg-white/70 rounded-2xl border border-white/20 shadow-lg p-10 text-center">
+                <div className="mx-auto w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                <p className="mt-3 text-gray-500 font-medium">Carregando apadrinhamentos...</p>
+              </div>
+            )}
+            {!loading && noRows && (
+              <div className="bg-white/70 rounded-2xl border border-white/20 shadow-lg p-10 text-center text-gray-500">
+                Nenhum apadrinhamento encontrado. Tente ajustar os filtros.
+              </div>
+            )}
+            {!loading && !noRows && groupedByPoint.map((pg) => {
+              const pointKey = `point|${pg.key}`;
+              const sponsorsHere = new Set(pg.items.map((x) => x.sponsor?.id)).size;
+              const icon =
+                pg.kind === 'pix' ? <QrCode className="w-4 h-4 shrink-0 text-indigo-600" />
+                  : pg.kind === 'none' ? <Gift className="w-4 h-4 shrink-0 text-amber-600" />
+                  : <Store className="w-4 h-4 shrink-0 text-emerald-600" />;
+              return (
+                <SubGroup
+                  key={pointKey}
+                  level="top"
+                  icon={icon}
+                  open={isNestedOpen(pointKey)}
+                  onToggle={() => toggleNested(pointKey)}
+                  title={pg.title}
+                  subtitle={[pg.where, `${sponsorsHere} padrinho${sponsorsHere === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}
+                  items={pg.items}
+                  selected={pg.items.every((x) => isSelected(x.id))}
+                  onSelect={(on) => selectMany(pg.items.map((x) => x.id), on)}
+                  onPdf={() => openExportModal(pg.items, pg.title)}
+                  onTransfer={() => beginTransfer(pg.items.map((x) => x.id))}
+                >
+                  {pg.kind === 'none' && (
+                    <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      Presente sem ponto de coleta definido: use o lápis (editar) em cada criança, ou selecione e use &quot;Forma&quot; para escolher o ponto.
+                    </p>
+                  )}
+                  {pg.byCity.map((cityGroup) => {
+                    const cityKey = `${pointKey}|${cityGroup.city}`;
+                    return (
+                      <SubGroup
+                        key={cityKey}
+                        level="city"
+                        open={isNestedOpen(cityKey)}
+                        onToggle={() => toggleNested(cityKey)}
+                        title={cityGroup.city}
+                        items={cityGroup.items}
+                        selected={cityGroup.items.every((x) => isSelected(x.id))}
+                        onSelect={(on) => selectMany(cityGroup.items.map((x) => x.id), on)}
+                        onPdf={() => openExportModal(cityGroup.items, `${pg.title} - ${cityGroup.city}`)}
+                        onTransfer={() => beginTransfer(cityGroup.items.map((x) => x.id))}
+                      >
+                        {cityGroup.byCommunity.map((comm) => {
+                          const commKey = `${cityKey}|${comm.community}`;
+                          return (
+                            <SubGroup
+                              key={commKey}
+                              level="community"
+                              open={isNestedOpen(commKey)}
+                              onToggle={() => toggleNested(commKey)}
+                              title={comm.community}
+                              items={comm.items}
+                              selected={comm.items.every((x) => isSelected(x.id))}
+                              onSelect={(on) => selectMany(comm.items.map((x) => x.id), on)}
+                              onPdf={() => openExportModal(comm.items, `${pg.title} - ${cityGroup.city} - ${comm.community}`)}
+                              onTransfer={() => beginTransfer(comm.items.map((x) => x.id))}
+                            >
+                              <ul className="divide-y divide-gray-100">
+                                {comm.items.map((s) => renderItem(s, { showSponsor: true }))}
+                              </ul>
+                            </SubGroup>
+                          );
+                        })}
+                      </SubGroup>
+                    );
+                  })}
+                </SubGroup>
+              );
+            })}
+          </div>
+        ) : viewMode === 'cidade' ? (
+          /* === POR CIDADE (Cidade → Comunidade), com o padrinho em cada criança === */
+          <div className="space-y-4">
+            {loading && (
+              <div className="bg-white/70 rounded-2xl border border-white/20 shadow-lg p-10 text-center">
+                <div className="mx-auto w-8 h-8 border-3 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                <p className="mt-3 text-gray-500 font-medium">Carregando apadrinhamentos...</p>
+              </div>
+            )}
+            {!loading && noRows && (
+              <div className="bg-white/70 rounded-2xl border border-white/20 shadow-lg p-10 text-center text-gray-500">
+                Nenhum apadrinhamento encontrado. Tente ajustar os filtros.
+              </div>
+            )}
+            {!loading && !noRows && groupedByCity.map((cityGroup) => {
+              const cityKey = `city|${cityGroup.city}`;
+              const sponsorsHere = new Set(cityGroup.items.map((x) => x.sponsor?.id)).size;
+              return (
+                <SubGroup
+                  key={cityKey}
+                  level="top"
+                  open={isNestedOpen(cityKey)}
+                  onToggle={() => toggleNested(cityKey)}
+                  title={cityGroup.city}
+                  subtitle={`${sponsorsHere} padrinho${sponsorsHere === 1 ? '' : 's'} · ${cityGroup.byCommunity.length} comunidade${cityGroup.byCommunity.length === 1 ? '' : 's'}`}
+                  items={cityGroup.items}
+                  selected={cityGroup.items.every((x) => isSelected(x.id))}
+                  onSelect={(on) => selectMany(cityGroup.items.map((x) => x.id), on)}
+                  onPdf={() => openExportModal(cityGroup.items, cityGroup.city)}
+                  onTransfer={() => beginTransfer(cityGroup.items.map((x) => x.id))}
+                >
+                  {cityGroup.byCommunity.map((comm) => {
+                    const commKey = `${cityKey}|${comm.community}`;
+                    return (
+                      <SubGroup
+                        key={commKey}
+                        level="community"
+                        open={isNestedOpen(commKey)}
+                        onToggle={() => toggleNested(commKey)}
+                        title={comm.community}
+                        items={comm.items}
+                        selected={comm.items.every((x) => isSelected(x.id))}
+                        onSelect={(on) => selectMany(comm.items.map((x) => x.id), on)}
+                        onPdf={() => openExportModal(comm.items, `${cityGroup.city} - ${comm.community}`)}
+                        onTransfer={() => beginTransfer(comm.items.map((x) => x.id))}
+                      >
+                        <ul className="divide-y divide-gray-100">
+                          {comm.items.map((s) => renderItem(s, { showSponsor: true }))}
+                        </ul>
+                      </SubGroup>
+                    );
+                  })}
+                </SubGroup>
+              );
+            })}
           </div>
         ) : (
           /* === AGRUPADO (Padrinho → Cidade → Comunidade) === */
@@ -1373,194 +1942,57 @@ export default function AdminSponsorshipsPage() {
                     )}
                   </div>
 
-                  {/* Subgrupos: Cidade ➜ Comunidade */}
+                  {/* Subgrupos: Cidade ➜ Comunidade, cada um abre e fecha */}
                   {open && (
-                  <div className="p-2 sm:p-6 space-y-3 sm:space-y-6">
-                    {group.byCity.map((cityGroup) => (
-                      <div
-                        key={cityGroup.city}
-                        className="rounded-2xl border border-gray-200 overflow-hidden"
-                      >
-                        {/* Cabeçalho da cidade */}
-                        <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-5 py-2.5 sm:py-3 bg-gray-50 border-b border-gray-200">
-                          <div className="flex items-center gap-2">
-                            <MapPin className="w-4 h-4 text-indigo-600" />
-                            <div className="text-sm font-semibold text-gray-900">
-                              {cityGroup.city}
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge className="bg-white text-gray-700 border-gray-200">
-                              {cityGroup.total}
-                            </Badge>
-                            <button
-                              onClick={() =>
-                                openExportModal(
-                                  cityGroup.byCommunity.flatMap((c) => c.items),
-                                  `${group.sponsor?.name || 'Sem padrinho'} - ${cityGroup.city}`,
-                                  group.sponsor?.id
-                                )
-                              }
-                              className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                            >
-                              <FileText className="w-4 h-4" /> PDF cidade
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Comunidades dentro da cidade */}
-                        <div className="p-2 sm:p-4 space-y-3 sm:space-y-4">
+                  <div className="p-2 sm:p-5 space-y-3">
+                    {group.byCity.map((cityGroup) => {
+                      const cityKey = `${sid}|${cityGroup.city}`;
+                      const cityItems = cityGroup.byCommunity.flatMap((c) => c.items);
+                      return (
+                        <SubGroup
+                          key={cityKey}
+                          level="city"
+                          open={isNestedOpen(cityKey)}
+                          onToggle={() => toggleNested(cityKey)}
+                          title={cityGroup.city}
+                          items={cityItems}
+                          selected={cityItems.every((x) => isSelected(x.id))}
+                          onSelect={(on) => selectMany(cityItems.map((x) => x.id), on)}
+                          onPdf={() => openExportModal(cityItems, `${group.sponsor?.name || 'Sem padrinho'} - ${cityGroup.city}`, group.sponsor?.id)}
+                          onTransfer={() => beginTransfer(cityItems.map((x) => x.id))}
+                        >
                           {cityGroup.byCommunity.map((comm) => {
-                            const commIds = comm.items.map((x) => x.id);
-                            const allSelected = commIds.every((id) => isSelected(id));
+                            const commKey = `${cityKey}|${comm.community}`;
                             return (
-                              <div
-                                key={`${cityGroup.city}::${comm.community}`}
-                                className="rounded-xl border border-gray-200"
+                              <SubGroup
+                                key={commKey}
+                                level="community"
+                                open={isNestedOpen(commKey)}
+                                onToggle={() => toggleNested(commKey)}
+                                title={comm.community}
+                                items={comm.items}
+                                selected={comm.items.every((x) => isSelected(x.id))}
+                                onSelect={(on) => selectMany(comm.items.map((x) => x.id), on)}
+                                onPdf={() => openExportModal(comm.items, `${group.sponsor?.name || 'Sem padrinho'} - ${cityGroup.city} - ${comm.community}`, group.sponsor?.id)}
+                                onTransfer={() => beginTransfer(comm.items.map((x) => x.id))}
                               >
-                                {/* Cabeçalho comunidade */}
-                                <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 px-3 sm:px-4 py-2 bg-gray-50 rounded-t-xl border-b border-gray-200">
-                                  <div className="flex items-center gap-3">
-                                    <button
-                                      className="p-1 rounded hover:bg-gray-100"
-                                      onClick={() => selectMany(commIds, !allSelected)}
-                                      title={
-                                        allSelected
-                                          ? 'Desmarcar comunidade'
-                                          : 'Selecionar comunidade'
-                                      }
-                                    >
-                                      {allSelected ? (
-                                        <CheckSquare className="w-5 h-5 text-emerald-600" />
-                                      ) : (
-                                        <Square className="w-5 h-5 text-gray-400" />
-                                      )}
-                                    </button>
-                                    <div className="text-sm font-medium text-gray-900">
-                                      {comm.community}
-                                    </div>
-                                  </div>
-
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <Badge className="bg-white text-gray-700 border-gray-200">
-                                      {comm.total}
-                                    </Badge>
-                                    {/* PDF comunidade */}
-                                    <button
-                                      onClick={() =>
-                                        openExportModal(
-                                          comm.items,
-                                          `${group.sponsor?.name || 'Sem padrinho'} - ${cityGroup.city} - ${comm.community}`,
-                                          group.sponsor?.id
-                                        )
-                                      }
-                                      className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                                    >
-                                      <FileText className="w-4 h-4" /> PDF comunidade
-                                    </button>
-
-                                    {/* Transferir comunidade */}
-                                    <button
-                                      onClick={() => beginTransfer(commIds)}
-                                      className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                                    >
-                                      <ArrowRightLeft className="w-4 h-4" /> Transferir
-                                    </button>
-                                  </div>
-                                </div>
-
-                                {/* Cards das crianças */}
                                 <ul className="divide-y divide-gray-100">
-                                  {comm.items.map((s) => {
-                                    const cp = resolveCP(s);
-                                    const checked = isSelected(s.id);
-                                    return (
-                                      <li
-                                        key={s.id}
-                                        className={`border-l-4 ${STATUS_STYLE[s.status]?.border ?? 'border-l-gray-300'} px-3 sm:px-4 py-3 sm:py-3.5 transition ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}
-                                      >
-                                        <div className="flex flex-col gap-2.5">
-                                          {/* Linha 1: criança + status com a trilha de etapas */}
-                                          <div className="flex flex-wrap items-start justify-between gap-3">
-                                            <div className="flex items-center gap-3 min-w-0">
-                                              <button
-                                                className="p-1 rounded hover:bg-gray-100"
-                                                onClick={() => toggleOne(s.id)}
-                                                title={checked ? 'Desmarcar' : 'Selecionar'}
-                                              >
-                                                {checked ? (
-                                                  <CheckSquare className="w-5 h-5 text-emerald-600" />
-                                                ) : (
-                                                  <Square className="w-5 h-5 text-gray-400" />
-                                                )}
-                                              </button>
-                                              <ChildAvatar name={s.child?.name} />
-                                              <div className="min-w-0">
-                                                <a href={s.child ? `/admin/children/${s.child.id}` : undefined} className="text-sm font-semibold text-gray-900 hover:text-blue-700 truncate block">
-                                                  {s.child?.name || '—'}
-                                                </a>
-                                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
-                                                  <span className="font-mono">#{s.child?.publicId ?? '—'}</span>
-                                                  {s.campaign?.name && <span>{s.campaign.name}{s.campaign.year ? ` (${s.campaign.year})` : ''}</span>}
-                                                  <span title={`Criado em ${fmtDateBR(s.createdAt)}`}>atualizado {fmtDateBR(s.updatedAt)}</span>
-                                                </div>
-                                              </div>
-                                            </div>
-
-                                            <div className="flex flex-col sm:items-end gap-1.5 w-full sm:w-48 sm:shrink-0 pl-11 sm:pl-0">
-                                              <StatusBadge status={s.status} size="md" />
-                                              <StatusSteps status={s.status} className="w-full" />
-                                            </div>
-                                          </div>
-
-                                          {/* Linha 2: método/ponto de coleta + ações */}
-                                          <div className="flex flex-wrap items-center justify-between gap-2 sm:pl-11">
-                                            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-700">
-                                              <MethodBadge method={s.method ?? null} />
-                                              {s.method === 'GIFT' && cp && (
-                                                <span className="inline-flex items-center gap-1">
-                                                  <MapPin className="w-3.5 h-3.5 text-gray-500" />
-                                                  {cpLabel(s)}
-                                                </span>
-                                              )}
-                                            </div>
-
-                                            <div className="flex flex-wrap items-center gap-1.5">
-                                              <NextStepButton status={s.status} method={s.method} onClick={(next) => changeStatus(s.id, next)} />
-                                              <StatusPicker value={s.status} onChange={(next) => changeStatus(s.id, next)} />
-                                              <IconBtn title="Transferir para outro padrinho" onClick={() => beginTransfer([s.id])} className="text-emerald-700 hover:bg-emerald-50">
-                                                <ArrowRightLeft className="w-4 h-4" />
-                                              </IconBtn>
-                                              <IconBtn title="PDF desta criança" onClick={() => openExportModal([s], `${s.child?.name || 'crianca'}`, group.sponsor?.id)}>
-                                                <FileText className="w-4 h-4" />
-                                              </IconBtn>
-                                              {s.child && (
-                                                <IconBtn title="Detalhes da criança" onClick={() => openChild(s.child!.id)}>
-                                                  <Eye className="w-4 h-4" />
-                                                </IconBtn>
-                                              )}
-                                              <IconBtn title="Ver dados brutos (model)" onClick={() => openChildModelFromRow(s.child)}>
-                                                <Code2 className="w-4 h-4" />
-                                              </IconBtn>
-                                              <IconBtn title="Excluir apadrinhamento" onClick={() => del(s.id)} className="text-red-600 hover:bg-red-50">
-                                                <Trash2 className="w-4 h-4" />
-                                              </IconBtn>
-                                            </div>
-                                          </div>
-                                        </div>
-                                      </li>
-                                    );
-                                  })}
+                                  {comm.items.map((s) => renderItem(s, { sponsorId: group.sponsor?.id }))}
                                 </ul>
-                              </div>
+                              </SubGroup>
                             );
                           })}
-                        </div>
-                      </div>
-                    ))}
+                        </SubGroup>
+                      );
+                    })}
                   </div>
                   )}
                 </div>
+              );
+
+            })}
+          </div>
+        )}                </div>
               );
 
             })}
@@ -1588,6 +2020,13 @@ export default function AdminSponsorshipsPage() {
                 Aplicar status
               </button>
             </div>
+            <button
+              onClick={() => setMethodBulkOpen(true)}
+              disabled={selBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+            >
+              <Pencil className="w-4 h-4" /> Forma
+            </button>
             <button
               onClick={() => beginTransfer(selectedRows.map(r => r.id))}
               disabled={selBusy}
@@ -1619,6 +2058,16 @@ export default function AdminSponsorshipsPage() {
       {toast && (
         <div className={`fixed right-6 z-50 flex items-center gap-2 rounded-xl bg-gray-900 text-white text-sm px-4 py-3 shadow-lg ${selectedCount ? 'bottom-24' : 'bottom-6'}`}>
           <CheckCircle2 className="w-4 h-4 text-emerald-400" /> {toast}
+        </div>
+      )}
+      {lastTransfer && (
+        <div className={`fixed left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-xl bg-gray-900 text-white text-sm px-4 py-3 shadow-lg max-w-[calc(100%-2rem)] ${selectedCount ? 'bottom-24' : 'bottom-6'}`}>
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{lastTransfer.label}</span>
+          <button onClick={undoTransfer} className="inline-flex items-center gap-1 font-semibold text-emerald-300 hover:text-emerald-200">
+            <Undo2 className="w-4 h-4" /> Desfazer
+          </button>
+          <button onClick={() => setLastTransfer(null)} className="text-white/60 hover:text-white" aria-label="Fechar"><X className="w-4 h-4" /></button>
         </div>
       )}
 
@@ -1893,45 +2342,75 @@ export default function AdminSponsorshipsPage() {
         onClose={() => { if (!transferBusy) setTransferOpen(false); }}
       >
         <div className="space-y-4">
-          <div className="text-sm text-gray-700">
-            Selecione o <b>padrinho destino</b>. A transferência altera o dono do(s) apadrinhamento(s) escolhido(s).
+          {/* o que vai ser transferido */}
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-2">
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">De</div>
+            <div className="flex flex-wrap gap-1.5">
+              {transferFrom.map(({ sponsor, n }) => (
+                <span key={sponsor?.id ?? '-'} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-gray-200 text-sm">
+                  <UserCheck className="w-3.5 h-3.5 text-blue-600" /> {sponsor?.name || 'Sem padrinho'} <b className="text-gray-600">{n}</b>
+                </span>
+              ))}
+            </div>
+            <div className="text-xs text-gray-600 line-clamp-2">
+              {transferRows.slice(0, 12).map((r) => `${r.child?.publicId ?? ''} ${r.child?.name ?? ''}`.trim()).join(' · ')}
+              {transferRows.length > 12 && ` · e mais ${transferRows.length - 12}`}
+            </div>
           </div>
 
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Buscar padrinho destino</label>
-            <input
-              value={destQuery}
-              onChange={e => setDestQuery(e.target.value)}
-              placeholder="Digite nome ou e-mail (mín. 2 caracteres)"
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-white"
-              disabled={transferBusy}
-            />
-            {destResults.length > 0 && (
-              <ul className="mt-2 max-h-56 overflow-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
-                {destResults.map(u => (
-                  <li key={u.id} className={`px-3 py-2 text-sm flex items-center justify-between ${destSponsor?.id===u.id?'bg-emerald-50':''}`}>
-                    <div className="min-w-0">
-                      <div className="font-medium text-gray-900 truncate">{u.name}</div>
-                      {u.email && <div className="text-xs text-gray-600 truncate">{u.email}</div>}
-                    </div>
-                    <button
-                      onClick={() => setDestSponsor(u)}
-                      className="ml-3 px-2 py-1 text-xs rounded border border-gray-200 bg-white hover:bg-gray-50"
-                    >
-                      {destSponsor?.id === u.id ? 'Selecionado' : 'Selecionar'}
-                    </button>
-                  </li>
-                ))}
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Para</label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                value={destQuery}
+                onChange={e => { setDestQuery(e.target.value); setDestSponsor(null); }}
+                placeholder="Nome, e-mail ou telefone do padrinho"
+                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg bg-white"
+                disabled={transferBusy}
+                autoFocus
+              />
+            </div>
+            {users === null && <div className="text-xs text-gray-500 mt-2 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Carregando padrinhos…</div>}
+            {usersError && (
+              <div className="text-xs text-red-700 mt-2">Não foi possível carregar os usuários. <button onClick={loadUsers} className="underline">Tentar de novo</button></div>
+            )}
+            {destMatches.length > 0 && (
+              <ul className="mt-2 max-h-64 overflow-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                {destMatches.map(u => {
+                  const isSource = transferFrom.length === 1 && transferFrom[0].sponsor?.id === u.id;
+                  const n = countBySponsor.get(u.id) ?? 0;
+                  return (
+                    <li key={u.id}>
+                      <button
+                        type="button"
+                        onClick={() => setDestSponsor(u)}
+                        disabled={isSource}
+                        className={`w-full text-left px-3 py-2 text-sm flex items-center gap-3 ${destSponsor?.id === u.id ? 'bg-emerald-50' : 'hover:bg-gray-50'} disabled:opacity-50`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-gray-900 truncate">{u.name}</div>
+                          <div className="text-xs text-gray-600 truncate">{[u.email, u.phone].filter(Boolean).join(' · ')}</div>
+                        </div>
+                        <span className="text-xs text-gray-500 shrink-0">
+                          {isSource ? 'é o padrinho atual' : n ? `${n} apadrinhamento${n === 1 ? '' : 's'}` : 'sem apadrinhamentos aqui'}
+                        </span>
+                        {destSponsor?.id === u.id && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
-            {destQuery && destResults.length === 0 && (
-              <div className="text-xs text-gray-500 mt-2">Nenhum padrinho encontrado.</div>
+            {users && normalizeText(destQuery).length >= 2 && destMatches.length === 0 && (
+              <div className="text-xs text-gray-500 mt-2">Nenhum usuário encontrado. O padrinho precisa ter cadastro no site.</div>
             )}
           </div>
 
           {!!destSponsor && (
-            <div className="text-xs text-gray-600">
-              Destino: <b>{destSponsor.name}</b> {destSponsor.email ? `(${destSponsor.email})` : ''}
+            <div className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+              {transferRows.filter((r) => r.sponsor?.id !== destSponsor.id).length} apadrinhamento(s) passa(m) para <b>{destSponsor.name}</b>
+              {destSponsor.email ? ` (${destSponsor.email})` : ''}. Status, forma e ponto de coleta continuam iguais.
             </div>
           )}
 
@@ -1949,6 +2428,153 @@ export default function AdminSponsorshipsPage() {
               className="px-4 py-2 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
             >
               {transferBusy ? 'Transferindo…' : 'Confirmar transferência'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal: editar apadrinhamento */}
+      <Modal
+        open={!!editing && !!editForm}
+        title="Editar apadrinhamento"
+        onClose={() => { if (!editBusy) setEditing(null); }}
+      >
+        {editing && editForm && (() => {
+          const f = editForm;
+          const set = (patch: Partial<EditForm>) => setEditForm((prev) => (prev ? { ...prev, ...patch } : prev));
+          const changeMethod = (method: SponsorshipMethod) => {
+            const status = statusForMethod(f.status, method);
+            set({ method, status, collectionPointId: method === 'GIFT' ? f.collectionPointId || editing.collectionPointId || '' : f.collectionPointId });
+          };
+          const adjusted = f.method !== editing.method && f.status !== editing.status && statusForMethod(editing.status, f.method) === f.status;
+          return (
+            <div className="space-y-5">
+              <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
+                <div className="font-semibold text-gray-900">{editing.child?.publicId ? `${editing.child.publicId} · ` : ''}{editing.child?.name ?? '—'}</div>
+                <div className="text-gray-600 text-xs">Padrinho: {editing.sponsor?.name ?? '—'}{editing.sponsor?.email ? ` · ${editing.sponsor.email}` : ''}</div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold text-gray-800 mb-2">Forma de apadrinhamento</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {([['GIFT', 'Presente no ponto', <Gift key="i" className="w-4 h-4" />], ['PIX', 'PIX', <QrCode key="i" className="w-4 h-4" />]] as const).map(([m, label, icon]) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => changeMethod(m)}
+                      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium ${f.method === m ? 'border-blue-600 bg-blue-50 text-blue-800 ring-1 ring-blue-600' : 'border-gray-200 hover:bg-gray-50 text-gray-700'}`}
+                    >
+                      {icon} {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {f.method === 'GIFT' ? (
+                <label className="block text-sm">
+                  <span className="font-semibold text-gray-800">Ponto de coleta *</span>
+                  <select
+                    value={f.collectionPointId}
+                    onChange={(e) => set({ collectionPointId: e.target.value })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg bg-white"
+                  >
+                    <option value="">Selecione…</option>
+                    {cps.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}{c.cityName ? ` • ${c.cityName}${c.state ? `/${c.state}` : ''}` : ''}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <label className="block text-sm">
+                    <span className="font-semibold text-gray-800">Valor (R$)</span>
+                    <input value={f.donationAmount} onChange={(e) => set({ donationAmount: e.target.value })} inputMode="decimal" placeholder="50,00" className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg" />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="font-semibold text-gray-800">Pago em</span>
+                    <input type="date" value={f.pixPaidAt} onChange={(e) => set({ pixPaidAt: e.target.value })} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg" />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="font-semibold text-gray-800">ID da transação</span>
+                    <input value={f.pixTxid} onChange={(e) => set({ pixTxid: e.target.value })} placeholder="opcional" className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg" />
+                  </label>
+                </div>
+              )}
+
+              <label className="block text-sm">
+                <span className="font-semibold text-gray-800">Etapa</span>
+                <select
+                  value={f.status}
+                  onChange={(e) => set({ status: e.target.value as SponsorshipStatus })}
+                  className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg bg-white"
+                >
+                  {ALL_STATUSES.map((st) => (
+                    <option key={st} value={st}>{STATUS_STYLE[st].step ? `${STATUS_STYLE[st].step}. ` : '× '}{STATUS_PT[st]}{viaLabel(st)}</option>
+                  ))}
+                </select>
+                {adjusted && (
+                  <span className="block text-xs text-amber-700 mt-1">Etapa ajustada para a equivalente da nova forma ({STATUS_PT[f.status]}).</span>
+                )}
+              </label>
+
+              <label className="block text-sm">
+                <span className="font-semibold text-gray-800">Observação</span>
+                <textarea value={f.note} onChange={(e) => set({ note: e.target.value })} rows={3} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg" />
+              </label>
+
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setEditing(null)} disabled={editBusy} className="px-4 py-2 text-sm rounded-lg border border-gray-200 bg-white hover:bg-gray-50">Cancelar</button>
+                <button onClick={saveEdit} disabled={editBusy} className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60">
+                  {editBusy && <Loader2 className="w-4 h-4 animate-spin" />} Salvar
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* Modal: forma de apadrinhamento da seleção */}
+      <Modal
+        open={methodBulkOpen}
+        title={`Forma de apadrinhamento · ${selectedCount} selecionado(s)`}
+        onClose={() => { if (!selBusy) setMethodBulkOpen(false); }}
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            {([['GIFT', 'Presente no ponto', <Gift key="i" className="w-4 h-4" />], ['PIX', 'PIX', <QrCode key="i" className="w-4 h-4" />]] as const).map(([m, label, icon]) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMethodBulk((prev) => ({ ...prev, method: m }))}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium ${methodBulk.method === m ? 'border-blue-600 bg-blue-50 text-blue-800 ring-1 ring-blue-600' : 'border-gray-200 hover:bg-gray-50 text-gray-700'}`}
+              >
+                {icon} {label}
+              </button>
+            ))}
+          </div>
+          {methodBulk.method === 'GIFT' && (
+            <label className="block text-sm">
+              <span className="font-semibold text-gray-800">Ponto de coleta *</span>
+              <select
+                value={methodBulk.collectionPointId}
+                onChange={(e) => setMethodBulk((prev) => ({ ...prev, collectionPointId: e.target.value }))}
+                className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg bg-white"
+              >
+                <option value="">Selecione…</option>
+                {cps.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}{c.cityName ? ` • ${c.cityName}${c.state ? `/${c.state}` : ''}` : ''}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <p className="text-xs text-gray-500">
+            Quem estiver em &quot;Aguardando entrega&quot; (presente) ou &quot;Em compra&quot; (PIX) passa para a etapa equivalente da nova forma.
+            {methodBulk.method === 'PIX' ? ' O ponto de coleta é retirado.' : ''}
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setMethodBulkOpen(false)} disabled={selBusy} className="px-4 py-2 text-sm rounded-lg border border-gray-200 bg-white hover:bg-gray-50">Cancelar</button>
+            <button onClick={applyMethodBulk} disabled={selBusy} className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60">
+              {selBusy && <Loader2 className="w-4 h-4 animate-spin" />} Aplicar
             </button>
           </div>
         </div>
