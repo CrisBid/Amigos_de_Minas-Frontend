@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, ArrowRight, Camera, CheckCircle2, ChevronLeft, ChevronRight, ClipboardPaste, GitCompareArrows,
   Link2, Loader2, RefreshCw, Search, UserPlus, X,
@@ -54,11 +54,35 @@ type PreviewRow = {
   warnings: string[];
 };
 
-/** Ajustes feitos na tela, por linha */
-type Decision = { skip?: boolean; asNew?: boolean; linkTo?: Snapshot; fieldsOff?: FieldKey[] };
+/** Ajustes feitos na tela, por linha (`photo`: enviar ou não a foto, acima da regra geral) */
+type Decision = { skip?: boolean; asNew?: boolean; linkTo?: Snapshot; fieldsOff?: FieldKey[]; photo?: boolean };
 
 type Mode = 'both' | 'updates' | 'creates';
-type ListFilter = 'all' | 'changes' | 'new' | 'same' | 'warnings' | 'skipped';
+
+/** Foto escolhida × foto que a criança já tem (comparando o arquivo, byte a byte) */
+type PhotoStatus = 'same' | 'different' | 'reused' | 'missing' | 'new';
+type PhotoState = PhotoStatus | 'none' | 'checking';
+const PHOTO_LABEL: Record<PhotoStatus, string> = {
+  same: 'Igual à desta campanha',
+  different: 'Diferente da desta campanha',
+  reused: 'Igual à de outra campanha',
+  missing: 'Sem foto ainda',
+  new: 'Criança nova',
+};
+const PHOTO_HINT: Record<PhotoStatus, string> = {
+  same: 'o mesmo arquivo já enviado nesta campanha',
+  different: 'já tem foto nesta campanha, e esta é outra',
+  reused: 'nesta campanha não tem foto; é o mesmo arquivo de uma campanha anterior',
+  missing: 'nenhuma foto, nem de outra campanha igual a esta',
+  new: 'cadastro novo',
+};
+const PHOTO_ORDER: PhotoStatus[] = ['different', 'missing', 'reused', 'new', 'same'];
+// padrão: não reenviar o mesmo arquivo; o resto vai
+const DEFAULT_PHOTO_SEND: Record<PhotoStatus, boolean> = { same: false, different: true, reused: true, missing: true, new: true };
+
+type ServerHash = { current: { hash: string } | null; other: { hash: string; campaignName: string | null } | null };
+
+type ListFilter = 'all' | 'changes' | 'new' | 'same' | 'warnings' | 'skipped' | `photo:${PhotoStatus}`;
 
 const MATCHED_LABEL: Record<NonNullable<PreviewRow['matchedBy']>, string> = {
   campaignId: 'pelo ID nesta campanha',
@@ -104,6 +128,11 @@ export default function UpdateChildrenPage() {
 
   // fotos e aplicação
   const [photos, setPhotos] = useState<File[]>([]);
+  const [photoSend, setPhotoSend] = useState<Record<PhotoStatus, boolean>>(DEFAULT_PHOTO_SEND);
+  const [fileHashes, setFileHashes] = useState<Record<string, string>>({});
+  const [serverHashes, setServerHashes] = useState<Record<string, ServerHash>>({});
+  const [hashing, setHashing] = useState(false);
+  const fileHashCache = useRef(new WeakMap<File, string>());
   const [progress, setProgress] = useState<{ label: string; done: number; total: number } | null>(null);
   const [result, setResult] = useState<{ updated: number; created: number; photos: number; errors: string[] } | null>(null);
 
@@ -236,63 +265,6 @@ export default function UpdateChildrenPage() {
 
   /* ---------- conferência ---------- */
 
-  const target = { communityId: location.communityId || undefined, communityName: names.community, schoolId: location.schoolId || undefined, schoolName: names.school };
-
-  type View = {
-    row: SheetRow; p: PreviewRow; d: Decision;
-    kind: 'update' | 'create'; child: Snapshot | null;
-    changes: Change[]; selected: Change[]; included: boolean; reason?: string;
-  };
-
-  const views: View[] = useMemo(() => rows.map((row) => {
-    const p = preview[row.key];
-    const d = decisions[row.key] ?? {};
-    const child = d.asNew ? null : d.linkTo ?? p?.child ?? null;
-    const kind: View['kind'] = child ? 'update' : 'create';
-    const changes = child ? computeChanges(row, child, target) : [];
-    const selected = changes.filter((c) => fieldsOn.has(c.field) && !d.fieldsOff?.includes(c.field));
-    let reason: string | undefined;
-    if (d.skip) reason = 'deixada de fora';
-    else if (mode === 'updates' && kind === 'create') reason = 'nova (modo: só atualizar)';
-    else if (mode === 'creates' && kind === 'update') reason = 'já existe (modo: só novas)';
-    else if (kind === 'update' && !selected.length) reason = changes.length ? 'nenhuma mudança marcada' : 'sem diferenças';
-    return { row, p, d, kind, child, changes, selected, included: !reason, reason };
-  }), [rows, preview, decisions, mode, fieldsOn, names]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const counts = useMemo(() => {
-    const byField = Object.fromEntries(FIELD_ORDER.map((f) => [f, 0])) as Record<FieldKey, number>;
-    let updates = 0, creates = 0, same = 0, warnings = 0, skipped = 0, withChanges = 0;
-    for (const v of views) {
-      if (v.kind === 'update') { if (v.changes.length) withChanges++; else same++; }
-      v.changes.forEach((c) => { byField[c.field]++; });
-      if (v.p?.warnings.length || (v.kind === 'create' && v.p?.candidates.length)) warnings++;
-      if (!v.included) skipped++;
-      else if (v.kind === 'update') updates++;
-      else creates++;
-    }
-    return { byField, updates, creates, same, warnings, skipped, withChanges };
-  }, [views]);
-
-  const shown = useMemo(() => {
-    const q = normalizeText(search);
-    return views.filter((v) => {
-      if (q && !normalizeText(`${v.row.publicId} ${v.row.name} ${v.child?.name ?? ''}`).includes(q)) return false;
-      switch (listFilter) {
-        case 'changes': return v.kind === 'update' && v.changes.length > 0;
-        case 'new': return v.kind === 'create';
-        case 'same': return v.kind === 'update' && !v.changes.length;
-        case 'warnings': return !!(v.p?.warnings.length || (v.kind === 'create' && v.p?.candidates.length));
-        case 'skipped': return !v.included;
-        default: return true;
-      }
-    });
-  }, [views, listFilter, search]);
-  const pages = Math.max(1, Math.ceil(shown.length / PAGE));
-  useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
-
-  const decide = (key: string, patch: Partial<Decision>) => setDecisions((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
-  const toggleField = (f: FieldKey) => setFieldsOn((prev) => { const n = new Set(prev); if (n.has(f)) n.delete(f); else n.add(f); return n; });
-
   // fotos: pelo número no nome do arquivo (ID da planilha) ou pelo nome da criança
   const photoByKey = useMemo(() => {
     const byId = new Map(rows.map((r) => [r.publicId, r.key]));
@@ -308,11 +280,162 @@ export default function UpdateChildrenPage() {
   }, [photos, rows]);
   const unmatchedPhotos = photos.length - Object.keys(photoByKey).length;
 
+  // criança atual de cada linha com foto (a ligação pode mudar na tela)
+  const childOfRow = (key: string) => {
+    const d = decisions[key];
+    return d?.asNew ? null : d?.linkTo ?? preview[key]?.child ?? null;
+  };
+  const photoChildIds = useMemo(
+    () => [...new Set(Object.keys(photoByKey).map((k) => childOfRow(k)?.id).filter((id): id is string => !!id))].sort().join(','),
+    [photoByKey, decisions, preview], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // impressão digital dos arquivos (no navegador) e das fotos atuais (no servidor)
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const keys = Object.keys(photoByKey);
+      if (!keys.length) { setFileHashes({}); return; }
+      setHashing(true);
+      try {
+        const out: Record<string, string> = {};
+        for (const key of keys) {
+          const f = photoByKey[key];
+          let h = fileHashCache.current.get(f);
+          if (!h) {
+            const digest = await crypto.subtle.digest('SHA-256', await f.arrayBuffer());
+            h = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+            fileHashCache.current.set(f, h);
+          }
+          out[key] = h;
+          if (!alive) return;
+        }
+        setFileHashes(out);
+
+        const missing = photoChildIds.split(',').filter((id) => id && !(id in serverHashes));
+        for (let i = 0; i < missing.length; i += 400) {
+          const part = missing.slice(i, i + 400);
+          const res = await fetch('/api/admin/children/bulk/update/photo-hashes', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ campaignId, childIds: part }),
+          });
+          const j = res.ok ? await res.json() : null;
+          if (!alive) return;
+          const got: Record<string, ServerHash> = j?.hashes ?? {};
+          // quem não voltou não tem foto nenhuma
+          setServerHashes((prev) => ({ ...prev, ...Object.fromEntries(part.map((id) => [id, got[id] ?? { current: null, other: null }])) }));
+        }
+      } catch {
+        setError('Não consegui comparar as fotos com as atuais. As fotos de quem já existe ficam marcadas como diferentes.');
+      } finally {
+        if (alive) setHashing(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [photoByKey, photoChildIds, campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const photoStateOf = (key: string, child: Snapshot | null): PhotoState => {
+    if (!photoByKey[key]) return 'none';
+    if (!child) return 'new';
+    const fh = fileHashes[key];
+    const sh = serverHashes[child.id];
+    if (!fh || !sh) return hashing ? 'checking' : 'different';
+    if (sh.current) return sh.current.hash === fh ? 'same' : 'different';
+    if (sh.other?.hash === fh) return 'reused';
+    return 'missing';
+  };
+
+  const target = { communityId: location.communityId || undefined, communityName: names.community, schoolId: location.schoolId || undefined, schoolName: names.school };
+
+  type View = RowView;
+
+  const views: View[] = useMemo(() => rows.map((row) => {
+    const p = preview[row.key];
+    const d = decisions[row.key] ?? {};
+    const child = d.asNew ? null : d.linkTo ?? p?.child ?? null;
+    const kind: View['kind'] = child ? 'update' : 'create';
+    const changes = child ? computeChanges(row, child, target) : [];
+    const selected = changes.filter((c) => fieldsOn.has(c.field) && !d.fieldsOff?.includes(c.field));
+    const photoState = photoStateOf(row.key, child);
+    const modeOk = !(mode === 'updates' && kind === 'create') && !(mode === 'creates' && kind === 'update');
+    const photoChoice = photoState === 'none' || photoState === 'checking' ? false : d.photo ?? photoSend[photoState];
+    const sendPhoto = !d.skip && modeOk && photoChoice;
+    let reason: string | undefined;
+    if (d.skip) reason = 'deixada de fora';
+    else if (mode === 'updates' && kind === 'create') reason = 'nova (modo: só atualizar)';
+    else if (mode === 'creates' && kind === 'update') reason = 'já existe (modo: só novas)';
+    else if (kind === 'update' && !selected.length && !sendPhoto) reason = changes.length ? 'nenhuma mudança marcada' : 'sem diferenças';
+    return { row, p, d, kind, child, changes, selected, included: !reason, reason, photoState, sendPhoto };
+  }), [rows, preview, decisions, mode, fieldsOn, names, photoByKey, fileHashes, serverHashes, hashing, photoSend]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const counts = useMemo(() => {
+    const byField = Object.fromEntries(FIELD_ORDER.map((f) => [f, 0])) as Record<FieldKey, number>;
+    const byPhoto = Object.fromEntries(PHOTO_ORDER.map((s) => [s, 0])) as Record<PhotoStatus, number>;
+    let updates = 0, creates = 0, same = 0, warnings = 0, skipped = 0, withChanges = 0, photosToSend = 0;
+    for (const v of views) {
+      if (v.kind === 'update') { if (v.changes.length) withChanges++; else same++; }
+      v.changes.forEach((c) => { byField[c.field]++; });
+      if (v.photoState !== 'none' && v.photoState !== 'checking') byPhoto[v.photoState]++;
+      if (v.sendPhoto) photosToSend++;
+      if (v.p?.warnings.length || (v.kind === 'create' && v.p?.candidates.length)) warnings++;
+      if (!v.included) skipped++;
+      else if (v.kind === 'create') creates++;
+      else if (v.selected.length) updates++;
+    }
+    return { byField, byPhoto, updates, creates, same, warnings, skipped, withChanges, photosToSend };
+  }, [views]);
+
+  const shown = useMemo(() => {
+    const q = normalizeText(search);
+    return views.filter((v) => {
+      if (q && !normalizeText(`${v.row.publicId} ${v.row.name} ${v.child?.name ?? ''}`).includes(q)) return false;
+      switch (listFilter) {
+        case 'changes': return v.kind === 'update' && v.changes.length > 0;
+        case 'new': return v.kind === 'create';
+        case 'same': return v.kind === 'update' && !v.changes.length;
+        case 'warnings': return !!(v.p?.warnings.length || (v.kind === 'create' && v.p?.candidates.length));
+        case 'skipped': return !v.included;
+        case 'all': return true;
+        default: return v.photoState === listFilter.slice(6);
+      }
+    });
+  }, [views, listFilter, search]);
+  const pages = Math.max(1, Math.ceil(shown.length / PAGE));
+  useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
+
+  const decide = (key: string, patch: Partial<Decision>) => setDecisions((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+
+  /** Seleção em massa: vale para todas as linhas do filtro e da busca atuais (todas as páginas) */
+  function decideShown(patch: (v: View) => Partial<Decision> | null) {
+    setDecisions((prev) => {
+      const next = { ...prev };
+      for (const v of shown) {
+        const p = patch(v);
+        if (p) next[v.row.key] = { ...next[v.row.key], ...p };
+      }
+      return next;
+    });
+  }
+
+  // mudar a regra geral de um tipo de foto desfaz as escolhas individuais desse tipo
+  function setPhotoRule(status: PhotoStatus, send: boolean) {
+    setPhotoSend((prev) => ({ ...prev, [status]: send }));
+    setDecisions((prev) => {
+      const next = { ...prev };
+      for (const v of views) if (v.photoState === status && next[v.row.key]?.photo !== undefined) next[v.row.key] = { ...next[v.row.key], photo: undefined };
+      return next;
+    });
+  }
+  const toggleField = (f: FieldKey) => setFieldsOn((prev) => { const n = new Set(prev); if (n.has(f)) n.delete(f); else n.add(f); return n; });
+
+
   /* ---------- aplicar ---------- */
 
   async function apply() {
     const included = views.filter((v) => v.included);
-    const updates = included.filter((v) => v.kind === 'update').map((v) => ({
+    // só quem tem mudança de dado marcada; quem só vai receber foto não precisa gravar nada antes
+    const updates = included.filter((v) => v.kind === 'update' && v.selected.length > 0).map((v) => ({
       key: v.row.key,
       childId: v.child!.id,
       fields: updateFields(v.row, v.selected.map((c) => c.field)),
@@ -321,10 +444,12 @@ export default function UpdateChildrenPage() {
       ...v.row,
       category: v.row.category ?? inferCategoryFromGift(v.row.wantedGift, hints)?.category,
     }));
-    const photoRows = views.filter((v) => photoByKey[v.row.key] && (v.included || (v.kind === 'update' && !v.d.skip && mode !== 'creates')));
+    const photoRows = views.filter((v) => v.sendPhoto);
+    const skippedPhotos = views.filter((v) => v.photoState !== 'none' && !v.sendPhoto).length;
     const msg =
-      `Confirmar?\n\n• ${updates.length} criança(s) atualizada(s)\n• ${creates.length} criança(s) nova(s)` +
-      (photoRows.length ? `\n• ${photoRows.length} foto(s) enviada(s)` : '');
+      `Confirmar?\n\n• ${updates.length} criança(s) com dados atualizados\n• ${creates.length} criança(s) nova(s)` +
+      `\n• ${photoRows.length} foto(s) enviada(s)` +
+      (skippedPhotos ? `\n• ${skippedPhotos} foto(s) não enviada(s) (iguais ou desmarcadas)` : '');
     if (!confirm(msg)) return;
 
     const errors: string[] = [];
@@ -563,6 +688,29 @@ export default function UpdateChildrenPage() {
                 O arquivo é ligado à criança pelo ID no começo do nome (ex.: &quot;0669.jpg&quot;) ou pelo nome. A foto vale para esta campanha, com o layout da cidade.
                 {photos.length > 0 && <> <b>{Object.keys(photoByKey).length}</b> ligada(s){unmatchedPhotos > 0 && <>, <b className="text-amber-700">{unmatchedPhotos} sem criança</b></>}.</>}
               </p>
+
+              {Object.keys(photoByKey).length > 0 && (
+                <div className="mt-3 space-y-2">
+                  <p className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                    Enviar a foto quando ela for:
+                    {hashing && <span className="text-xs font-normal text-gray-500 inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> comparando com as atuais…</span>}
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {PHOTO_ORDER.map((st) => (
+                      <label key={st} className={`flex items-start gap-2 rounded-lg border p-2 cursor-pointer ${photoSend[st] ? 'border-violet-300 bg-violet-50' : 'border-gray-200 bg-white'}`}>
+                        <input type="checkbox" className="mt-0.5" checked={photoSend[st]} onChange={(e) => setPhotoRule(st, e.target.checked)} />
+                        <span className="text-sm">
+                          <b>{PHOTO_LABEL[st]}</b> <span className="text-gray-500">({counts.byPhoto[st]})</span>
+                          <span className="block text-xs text-gray-500">{PHOTO_HINT[st]}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    A comparação é do arquivo exato: a mesma foto salva de novo ou recortada conta como diferente. Dá para mudar foto por foto em cada criança.
+                  </p>
+                </div>
+              )}
             </div>
           </section>
 
@@ -587,8 +735,49 @@ export default function UpdateChildrenPage() {
               </div>
             </div>
 
+            {Object.keys(photoByKey).length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-gray-600 inline-flex items-center gap-1"><Camera className="w-4 h-4" /> Fotos:</span>
+                {PHOTO_ORDER.filter((st) => counts.byPhoto[st] > 0).map((st) => {
+                  const key = `photo:${st}` as ListFilter;
+                  return (
+                    <button key={st} onClick={() => { setListFilter(key); setPage(1); }} className={`px-3 py-1.5 rounded-full text-sm border ${listFilter === key ? 'bg-violet-700 text-white border-violet-700' : 'bg-white border-violet-200 text-violet-800'}`}>
+                      {PHOTO_LABEL[st]} <b>{counts.byPhoto[st]}</b>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {shown.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl bg-gray-50 border border-gray-200 px-3 py-2">
+                <span className="text-sm text-gray-700">Para as <b>{shown.length}</b> deste filtro:</span>
+                <MassButton onClick={() => decideShown(() => ({ skip: false }))}>Incluir</MassButton>
+                <MassButton onClick={() => decideShown(() => ({ skip: true }))}>Deixar de fora</MassButton>
+                {shown.some((v) => v.changes.length) && (
+                  <>
+                    <MassButton onClick={() => decideShown((v) => (v.changes.length ? { fieldsOff: [] } : null))}>Marcar todas as mudanças</MassButton>
+                    <MassButton onClick={() => decideShown((v) => (v.changes.length ? { fieldsOff: v.changes.map((c) => c.field) } : null))}>Desmarcar as mudanças</MassButton>
+                  </>
+                )}
+                {shown.some((v) => v.photoState !== 'none') && (
+                  <>
+                    <MassButton onClick={() => decideShown((v) => (v.photoState !== 'none' ? { photo: true } : null))}>Enviar as fotos</MassButton>
+                    <MassButton onClick={() => decideShown((v) => (v.photoState !== 'none' ? { photo: false } : null))}>Não enviar as fotos</MassButton>
+                  </>
+                )}
+              </div>
+            )}
+
             {shown.slice((page - 1) * PAGE, page * PAGE).map((v) => (
-              <RowCard key={v.row.key} v={v} hasPhoto={!!photoByKey[v.row.key]} onDecide={(patch) => decide(v.row.key, patch)} />
+              <RowCard
+                key={v.row.key}
+                v={v}
+                file={photoByKey[v.row.key]}
+                campaignId={campaignId}
+                otherCampaign={v.child ? serverHashes[v.child.id]?.other?.campaignName ?? null : null}
+                onDecide={(patch) => decide(v.row.key, patch)}
+              />
             ))}
             {!shown.length && <p className="text-center text-gray-500 py-10 bg-white rounded-2xl border border-gray-100">Nenhuma linha neste grupo.</p>}
 
@@ -605,14 +794,15 @@ export default function UpdateChildrenPage() {
           <div className="sticky bottom-4 z-10">
             <div className="bg-white border border-gray-200 shadow-xl rounded-2xl px-4 py-3 flex flex-wrap items-center gap-3">
               <span className="text-sm text-gray-800">
-                <b>{counts.updates}</b> atualização(ões) · <b>{counts.creates}</b> nova(s)
-                {Object.keys(photoByKey).length > 0 && <> · <b>{Object.keys(photoByKey).length}</b> foto(s)</>}
+                <b>{counts.updates}</b> com dados atualizados · <b>{counts.creates}</b> nova(s)
+                {Object.keys(photoByKey).length > 0 && <> · <b>{counts.photosToSend}</b> de {Object.keys(photoByKey).length} foto(s)</>}
               </span>
               <div className="flex gap-2 ml-auto">
                 <button onClick={() => setStep(2)} className={`${btn} border border-gray-200 bg-white text-gray-700`}><ArrowLeft className="w-4 h-4" /> Planilha</button>
                 <button
                   onClick={apply}
-                  disabled={!!progress || counts.updates + counts.creates + Object.keys(photoByKey).length === 0}
+                  disabled={!!progress || hashing || counts.updates + counts.creates + counts.photosToSend === 0}
+                  title={hashing ? 'Aguarde a comparação das fotos' : undefined}
                   className={`${btn} bg-emerald-600 text-white`}
                 >
                   <CheckCircle2 className="w-4 h-4" /> Confirmar e gravar
@@ -677,10 +867,79 @@ function Stat({ label, value, hint, tone }: { label: string; value: number; hint
 type RowView = {
   row: SheetRow; p: PreviewRow; d: Decision; kind: 'update' | 'create'; child: Snapshot | null;
   changes: Change[]; selected: Change[]; included: boolean; reason?: string;
+  photoState: PhotoState; sendPhoto: boolean;
 };
 
+function MassButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} className="px-2.5 py-1 rounded-lg border border-gray-300 bg-white text-xs font-medium text-gray-700 hover:bg-gray-100">
+      {children}
+    </button>
+  );
+}
+
+/** Foto atual × foto escolhida, lado a lado */
+function PhotoCompare({ v, file, campaignId, otherCampaign, onDecide }: {
+  v: RowView; file: File; campaignId: string; otherCampaign: string | null; onDecide: (patch: Partial<Decision>) => void;
+}) {
+  const [preview, setPreview] = useState('');
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const st = v.photoState;
+  // miniatura da foto atual: a desta campanha; sem ela, a mais recente de outra campanha
+  const current = v.child && (st === 'same' || st === 'different' || st === 'reused')
+    ? apiPath(`/children/${v.child.id}/thumb?w=240${st === 'reused' ? '' : `&campaignId=${campaignId}`}`)
+    : null;
+  const tone =
+    st === 'same' ? 'bg-gray-100 text-gray-700 border-gray-200'
+      : st === 'different' ? 'bg-amber-50 text-amber-800 border-amber-200'
+      : 'bg-violet-50 text-violet-800 border-violet-200';
+
+  return (
+    <div className="rounded-xl border border-gray-100 p-3">
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        <Camera className="w-4 h-4 text-gray-500" />
+        {st === 'checking' ? (
+          <span className="text-xs text-gray-500 inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> comparando…</span>
+        ) : st !== 'none' && (
+          <span className={`text-xs px-2 py-0.5 rounded-full border ${tone}`}>
+            {PHOTO_LABEL[st]}{st === 'reused' && otherCampaign ? ` (${otherCampaign})` : ''}
+          </span>
+        )}
+        <label className="ml-auto inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+          <input type="checkbox" checked={v.sendPhoto} disabled={st === 'checking' || !!v.d.skip} onChange={(e) => onDecide({ photo: e.target.checked })} />
+          Enviar foto
+        </label>
+      </div>
+      <div className="flex gap-3">
+        <figure className="w-24 sm:w-28 shrink-0">
+          <div className="aspect-square rounded-lg bg-gray-100 overflow-hidden flex items-center justify-center text-[11px] text-gray-400 text-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {current ? <img src={current} alt="Foto atual" className="w-full h-full object-cover" loading="lazy" /> : 'sem foto'}
+          </div>
+          <figcaption className="text-[11px] text-gray-500 mt-1">Atual</figcaption>
+        </figure>
+        <figure className="w-24 sm:w-28 shrink-0">
+          <div className={`aspect-square rounded-lg bg-gray-100 overflow-hidden ${v.sendPhoto ? 'ring-2 ring-emerald-500' : 'opacity-60'}`}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {preview && <img src={preview} alt="Foto escolhida" className="w-full h-full object-cover" />}
+          </div>
+          <figcaption className="text-[11px] text-gray-500 mt-1 truncate" title={file.name}>{file.name}</figcaption>
+        </figure>
+      </div>
+    </div>
+  );
+}
+
 /** Uma linha da planilha: ficha atual × planilha, lado a lado, com o que vai ser aplicado */
-function RowCard({ v, hasPhoto, onDecide }: { v: RowView; hasPhoto: boolean; onDecide: (patch: Partial<Decision>) => void }) {
+function RowCard({ v, file, campaignId, otherCampaign, onDecide }: {
+  v: RowView; file?: File; campaignId: string; otherCampaign: string | null; onDecide: (patch: Partial<Decision>) => void;
+}) {
+  const hasPhoto = !!file;
   const { row, p, d, kind, child } = v;
   const off = new Set(d.fieldsOff ?? []);
   const place = child ? [child.communityName, child.schoolName].filter(Boolean).join(' · ') : '';
@@ -698,7 +957,11 @@ function RowCard({ v, hasPhoto, onDecide }: { v: RowView; hasPhoto: boolean; onD
           <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">Nova</span>
         )}
         {kind === 'update' && !v.changes.length && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Sem diferenças</span>}
-        {hasPhoto && <span className="text-xs px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100 inline-flex items-center gap-1"><Camera className="w-3 h-3" /> foto</span>}
+        {hasPhoto && (
+          <span className={`text-xs px-2 py-0.5 rounded-full border inline-flex items-center gap-1 ${v.sendPhoto ? 'bg-violet-50 text-violet-700 border-violet-100' : 'bg-gray-50 text-gray-500 border-gray-200 line-through'}`}>
+            <Camera className="w-3 h-3" /> foto
+          </span>
+        )}
         {!v.included && v.reason && <span className="text-xs text-gray-500">· fora do envio: {v.reason}</span>}
         <label className="ml-auto inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
           <input type="checkbox" checked={!d.skip} onChange={(e) => onDecide({ skip: !e.target.checked })} /> Incluir
@@ -706,6 +969,8 @@ function RowCard({ v, hasPhoto, onDecide }: { v: RowView; hasPhoto: boolean; onD
       </div>
 
       <div className="px-4 py-3 space-y-3">
+        {file && <PhotoCompare v={v} file={file} campaignId={campaignId} otherCampaign={otherCampaign} onDecide={onDecide} />}
+
         {(p?.warnings ?? []).map((w) => (
           <p key={w} className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 flex items-start gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {w}
