@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Search, Plus, Edit, Trash2, Upload, Heart, Baby, MapPin, Gift, ChevronLeft, ChevronRight, Camera, Loader2,
-  Clock, ScanFace, List, FilterX, School, GitCompareArrows, ImagePlus,
+  Clock, ScanFace, List, FilterX, School, GitCompareArrows, ImagePlus, ScanSearch,
 } from 'lucide-react';
 import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 import LocationFilter, { EMPTY_LOCATION, useLocationLabel, type LocationValue } from '@/components/Admin/LocationFilter';
@@ -277,6 +277,9 @@ export default function AdminChildrenPage() {
             </Link>
             <Link href="/admin/children/update" className="inline-flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-800 px-4 py-2.5 rounded-xl font-semibold border border-gray-200 shadow-sm">
               <GitCompareArrows className="w-4 h-4" /> Atualizar por planilha
+            </Link>
+            <Link href="/admin/children/source-check" className="inline-flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-800 px-4 py-2.5 rounded-xl font-semibold border border-gray-200 shadow-sm">
+              <ScanSearch className="w-4 h-4" /> Conferir com a origem
             </Link>
             <Link href="/admin/children/new" className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-semibold shadow-sm">
               <Plus className="w-4 h-4" /> Nova criança
