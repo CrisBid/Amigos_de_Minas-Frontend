@@ -199,7 +199,7 @@ export function compareSource(input: {
       const twin = input.site.find((c) => normalizeText(cityOf(c)) === normalizeText(city) && nameSimilarity(c.name, row.name) >= 0.9);
       issues.push(twin
         ? { ...base, kind: 'idMismatch', site: twin, details: [{ field: 'ID', sheet: row.publicId, site: String(twin.publicId) }] }
-        : { ...base, kind: 'new', details: [] });
+        : { ...base, kind: 'new', photo: photos.get(row.publicId), details: [] });
       if (twin) seenSite.add(twin.id);
     } else {
       seenSite.add(site.id);
@@ -257,4 +257,59 @@ export function toSheetTsv(rows: SheetChild[]) {
     ['ID', 'CRIANÇA', 'NASCIM', 'IDADE', 'PRESENTE', 'MÃE'].join('\t'),
     ...rows.map((r) => [r.publicId, r.name, br(r.birthDate), r.age ?? '', r.gift ?? '', r.mother ?? ''].join('\t')),
   ].join('\n');
+}
+
+/* —— resolver: cada pendência vira um ajuste para o servidor —— */
+
+export type SyncItem =
+  | { op: 'create'; key: string; cityId: string; community?: string | null; row: { publicId: string; name: string; birthDate?: string | null; age?: number | null; gift?: string | null; mother?: string | null }; photoFileId?: string | null; useChildId?: string | null; forceNew?: boolean }
+  | { op: 'update'; key: string; childId: string; cityId?: string | null; fields: { name?: string; gift?: string; birthDate?: string; community?: string } }
+  | { op: 'renumber'; key: string; childId: string; publicId: number }
+  | { op: 'photo'; key: string; childId: string; photoFileId: string }
+  | { op: 'remove'; key: string; childId: string; sponsorship?: { id: string; decision: 'cancel' | 'replace'; replacementChildId?: string | null } | null };
+
+/** Tipos que dá para resolver pela conferência */
+export const RESOLVABLE: IssueKind[] = ['new', 'removed', 'idMismatch', 'changed', 'photoNotOnSite', 'photoNewer', 'photoDifferent'];
+
+/** Identificador estável da pendência (para seleção) */
+export function issueKey(i: Issue) {
+  return `${i.kind}:${i.publicId}:${i.site?.id ?? (i.sheet ? `${i.sheet.tab}#${i.sheet.line}` : i.photo?.id ?? '')}`;
+}
+
+/** Tem padrinho de verdade (cancelado não conta) */
+export const activeSponsorship = (c?: SiteChild) => c?.sponsorships?.find((s) => s.status !== 'CANCELLED') ?? null;
+
+const FIELD: Record<string, 'name' | 'gift' | 'birthDate' | 'community'> = { Nome: 'name', Presente: 'gift', Nascimento: 'birthDate', Comunidade: 'community' };
+
+/** A pendência como ajuste; null quando não dá para resolver por aqui */
+export function issueToItem(i: Issue, cityIdByName: Record<string, string>): SyncItem | null {
+  const key = issueKey(i);
+  switch (i.kind) {
+    case 'new': {
+      const cityId = cityIdByName[i.city];
+      if (!i.sheet || !cityId) return null;
+      const r = i.sheet;
+      return {
+        op: 'create', key, cityId, community: r.community || null,
+        row: { publicId: r.publicId, name: r.name, birthDate: r.birthDate ?? null, age: r.age ?? null, gift: r.gift ?? null, mother: r.mother ?? null },
+        photoFileId: i.photo?.id ?? null,
+      };
+    }
+    case 'changed': {
+      if (!i.site) return null;
+      const fields: Record<string, string> = {};
+      for (const d of i.details) if (FIELD[d.field] && d.sheet) fields[FIELD[d.field]] = d.sheet;
+      return { op: 'update', key, childId: i.site.id, cityId: i.site.city?.id ?? i.site.cityId ?? null, fields };
+    }
+    case 'idMismatch':
+      return i.site && /^\d+$/.test(i.publicId) ? { op: 'renumber', key, childId: i.site.id, publicId: Number(i.publicId) } : null;
+    case 'photoNotOnSite':
+    case 'photoNewer':
+    case 'photoDifferent':
+      return i.site && i.photo ? { op: 'photo', key, childId: i.site.id, photoFileId: i.photo.id } : null;
+    case 'removed':
+      return i.site ? { op: 'remove', key, childId: i.site.id } : null;
+    default:
+      return null;
+  }
 }

@@ -9,7 +9,7 @@ import { STATUS_PT, LOGISTICS_FLOW, type SponsorshipStatus } from '@/lib/sponsor
 import {
   Heart, Baby, Calendar, Clock, AlertTriangle, ImageOff, Gift, Users, RefreshCw,
   Activity, UserPlus, Truck, ArrowUpRight, ArrowDownRight, Minus, ClipboardList,
-  ArrowRightLeft, FileDown, MapPin, Wallet,
+  ArrowRightLeft, FileDown, MapPin, Wallet, History, ScanSearch,
 } from 'lucide-react';
 
 /* ===================== Tipos (GET /dashboard) ===================== */
@@ -580,9 +580,11 @@ function QuickActions() {
     { href: '/admin/children/bulk', label: 'Cadastro guiado', icon: <ClipboardList className="w-5 h-5 text-violet-600" /> },
     { href: '/admin/campaigns/migrate-children', label: 'Migrar crianças', icon: <ArrowRightLeft className="w-5 h-5 text-blue-600" /> },
     { href: '/admin/exports', label: 'Exportações', icon: <FileDown className="w-5 h-5 text-emerald-600" /> },
+    { href: '/admin/children/source-check', label: 'Conferir com a origem', icon: <ScanSearch className="w-5 h-5 text-amber-600" /> },
+    { href: '/admin/audit', label: 'Histórico de alterações', icon: <History className="w-5 h-5 text-gray-700" /> },
   ];
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
       {actions.map((a) => (
         <Link key={a.href} href={a.href} className="flex items-center gap-3 p-4 bg-white/70 hover:bg-white rounded-xl border border-gray-100 hover:shadow-md transition">
           <div className="p-2 bg-gray-50 rounded-lg">{a.icon}</div>

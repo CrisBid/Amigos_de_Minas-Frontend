@@ -3,13 +3,14 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, CheckCircle2, ClipboardCopy, Download, ExternalLink, FileSpreadsheet, FolderOpen, Loader2,
-  RefreshCw, ScanSearch, Search, Settings2,
+  AlertTriangle, ArrowLeft, CheckCircle2, ClipboardCopy, Download, ExternalLink, FileSpreadsheet, FolderOpen, Heart, History, Loader2,
+  RefreshCw, ScanSearch, Search, Settings2, Undo2, Wand2,
 } from 'lucide-react';
+import SourceResolve from '@/components/Admin/SourceResolve';
 import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 import { normalizeText } from '@/lib/sheetImport';
 import {
-  compareSource, ISSUE_LABEL, matchTabToCity, parseCampaignTab, toSheetTsv,
+  activeSponsorship, compareSource, ISSUE_LABEL, issueKey, issueToItem, matchTabToCity, parseCampaignTab, RESOLVABLE, toSheetTsv,
   type DriveFile, type Issue, type IssueKind, type SheetChild, type SiteChild,
 } from '@/lib/sourceCompare';
 import { STATUS_PT, type SponsorshipStatus } from '@/lib/sponsorship-status';
@@ -54,6 +55,13 @@ const KIND_HINT: Record<IssueKind, string> = {
   orphanPhoto: 'Arquivo no Drive com ID que não está na planilha',
 };
 const PAGE = 100;
+
+type Batch = { batchId: string; count: number; startedAt: string; finishedAt: string; actorName: string | null; byAction: Record<string, number>; reverted: number };
+const ACTION_PT: Record<string, string> = {
+  'child.create': 'cadastro(s)', 'child.update': 'atualização(ões)', 'child.renumber': 'ID(s) corrigido(s)', 'child.photo': 'foto(s)',
+  'child.remove': 'saída(s)', 'sponsorship.cancel': 'apadrinhamento(s) cancelado(s)', 'sponsorship.replace': 'apadrinhamento(s) trocado(s)',
+  'community.create': 'comunidade(s) criada(s)', 'community.reactivate': 'comunidade(s) reativada(s)', 'child.undo': 'desfeito(s)',
+};
 const btn = 'inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40';
 
 async function errorText(res: Response) {
@@ -82,6 +90,40 @@ export default function SourceCheckPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [copied, setCopied] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [resolving, setResolving] = useState<Issue[] | null>(null);
+  const [batches, setBatches] = useState<Batch[] | null>(null);
+  const [undoing, setUndoing] = useState<string | null>(null);
+
+  // lotes já gravados nesta campanha (só administradores veem o histórico)
+  async function loadBatches() {
+    if (!campaignId) return;
+    try {
+      const r = await fetch(`/api/admin/audit/batches?campaignId=${encodeURIComponent(campaignId)}&take=10`, { cache: 'no-store' });
+      setBatches(r.ok ? await r.json() : null);
+    } catch { setBatches(null); }
+  }
+  useEffect(() => {
+    if (ready && campaignId) void loadBatches(); else setBatches(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, campaignId]);
+
+  async function undoBatch(b: Batch) {
+    if (!window.confirm(`Desfazer o lote de ${new Date(b.finishedAt).toLocaleString('pt-BR')} (${b.count} registro(s))? As crianças voltam a ficar como estavam antes.`)) return;
+    setUndoing(b.batchId); setError(null);
+    try {
+      const r = await fetch('/api/admin/source-check/undo-batch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ batchId: b.batchId }) });
+      if (!r.ok) throw new Error(await errorText(r));
+      const j = await r.json();
+      if (j.failed?.length) setError(`Desfeito ${j.undone} de ${j.total}. Não deu para desfazer: ${j.failed.map((f: { summary: string; message?: string }) => `${f.summary} (${f.message})`).join(' · ')}`);
+      await loadBatches();
+      if (data) await run();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao desfazer.');
+    } finally {
+      setUndoing(null);
+    }
+  }
 
   // configuração da campanha
   useEffect(() => {
@@ -118,7 +160,7 @@ export default function SourceCheckPage() {
   }
 
   async function run() {
-    setError(null); setSiteMd5(undefined); setPage(1);
+    setError(null); setSiteMd5(undefined); setPage(1); setSelected(new Set());
     const get = async (path: string, what: string) => {
       setLoading(what);
       const r = await fetch(`/api/admin/source-check/${path}?campaignId=${encodeURIComponent(campaignId)}`, { cache: 'no-store' });
@@ -214,6 +256,18 @@ export default function SourceCheckPage() {
   }, [issues, kindFilter, cityFilter, communityFilter, search]);
   const pages = Math.max(1, Math.ceil(shown.length / PAGE));
 
+  const cityIdByName = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const c of data?.site ?? []) { const id = c.city?.id ?? c.cityId; const name = c.city?.name ?? c.cityName; if (id && name) m[name] = id; }
+    return m;
+  }, [data]);
+  const canResolve = (i: Issue) => RESOLVABLE.includes(i.kind) && !!issueToItem(i, cityIdByName);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const shownResolvable = useMemo(() => shown.filter(canResolve), [shown, cityIdByName]);
+  const selectedIssues = useMemo(() => issues.filter((i) => selected.has(issueKey(i))), [issues, selected]);
+  const sponsoredRemoved = useMemo(() => issues.filter((i) => i.kind === 'removed' && activeSponsorship(i.site)), [issues]);
+  const toggleSel = (k: string, on: boolean) => setSelected((p) => { const s = new Set(p); if (on) s.add(k); else s.delete(k); return s; });
+
   const newRows = shown.filter((i) => i.kind === 'new' && i.sheet).map((i) => i.sheet!);
   async function copyNew() {
     await navigator.clipboard.writeText(toSheetTsv(newRows));
@@ -250,7 +304,7 @@ export default function SourceCheckPage() {
         </Link>
         <h1 className="text-3xl font-bold text-gray-900">Conferir com a origem</h1>
         <p className="text-gray-600 mt-1">
-          Compara a planilha e a pasta de fotos do Google com o que está no site: crianças novas, que saíram, dados e fotos diferentes. Só confere — nada é gravado.
+          Compara a planilha e a pasta de fotos do Google com o que está no site: crianças novas, que saíram, dados e fotos diferentes. Marque as pendências e use <b>Resolver</b> para igualar o site à origem; cada ajuste fica no histórico e pode ser desfeito.
         </p>
       </div>
 
@@ -361,6 +415,19 @@ export default function SourceCheckPage() {
                 <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="ID ou nome" className="pl-9 pr-3 py-2 border border-gray-200 rounded-xl text-sm" />
               </div>
               <div className="flex flex-wrap gap-2 ml-auto">
+                {shownResolvable.length > 0 && (
+                  <button onClick={() => setSelected((p) => { const s = new Set(p); shownResolvable.forEach((i) => s.add(issueKey(i))); return s; })} className={`${btn} border border-gray-200 bg-white text-gray-700`} title="Marca todas as pendências deste filtro que podem ser resolvidas por aqui">
+                    Selecionar as {shownResolvable.length} deste filtro
+                  </button>
+                )}
+                {selected.size > 0 && (
+                  <>
+                    <button onClick={() => setSelected(new Set())} className={`${btn} border border-gray-200 bg-white text-gray-700`}>Limpar seleção</button>
+                    <button onClick={() => setResolving(selectedIssues)} className={`${btn} bg-blue-600 text-white`}>
+                      <Wand2 className="w-4 h-4" /> Resolver {selected.size}
+                    </button>
+                  </>
+                )}
                 <button onClick={compareExact} disabled={!!md5Progress} className={`${btn} border border-gray-200 bg-white text-gray-700`} title="Compara o arquivo de cada foto do site com o do Drive (pode levar alguns minutos na primeira vez)">
                   {md5Progress ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanSearch className="w-4 h-4" />}
                   {md5Progress ?? (siteMd5 ? 'Fotos comparadas pelo arquivo' : 'Comparar fotos pelo arquivo')}
@@ -375,6 +442,13 @@ export default function SourceCheckPage() {
                 </button>
               </div>
             </div>
+            {sponsoredRemoved.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 text-sm text-red-800 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                <Heart className="w-4 h-4" />
+                <span><b>{sponsoredRemoved.length}</b> criança(s) saíram da planilha e têm padrinho.</span>
+                <button onClick={() => setResolving(sponsoredRemoved)} className="ml-auto underline font-semibold">Ver padrinhos e decidir</button>
+              </div>
+            )}
             {!siteMd5 && (
               <p className="text-xs text-gray-500">
                 Sem a comparação pelo arquivo, a foto é marcada como &quot;mais nova&quot; quando foi alterada no Drive depois do envio para o site.
@@ -389,6 +463,13 @@ export default function SourceCheckPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-xs text-gray-600 text-left">
                   <tr>
+                    <th className="px-3 py-2 w-8">
+                      {(() => {
+                        const pageRes = shown.slice((page - 1) * PAGE, page * PAGE).filter(canResolve);
+                        const all = pageRes.length > 0 && pageRes.every((i) => selected.has(issueKey(i)));
+                        return <input type="checkbox" className="w-4 h-4 accent-blue-600" aria-label="Marcar a página" disabled={!pageRes.length} checked={all} onChange={(e) => pageRes.forEach((i) => toggleSel(issueKey(i), e.target.checked))} />;
+                      })()}
+                    </th>
                     <th className="px-3 py-2">Situação</th>
                     <th className="px-3 py-2">ID</th>
                     <th className="px-3 py-2">Criança</th>
@@ -402,7 +483,10 @@ export default function SourceCheckPage() {
                   {shown.slice((page - 1) * PAGE, page * PAGE).map((i, idx) => {
                     const st = i.site?.sponsorships?.[0]?.status as SponsorshipStatus | undefined;
                     return (
-                      <tr key={`${i.kind}-${i.publicId}-${idx}`} className="align-top">
+                      <tr key={`${i.kind}-${i.publicId}-${idx}`} className={`align-top ${selected.has(issueKey(i)) ? 'bg-blue-50/50' : ''}`}>
+                        <td className="px-3 py-2">
+                          {canResolve(i) && <input type="checkbox" className="w-4 h-4 accent-blue-600 mt-0.5" checked={selected.has(issueKey(i))} onChange={(e) => toggleSel(issueKey(i), e.target.checked)} aria-label="Marcar" />}
+                        </td>
                         <td className="px-3 py-2"><span className={`inline-block text-xs px-2 py-0.5 rounded-full border whitespace-nowrap ${KIND_TONE[i.kind]}`} title={KIND_HINT[i.kind]}>{ISSUE_LABEL[i.kind]}</span></td>
                         <td className="px-3 py-2 font-mono text-gray-700">{i.publicId}</td>
                         <td className="px-3 py-2">
@@ -419,7 +503,7 @@ export default function SourceCheckPage() {
                           ))}
                           {i.photo && <div className="text-xs text-gray-500 truncate max-w-[16rem]" title={[...i.photo.path, i.photo.name].join(' / ')}>{[...i.photo.path, i.photo.name].join(' / ')}</div>}
                         </td>
-                        <td className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap">{st ? STATUS_PT[st] ?? st : i.site ? 'sem padrinho' : ''}</td>
+                        <td className={`px-3 py-2 text-xs whitespace-nowrap ${i.kind === 'removed' && st && st !== 'CANCELLED' ? 'text-red-700 font-semibold' : 'text-gray-700'}`}>{st ? STATUS_PT[st] ?? st : i.site ? 'sem padrinho' : ''}</td>
                         <td className="px-3 py-2 whitespace-nowrap">
                           {i.site && <Link href={`/admin/children/${i.site.id}`} className="text-xs text-blue-700 hover:underline mr-2">no site</Link>}
                           {i.photo && <a href={`https://drive.google.com/file/d/${i.photo.id}/view`} target="_blank" rel="noreferrer" className="text-xs text-blue-700 hover:underline">foto</a>}
@@ -428,7 +512,7 @@ export default function SourceCheckPage() {
                     );
                   })}
                   {!shown.length && (
-                    <tr><td colSpan={7} className="px-3 py-10 text-center text-gray-500">Nada neste filtro.</td></tr>
+                    <tr><td colSpan={8} className="px-3 py-10 text-center text-gray-500">Nada neste filtro.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -442,6 +526,44 @@ export default function SourceCheckPage() {
             )}
           </section>
         </>
+      )}
+
+      {batches && batches.length > 0 && (
+        <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <History className="w-4 h-4 text-gray-600" />
+            <h2 className="font-semibold text-gray-900">Ajustes gravados nesta campanha</h2>
+            <Link href={`/admin/audit?campaignId=${encodeURIComponent(campaignId)}`} className="ml-auto text-sm text-blue-700 hover:underline">Histórico completo</Link>
+          </div>
+          <ul className="divide-y divide-gray-100 text-sm">
+            {batches.map((b) => (
+              <li key={b.batchId} className="py-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-gray-900 font-medium">{new Date(b.finishedAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                <span className="text-gray-600">{b.actorName ?? '—'}</span>
+                <span className="text-gray-700">{Object.entries(b.byAction).map(([a, n]) => `${n} ${ACTION_PT[a] ?? a}`).join(' · ')}</span>
+                {b.reverted > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">{b.reverted} desfeito(s)</span>}
+                <span className="ml-auto flex gap-3">
+                  <Link href={`/admin/audit?batchId=${encodeURIComponent(b.batchId)}`} className="text-blue-700 hover:underline">ver</Link>
+                  <button onClick={() => undoBatch(b)} disabled={!!undoing} className="inline-flex items-center gap-1 text-red-700 hover:underline disabled:opacity-40">
+                    {undoing === b.batchId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Undo2 className="w-3.5 h-3.5" />} desfazer
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {resolving && (
+        <SourceResolve
+          campaignId={campaignId}
+          issues={resolving}
+          cityIdByName={cityIdByName}
+          onClose={(changed) => {
+            setResolving(null);
+            if (changed) { setSelected(new Set()); void loadBatches(); void run(); }
+          }}
+        />
       )}
     </div>
   );
