@@ -23,7 +23,7 @@ const METHOD_OPTIONS = [
   { id: 'PIX', name: 'PIX' },
 ];
 const FIELDS_KEY = 'admin:export:sponsorships:fields';
-const OPTS_KEY = 'admin:export:sponsorships:options';
+const OPTS_KEY = 'admin:export:sponsorships:options:v2';
 
 const chip = (on: boolean) =>
   `px-3 py-1 rounded-full border text-sm ${on ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-700 border-gray-300'}`;
@@ -50,10 +50,11 @@ export default function ExportSponsorshipsPage() {
   // colunas e opções (lembradas neste navegador)
   const [fields, setFields] = useState<string[]>(DEFAULT_FIELDS);
   const [groupBy, setGroupBy] = useState<GroupBy>('community');
-  const [sortBy, setSortBy] = useState<SortBy>('name');
+  const [sortBy, setSortBy] = useState<SortBy>('id');
   const [sponsorList, setSponsorList] = useState(true);
+  const [giftSum, setGiftSum] = useState(true);
   const [layout, setLayout] = useState<'tabs' | 'single'>('tabs');
-  const [breakPerGroup, setBreakPerGroup] = useState(false);
+  const [breakPerGroup, setBreakPerGroup] = useState(true);
   const [textScale, setTextScale] = useState(1);
   const [restored, setRestored] = useState(false);
 
@@ -69,17 +70,17 @@ export default function ExportSponsorshipsPage() {
         if (valid.length) setFields(valid);
       }
     } catch { /* sem preferências salvas */ }
-    const o = load(OPTS_KEY, { sortBy: 'name' as SortBy, groupBy: 'community' as GroupBy, sponsorList: true, layout: 'tabs' as 'tabs' | 'single', breakPerGroup: false, textScale: 1 });
-    setGroupBy(o.groupBy); setSortBy(o.sortBy); setSponsorList(o.sponsorList); setLayout(o.layout); setBreakPerGroup(o.breakPerGroup); setTextScale(o.textScale);
+    const o = load(OPTS_KEY, { sortBy: 'id' as SortBy, groupBy: 'community' as GroupBy, sponsorList: true, giftSum: true, layout: 'tabs' as 'tabs' | 'single', breakPerGroup: true, textScale: 1 });
+    setGroupBy(o.groupBy); setSortBy(o.sortBy); setSponsorList(o.sponsorList); setGiftSum(o.giftSum); setLayout(o.layout); setBreakPerGroup(o.breakPerGroup); setTextScale(o.textScale);
     setRestored(true);
   }, []);
   useEffect(() => {
     if (!restored) return;
     try {
       localStorage.setItem(FIELDS_KEY, JSON.stringify(fields));
-      localStorage.setItem(OPTS_KEY, JSON.stringify({ groupBy, sortBy, sponsorList, layout, breakPerGroup, textScale }));
+      localStorage.setItem(OPTS_KEY, JSON.stringify({ groupBy, sortBy, sponsorList, giftSum, layout, breakPerGroup, textScale }));
     } catch { /* navegador sem armazenamento */ }
-  }, [restored, fields, groupBy, sortBy, sponsorList, layout, breakPerGroup, textScale]);
+  }, [restored, fields, groupBy, sortBy, sponsorList, giftSum, layout, breakPerGroup, textScale]);
 
   // listas dos filtros
   useEffect(() => {
@@ -161,6 +162,7 @@ export default function ExportSponsorshipsPage() {
       q.set('sortBy', sortBy);
       q.set('layout', layout);
       q.set('sponsorList', sponsorList ? '1' : '0');
+      q.set('giftSummary', giftSum ? '1' : '0');
       const res = await fetch(`/api/admin/sponsorships/export?${q}`);
       if (!res.ok) throw new Error((await res.text().catch(() => '')) || 'Falha ao exportar.');
       const blob = await res.blob();
@@ -185,7 +187,7 @@ export default function ExportSponsorshipsPage() {
       giftListPdf(data.rows, data.sponsors, {
         title: 'Lista de presentes e padrinhos',
         subtitle: subtitle(),
-        fields, groupBy, sortBy, breakPerGroup, sponsorList, textScale,
+        fields, groupBy, sortBy, breakPerGroup, sponsorList, giftSummary: giftSum, textScale,
         fileName: `lista-de-presentes-${new Date().toISOString().slice(0, 10)}.pdf`,
       });
     } catch (e) {
@@ -320,16 +322,18 @@ export default function ExportSponsorshipsPage() {
               {(Object.keys(GROUP_LABEL) as GroupBy[]).map((g) => <option key={g} value={g}>{GROUP_LABEL[g]}</option>)}
             </select>
           </label>
-          <label className="text-sm text-gray-600">Ordem dentro do grupo
-            <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortBy)} className="mt-1 w-full rounded-xl border border-gray-300 bg-white text-gray-900 px-3 py-2">
-              <option value="name">Nome da criança</option>
-              <option value="id">ID</option>
-            </select>
-          </label>
+          <div className="text-sm text-gray-600">Ordem das crianças
+            <div className="mt-1 inline-flex w-full rounded-xl border border-gray-300 overflow-hidden">
+              {([['id', 'Por ID'], ['name', 'Alfabética']] as [SortBy, string][]).map(([v, label]) => (
+                <button key={v} type="button" onClick={() => setSortBy(v)} className={`flex-1 px-3 py-2 ${sortBy === v ? 'bg-emerald-600 text-white font-semibold' : 'bg-white text-gray-700'}`}>{label}</button>
+              ))}
+            </div>
+          </div>
           <div className="text-sm text-gray-700 space-y-1.5 md:col-span-3">
-            <label className="flex items-center gap-2"><input type="checkbox" checked={sponsorList} onChange={(e) => setSponsorList(e.target.checked)} className="accent-emerald-600" /> Lista dos padrinhos com contato no final</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={giftSum} onChange={(e) => setGiftSum(e.target.checked)} className="accent-emerald-600" /> Resumo dos presentes por {groupBy === 'city' || groupBy === 'school' || groupBy === 'collectionPoint' ? GROUP_LABEL[groupBy].toLowerCase() : 'comunidade'} (quantos de cada presente), no começo</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={sponsorList} onChange={(e) => setSponsorList(e.target.checked)} className="accent-emerald-600" /> Lista dos padrinhos com contato no final, separada por {groupBy === 'city' || groupBy === 'school' || groupBy === 'collectionPoint' ? GROUP_LABEL[groupBy].toLowerCase() : 'comunidade'}</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={layout === 'tabs'} disabled={groupBy === 'none'} onChange={(e) => setLayout(e.target.checked ? 'tabs' : 'single')} className="accent-emerald-600" /> Excel: uma aba para cada {GROUP_LABEL[groupBy].toLowerCase()} (desmarcado: tudo numa aba, com títulos)</label>
-            <label className="flex items-center gap-2"><input type="checkbox" checked={breakPerGroup} disabled={groupBy === 'none'} onChange={(e) => setBreakPerGroup(e.target.checked)} className="accent-emerald-600" /> PDF: página nova para cada {GROUP_LABEL[groupBy].toLowerCase()}</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={breakPerGroup} disabled={groupBy === 'none'} onChange={(e) => setBreakPerGroup(e.target.checked)} className="accent-emerald-600" /> PDF: começar cada {GROUP_LABEL[groupBy].toLowerCase()} em página nova</label>
             <label className="flex items-center gap-2">PDF: tamanho do texto
               <select value={textScale} onChange={(e) => setTextScale(Number(e.target.value))} className="rounded-lg border border-gray-300 bg-white px-2 py-1">
                 <option value={0.9}>menor</option><option value={1}>normal</option><option value={1.15}>maior</option>

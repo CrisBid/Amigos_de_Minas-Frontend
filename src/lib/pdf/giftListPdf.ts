@@ -1,7 +1,7 @@
 // Lista de presentes e padrinhos em PDF: tabela com as colunas escolhidas, separada por
 // grupo (comunidade, por padrão) e, no final, os padrinhos com os contatos.
 import jsPDF from 'jspdf';
-import { cellText, EXPORT_FIELDS, groupRows, type ExportRow, type GroupBy, type SortBy, type SponsorContact } from '@/lib/exportFields';
+import { cellText, EXPORT_FIELDS, giftSummary, groupRows, sponsorGroups, type ExportRow, type GroupBy, type SortBy, type SponsorContact } from '@/lib/exportFields';
 
 export type GiftListOptions = {
   title?: string;
@@ -12,6 +12,8 @@ export type GiftListOptions = {
   /** página nova para cada grupo */
   breakPerGroup?: boolean;
   sponsorList?: boolean;
+  /** página(s) de resumo: quantos de cada presente em cada comunidade */
+  giftSummary?: boolean;
   /** 0.85 (menor) a 1.2 (maior) */
   textScale?: number;
   fileName?: string;
@@ -75,6 +77,22 @@ export function giftListPdf(rows: ExportRow[], sponsors: SponsorContact[], opts:
     });
   };
 
+  /** Faixa com o nome do grupo (comunidade…) */
+  const groupTitle = (text: string) => {
+    if (y + 60 > bottom) { pdf.addPage(); y = m; }
+    pdf.setFillColor(232, 245, 239);
+    pdf.roundedRect(m, y, W - m * 2, 20 * scale, 4, 4, 'F');
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10.5 * scale); pdf.setTextColor(...GREEN);
+    pdf.text(text, m + 8, y + 13.5 * scale);
+    y += 20 * scale + 4;
+  };
+  // em página nova no meio do grupo, repete o nome dele
+  const cont = (label: string) => {
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9 * scale); pdf.setTextColor(...GREEN);
+    pdf.text(`${label} (continuação)`, m, y + 10);
+    y += 16;
+  };
+
   // ===== cabeçalho do documento
   pdf.setFont('helvetica', 'bold'); pdf.setFontSize(17 * scale); pdf.setTextColor(...INK);
   pdf.text(opts.title || 'Lista de presentes e padrinhos', m, y + 14);
@@ -84,6 +102,22 @@ export function giftListPdf(rows: ExportRow[], sponsors: SponsorContact[], opts:
   pdf.text(sub, m, y + 30);
   y += 44;
 
+  // ===== resumo dos presentes (logo depois do título; a lista começa em página nova)
+  if (opts.giftSummary && rows.length) {
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13 * scale); pdf.setTextColor(...INK);
+    pdf.text('Resumo dos presentes', m, y + 10);
+    y += 20;
+    const gw = [5, 1, 4];
+    const gt = gw.reduce((a, b) => a + b, 0);
+    const gc = ['Presente', 'Qtd.', 'IDs das crianças'].map((label, i) => ({ label, w: ((W - m * 2) * gw[i]) / gt, bold: i === 0 }));
+    for (const g of giftSummary(rows, opts.groupBy)) {
+      groupTitle(`${g.label}  —  ${g.total} criança(s), ${g.gifts.length} presente(s) diferente(s)`);
+      table(gc, g.gifts.map((it) => [it.gift, String(it.count), it.ids.join(', ')]), { before: () => cont(g.label) });
+      y += 12;
+    }
+    pdf.addPage(); y = m;
+  }
+
   // ===== crianças, por grupo
   const total = fields.reduce((a, f) => a + f.weight, 0);
   const cols = fields.map((f) => ({ label: f.label, w: ((W - m * 2) * f.weight) / total, bold: f.key === 'childName' }));
@@ -91,22 +125,8 @@ export function giftListPdf(rows: ExportRow[], sponsors: SponsorContact[], opts:
   groups.forEach((g, gi) => {
     if (opts.groupBy !== 'none') {
       if (gi > 0 && opts.breakPerGroup) { pdf.addPage(); y = m; }
-      const title = () => {
-        if (y + 60 > bottom) { pdf.addPage(); y = m; }
-        pdf.setFillColor(232, 245, 239);
-        pdf.roundedRect(m, y, W - m * 2, 20 * scale, 4, 4, 'F');
-        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10.5 * scale); pdf.setTextColor(...GREEN);
-        pdf.text(`${g.label}  —  ${g.rows.length} criança(s)`, m + 8, y + 13.5 * scale);
-        y += 20 * scale + 4;
-      };
-      title();
-      // em página nova no meio do grupo, repete o nome do grupo (continuação)
-      const cont = () => {
-        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9 * scale); pdf.setTextColor(...GREEN);
-        pdf.text(`${g.label} (continuação)`, m, y + 10);
-        y += 16;
-      };
-      table(cols, g.rows.map((r) => fields.map((f) => cellText(r, f.key))), { before: cont });
+      groupTitle(`${g.label}  —  ${g.rows.length} criança(s)`);
+      table(cols, g.rows.map((r) => fields.map((f) => cellText(r, f.key))), { before: () => cont(g.label) });
       y += 12;
     } else {
       table(cols, g.rows.map((r) => fields.map((f) => cellText(r, f.key))));
@@ -123,12 +143,16 @@ export function giftListPdf(rows: ExportRow[], sponsors: SponsorContact[], opts:
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15 * scale); pdf.setTextColor(...INK);
     pdf.text('Padrinhos e contatos', m, y + 12);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9 * scale); pdf.setTextColor(...MUTED);
-    pdf.text(`${sponsors.length} padrinho(s), em ordem alfabética`, m, y + 27);
+    pdf.text(`${sponsors.length} padrinho(s), separados por ${opts.groupBy === 'city' ? 'cidade' : opts.groupBy === 'school' ? 'escola' : opts.groupBy === 'collectionPoint' ? 'ponto de coleta' : 'comunidade'}`, m, y + 27);
     y += 38;
-    const weights = [2.2, 2.6, 1.3, 0.8, 2.6];
+    const weights = [2.2, 2.6, 1.3, 0.8, 2.2];
     const tw = weights.reduce((a, b) => a + b, 0);
-    const sc = ['Padrinho', 'E-mail', 'Telefone', 'Crianças', 'Comunidades'].map((label, i) => ({ label, w: ((W - m * 2) * weights[i]) / tw, bold: i === 0 }));
-    table(sc, sponsors.map((s) => [s.name, s.email ?? '', s.phone ?? '', String(s.children), s.communities.join('; ')]));
+    const sc = ['Padrinho', 'E-mail', 'Telefone', 'Crianças', 'IDs das crianças'].map((label, i) => ({ label, w: ((W - m * 2) * weights[i]) / tw, bold: i === 0 }));
+    for (const g of sponsorGroups(rows, opts.groupBy, opts.sortBy ?? 'name')) {
+      groupTitle(`${g.label}  —  ${g.sponsors.length} padrinho(s)`);
+      table(sc, g.sponsors.map((s) => [s.name, s.email ?? '', s.phone ?? '', String(s.children), s.ids.join(', ')]), { before: () => cont(g.label) });
+      y += 12;
+    }
   }
 
   // ===== rodapé

@@ -121,3 +121,51 @@ export function groupRows(rows: ExportRow[], by: GroupBy, sortBy: SortBy = 'name
     .sort((a, b) => cmp(a.sort, b.sort))
     .map((g) => ({ label: g.label, rows: [...g.rows].sort(byRow(sortBy)) }));
 }
+
+export type SponsorInGroup = { id: string; name: string; email: string | null; phone: string | null; children: number; ids: number[] };
+
+/**
+ * Padrinhos separados por grupo: comunidade (padrão) ou, se a lista estiver separada por
+ * cidade/escola/ponto de coleta, o mesmo grupo dela. Quem apadrinha em mais de uma comunidade
+ * aparece em cada uma, com as crianças daquela comunidade.
+ */
+export function sponsorGroups(rows: ExportRow[], by: GroupBy, sortBy: SortBy = 'name') {
+  const sponsorBy: GroupBy = by === 'city' || by === 'school' || by === 'collectionPoint' ? by : 'community';
+  return groupRows(rows.filter((r) => r.sponsorId), sponsorBy, sortBy).map((g) => {
+    const map = new Map<string, SponsorInGroup>();
+    for (const r of g.rows) {
+      const s = map.get(r.sponsorId!) ?? { id: r.sponsorId!, name: r.sponsorName ?? '', email: r.sponsorEmail, phone: r.sponsorPhone, children: 0, ids: [] };
+      s.children++;
+      if (r.publicId != null) s.ids.push(r.publicId);
+      map.set(r.sponsorId!, s);
+    }
+    const sponsors = [...map.values()]
+      .map((s) => ({ ...s, ids: [...s.ids].sort((a, b) => a - b) }))
+      .sort((a, b) => cmp(a.name, b.name));
+    return { label: g.label, sponsors };
+  });
+}
+
+export type GiftCount = { gift: string; count: number; ids: number[] };
+
+/**
+ * Resumo dos presentes: em cada comunidade (ou no mesmo grupo da lista, se for cidade/escola/
+ * ponto de coleta), quantos de cada presente — o mesmo presente escrito igual é somado,
+ * sem diferença de maiúsculas e espaços. Ordem: mais pedidos primeiro.
+ */
+export function giftSummary(rows: ExportRow[], by: GroupBy) {
+  const giftBy: GroupBy = by === 'city' || by === 'school' || by === 'collectionPoint' ? by : 'community';
+  return groupRows(rows, giftBy, 'id').map((g) => {
+    const map = new Map<string, GiftCount>();
+    for (const r of g.rows) {
+      const text = (r.gift ?? '').trim().replace(/\s+/g, ' ');
+      const key = text.toUpperCase() || '~';
+      const item = map.get(key) ?? { gift: text ? text.toUpperCase() : '(sem presente informado)', count: 0, ids: [] };
+      item.count++;
+      if (r.publicId != null) item.ids.push(r.publicId);
+      map.set(key, item);
+    }
+    const gifts = [...map.values()].sort((a, b) => b.count - a.count || cmp(a.gift, b.gift));
+    return { label: g.label, total: g.rows.length, gifts };
+  });
+}
