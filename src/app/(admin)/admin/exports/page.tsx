@@ -1,15 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { FileSpreadsheet, Users, Baby, ArrowRight } from 'lucide-react';
+import { FileSpreadsheet, Users, Baby, ArrowRight, Gift } from 'lucide-react';
 
 export default function ExportsHubPage() {
   const cards = [
     {
-      href: '/admin/exports/sponsorships', // ajuste se sua pasta base diferir
+      href: '/admin/exports/sponsorships',
+      title: 'Lista de presentes e padrinhos',
+      desc:
+        'Crianças com o presente e o nome do padrinho, separadas por comunidade, e no final os padrinhos com e-mail e telefone. Você escolhe as colunas.',
+      icon: <Gift className="w-6 h-6" />,
+      badge: 'PDF ou Excel',
+    },
+    {
+      href: '/admin/exports/sponsorships',
       title: 'Exportar Apadrinhamentos',
       desc:
-        'Gere planilhas com dados de criança, padrinho e localização. Abas inteligentes por cidade, comunidade ou padrinho.',
+        'Planilha com as colunas que você escolher (criança, padrinho, contato, status, ponto de coleta…), separada por cidade, comunidade, escola, padrinho ou ponto de coleta.',
       icon: <Users className="w-6 h-6" />,
       badge: 'Excel (.xlsx)',
     },
@@ -39,7 +47,7 @@ export default function ExportsHubPage() {
       </div>
 
       {/* Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {cards.map((c) => (
           <Link
             key={c.title}
