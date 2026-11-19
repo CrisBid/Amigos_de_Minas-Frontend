@@ -40,7 +40,7 @@ const OP_TITLE: Record<SyncItem['op'], string> = {
   remove: 'Tirar da campanha',
 };
 const OP_ICON: Record<SyncItem['op'], typeof UserPlus> = { create: UserPlus, renumber: Hash, update: Pencil, photo: ImageIcon, remove: UserMinus };
-const FIELD_PT: Record<string, string> = { name: 'Nome', gift: 'Presente', birthDate: 'Nascimento', community: 'Comunidade' };
+const FIELD_PT: Record<string, string> = { name: 'Nome', gift: 'Presente', birthDate: 'Nascimento', community: 'Comunidade', school: 'Escola' };
 const CHUNK = 10;
 const btn = 'inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40';
 
@@ -405,7 +405,7 @@ export default function SourceResolve({
                                       checked={it.fields[f] !== undefined}
                                       onChange={(e) => {
                                         const fields = { ...it.fields };
-                                        if (e.target.checked) fields[f] = orig!.fields[f]; else delete fields[f];
+                                        if (e.target.checked) (fields as Record<string, unknown>)[f] = orig!.fields[f]; else delete fields[f];
                                         void replan({ ...it, fields }, Object.keys(fields).length > 0);
                                       }}
                                     />

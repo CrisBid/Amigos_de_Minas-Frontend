@@ -4,14 +4,15 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, CheckCircle2, ClipboardCopy, Download, ExternalLink, FileSpreadsheet, FolderOpen, Heart, History, Loader2,
-  RefreshCw, ScanSearch, Search, Settings2, Undo2, Wand2,
+  RefreshCw, ScanSearch, School, Search, Settings2, Undo2, Wand2,
 } from 'lucide-react';
 import SourceResolve from '@/components/Admin/SourceResolve';
+import SourceMissing from '@/components/Admin/SourceMissing';
 import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 import { normalizeText } from '@/lib/sheetImport';
 import {
-  activeSponsorship, compareSource, ISSUE_LABEL, issueKey, issueToItem, matchTabToCity, parseCampaignTab, RESOLVABLE, toSheetTsv,
-  type DriveFile, type Issue, type IssueKind, type SheetChild, type SiteChild,
+  activeSponsorship, compareSource, findMissing, ISSUE_LABEL, issueKey, issueToItem, matchTabToCity, parseCampaignTab, RESOLVABLE, suggestSchoolLinks, toSheetTsv,
+  type DriveFile, type SiteCommunity, type SiteSchool, type Issue, type IssueKind, type SheetChild, type SiteChild,
 } from '@/lib/sourceCompare';
 import { STATUS_PT, type SponsorshipStatus } from '@/lib/sponsorship-status';
 
@@ -26,6 +27,8 @@ type Loaded = {
   driveName: string;
   drive: DriveFile[];
   site: SiteChild[];
+  schools: SiteSchool[];
+  communities: SiteCommunity[];
   at: Date;
 };
 
@@ -47,7 +50,7 @@ const KIND_HINT: Record<IssueKind, string> = {
   removed: 'Está no site e não aparece mais na planilha',
   idMismatch: 'O nome está no site, mas com outro ID nesta campanha',
   otherChild: 'O ID da planilha é de outra criança no site',
-  changed: 'Nome, presente, nascimento ou comunidade diferentes',
+  changed: 'Nome, presente, nascimento, comunidade ou escola diferentes',
   photoNotOnSite: 'Tem foto no Drive e no site está sem foto',
   photoNewer: 'A foto do Drive foi alterada depois do envio para o site',
   photoDifferent: 'O arquivo do Drive não é o mesmo que está no site',
@@ -90,6 +93,18 @@ export default function SourceCheckPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [copied, setCopied] = useState(false);
+  // ligação escola da planilha → escola do site: o que foi mudado na tela (o resto é a sugestão)
+  const [schoolOverride, setSchoolOverride] = useState<Record<string, string>>({});
+  const [showSchools, setShowSchools] = useState(false);
+  const schoolStoreKey = `admin:source-check:schools:${campaignId}`;
+  useEffect(() => {
+    try { setSchoolOverride(JSON.parse(localStorage.getItem(schoolStoreKey) ?? '{}') ?? {}); } catch { setSchoolOverride({}); }
+  }, [schoolStoreKey]);
+  const setSchoolFor = (key: string, value: string) => setSchoolOverride((prev) => {
+    const next = { ...prev, [key]: value };
+    try { localStorage.setItem(schoolStoreKey, JSON.stringify(next)); } catch { /* sem armazenamento */ }
+    return next;
+  });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [resolving, setResolving] = useState<Issue[] | null>(null);
   const [batches, setBatches] = useState<Batch[] | null>(null);
@@ -170,6 +185,8 @@ export default function SourceCheckPage() {
     try {
       const sheet = await get('sheet', 'Lendo a planilha…');
       const photos = await get('photos', 'Listando as fotos do Drive…');
+      const schools: SiteSchool[] = await get('schools', 'Carregando as escolas…');
+      const communities: SiteCommunity[] = await get('communities', 'Carregando as comunidades…');
       setLoading('Carregando as crianças do site…');
       const site: SiteChild[] = [];
       for (let skip = 0; ; skip += 100) {
@@ -186,7 +203,7 @@ export default function SourceCheckPage() {
         if (c) map[t.title] = c;
       }
       setTabCity(map);
-      setData({ sheetTitle: sheet.title, tabs: sheet.tabs, driveName: photos.name, drive: photos.files, site, at: new Date() });
+      setData({ sheetTitle: sheet.title, tabs: sheet.tabs, driveName: photos.name, drive: photos.files, site, schools, communities, at: new Date() });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Falha na conferência.');
     } finally {
@@ -205,9 +222,20 @@ export default function SourceCheckPage() {
   }, [sheetChildren]);
   const siteCities = useMemo(() => (data ? [...new Set(data.site.map((c) => c.city?.name ?? c.cityName ?? '').filter(Boolean))].sort() : []), [data]);
 
+  // escolas dos cabeçalhos da planilha → escolas do site (sugestão automática + o que foi trocado na tela)
+  const schoolLinks = useMemo(
+    () => (data ? suggestSchoolLinks({ sheet: sheetChildren, tabCity, site: data.site, schools: data.schools }) : []),
+    [data, sheetChildren, tabCity],
+  );
+  const schoolMap = useMemo(
+    () => Object.fromEntries(schoolLinks.map((l) => [l.key, schoolOverride[l.key] ?? l.suggestion])),
+    [schoolLinks, schoolOverride],
+  );
+  const schoolNames = useMemo(() => Object.fromEntries((data?.schools ?? []).map((x) => [x.id, x.name])), [data]);
+
   const issues: Issue[] = useMemo(
-    () => (data ? compareSource({ sheet: sheetChildren, tabCity, site: data.site, drive: data.drive, siteMd5 }) : []),
-    [data, sheetChildren, tabCity, siteMd5],
+    () => (data ? compareSource({ sheet: sheetChildren, tabCity, site: data.site, drive: data.drive, siteMd5, schoolMap, schoolNames }) : []),
+    [data, sheetChildren, tabCity, siteMd5, schoolMap, schoolNames],
   );
 
   // comparação exata das fotos: MD5 do arquivo do site × MD5 que o Drive informa
@@ -261,6 +289,23 @@ export default function SourceCheckPage() {
     for (const c of data?.site ?? []) { const id = c.city?.id ?? c.cityId; const name = c.city?.name ?? c.cityName; if (id && name) m[name] = id; }
     return m;
   }, [data]);
+  // comunidades e escolas da planilha que não existem no site
+  const missing = useMemo(
+    () => (data ? findMissing({ sheet: sheetChildren, tabCity, cityIds: cityIdByName, communities: data.communities, schoolLinks, schoolMap }) : { communities: [], schools: [] }),
+    [data, sheetChildren, tabCity, cityIdByName, schoolLinks, schoolMap],
+  );
+  async function afterRegister(created: { schools: { linkKeys: string[]; id: string }[] }) {
+    const get = async (path: string) => {
+      const r = await fetch(`/api/admin/source-check/${path}?campaignId=${encodeURIComponent(campaignId)}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(await errorText(r));
+      return r.json();
+    };
+    const [schools, communities] = await Promise.all([get('schools'), get('communities')]);
+    setData((d) => (d ? { ...d, schools, communities } : d));
+    // a ligação comunidade → escola passa a usar a escola recém-cadastrada
+    for (const c of created.schools) for (const k of c.linkKeys) setSchoolFor(k, c.id);
+    void loadBatches();
+  }
   const canResolve = (i: Issue) => RESOLVABLE.includes(i.kind) && !!issueToItem(i, cityIdByName);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const shownResolvable = useMemo(() => shown.filter(canResolve), [shown, cityIdByName]);
@@ -384,6 +429,66 @@ export default function SourceCheckPage() {
               {!tabsWithChildren.length && <span className="text-sm text-amber-700">Nenhuma aba com crianças reconhecida (o cabeçalho precisa ter ID e CRIANÇA/NOME).</span>}
             </div>
           </section>
+
+          <SourceMissing campaignId={campaignId} communities={missing.communities} schools={missing.schools} onDone={afterRegister} />
+
+          {/* escolas dos cabeçalhos das comunidades (coluna M) → escolas do site */}
+          {schoolLinks.length > 0 && (() => {
+            const toCreate = schoolLinks.filter((l) => schoolMap[l.key] === 'new').length;
+            const none = schoolLinks.filter((l) => !schoolMap[l.key]).length;
+            return (
+              <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                <button onClick={() => setShowSchools((v) => !v)} className="w-full flex flex-wrap items-center gap-2 text-left">
+                  <School className="w-4 h-4 text-gray-600" />
+                  <span className="text-sm font-semibold text-gray-800">Escolas da planilha</span>
+                  <span className="text-sm text-gray-500">{schoolLinks.length} ligação(ões) comunidade → escola</span>
+                  {toCreate > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800">{toCreate} escola(s) nova(s) a criar</span>}
+                  {none > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">{none} sem escola</span>}
+                  <span className="ml-auto text-sm text-blue-700">{showSchools ? 'fechar' : 'conferir'}</span>
+                </button>
+                {showSchools && (
+                  <div className="mt-3 overflow-x-auto">
+                    <p className="text-xs text-gray-500 mb-2">
+                      A escola vem do cabeçalho de cada comunidade na planilha. O sistema sugere a escola do site (mesmo nome, ou a parecida que as crianças daquela comunidade já usam). Troque o que estiver errado: as diferenças aparecem em &quot;Dados diferentes&quot; e as crianças novas já entram com a escola.
+                    </p>
+                    <table className="w-full text-sm">
+                      <thead className="text-xs text-gray-500 text-left">
+                        <tr><th className="py-1 pr-3">Cidade / comunidade</th><th className="py-1 pr-3">Na planilha</th><th className="py-1">Escola no site</th></tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {schoolLinks.map((l) => {
+                          const value = schoolMap[l.key] ?? '';
+                          const options = (data?.schools ?? []).filter((x) => x.cityId === l.cityId);
+                          const changed = schoolOverride[l.key] !== undefined && schoolOverride[l.key] !== l.suggestion;
+                          return (
+                            <tr key={l.key} className="align-top">
+                              <td className="py-1.5 pr-3 whitespace-nowrap">{l.city}<div className="text-xs text-gray-500">{l.community} · {l.count} criança(s)</div></td>
+                              <td className="py-1.5 pr-3 text-gray-800">{l.sheetSchool}</td>
+                              <td className="py-1.5">
+                                <select
+                                  value={value}
+                                  onChange={(e) => setSchoolFor(l.key, e.target.value)}
+                                  className={`w-full max-w-md border rounded-lg px-2 py-1 bg-white ${value === 'new' ? 'border-amber-300' : 'border-gray-200'}`}
+                                >
+                                  <option value="">Não definir escola</option>
+                                  <option value="new">Criar escola nova: {l.sheetSchool}</option>
+                                  {options.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                                </select>
+                                <div className="text-[11px] text-gray-500 mt-0.5">
+                                  {changed ? 'escolhida na tela' : `sugestão: ${l.reason}`}
+                                  {changed && <button onClick={() => setSchoolFor(l.key, l.suggestion)} className="ml-2 text-blue-700 hover:underline">voltar à sugestão</button>}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            );
+          })()}
 
           {/* resumo */}
           <section className="space-y-3">
