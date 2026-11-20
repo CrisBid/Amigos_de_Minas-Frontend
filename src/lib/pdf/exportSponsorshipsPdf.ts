@@ -4,6 +4,8 @@
 // sem foto na campanha, sai só o layout com a área da foto vazia.
 import jsPDF from 'jspdf';
 import { STATUS_PT, type SponsorshipStatus } from '@/lib/sponsorship-status';
+import { CARD_LIST_FIELDS, DEFAULT_SPONSOR_FIELDS, methodText, SPONSOR_FIELDS } from '@/lib/exportFields';
+export { CARD_LIST_FIELDS, DEFAULT_GENERAL_COLUMNS, DEFAULT_LIST_COLUMNS } from '@/lib/exportFields';
 import { composeFromUrls, type ComposeConfig as ArtConfig } from '@/components/media/ComposedImage';
 import { composeConfigForFrame } from '@/components/media/composeConfig';
 
@@ -39,6 +41,7 @@ export type PdfItem = {
   sponsorName?: string | null;
   sponsorEmail?: string | null;
   sponsorPhone?: string | null;
+  donationAmount?: number | null;
   collectionPoint?: string | null;
   /** criança da campanha ainda sem padrinho (não é um apadrinhamento) */
   unsponsored?: boolean;
@@ -65,11 +68,41 @@ export type ExportPdfOptions = {
   groupBySponsor?: boolean;
   /** false = só as listas, sem os cartões com foto */
   cards?: boolean;
+  /** colunas das listas de cada grupo/padrinho (sem: o padrão de cada lista) */
+  listColumns?: string[];
+  /** colunas da listagem geral */
+  generalColumns?: string[];
+  /** última página: os padrinhos do conjunto, com as colunas escolhidas */
+  sponsorPage?: boolean;
+  sponsorColumns?: string[];
+  /** folha com o resumo dos pontos de coleta */
+  pointsSummary?: boolean;
   onProgress?: (p: { current: number; total: number; phase: 'compose' | 'pdf' }) => void;
   signal?: { cancelled: boolean };
 };
 
 export type ExportResult = { cards: number; withoutPhoto: number; pages: number; cancelled?: boolean };
+
+/* ===== Colunas das listas das crianças ===== */
+
+
+function cardCell(it: PdfItem, key: string): string {
+  const c = it.child;
+  switch (key) {
+    case 'id': return c.publicId != null ? `#${c.publicId}` : '';
+    case 'name': return c.name ?? '';
+    case 'age': return typeof c.age === 'number' ? `${c.age} ${c.age === 1 ? 'ano' : 'anos'}` : '';
+    case 'place': return c.community || c.city || '';
+    case 'community': return c.community ?? '';
+    case 'city': return c.city ?? '';
+    case 'school': return c.school ?? '';
+    case 'gift': return c.wantedGift ?? '';
+    case 'sponsor': return it.unsponsored ? 'Sem padrinho' : it.sponsorName ?? '';
+    case 'method': return it.unsponsored ? '' : it.method === 'PIX' ? 'PIX' : 'Presente';
+    case 'collectionPoint': return it.unsponsored ? '' : it.method === 'PIX' ? 'PIX' : it.collectionPoint ?? 'Sem ponto';
+    default: return '';
+  }
+}
 
 /* ===== Cores dos status (as mesmas do site) ===== */
 
@@ -329,25 +362,16 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
   let first = true;
   const newPage = () => { if (!first) pdf.addPage(); first = false; };
 
-  // ===== lista em tabela (resumo, lista de um padrinho ou listagem geral)
-  type Col = { key: 'id' | 'name' | 'age' | 'place' | 'gift' | 'sponsor' | 'status'; label: string; w: number };
-  const listTable = (
-    list: PdfItem[],
-    head: { title: string; lines: string[]; statusCounts?: boolean },
-    withSponsor: boolean,
+  // ===== tabelas (listas das crianças, listagem geral, padrinhos, pontos de coleta)
+  type TCol<T> = { label: string; weight: number; text?: (r: T) => string; chip?: (r: T) => PdfItem | null; bold?: boolean };
+  const drawTable = <T,>(
+    list: T[],
+    head: { title: string; lines: string[]; statusItems?: PdfItem[] },
+    tcols: TCol<T>[],
   ) => {
     const m = 36;
-    const cols: Col[] = [
-      { key: 'id', label: 'ID', w: 40 },
-      { key: 'name', label: 'Criança', w: withSponsor ? 118 : 150 },
-      { key: 'age', label: 'Idade', w: 42 },
-      ...((!withSponsor || manyPlaces) ? [{ key: 'place' as const, label: 'Comunidade / cidade', w: withSponsor ? 92 : 120 }] : []),
-      { key: 'gift', label: 'Presente', w: 0 },
-      ...(withSponsor ? [{ key: 'sponsor' as const, label: 'Padrinho', w: 100 }] : []),
-      { key: 'status', label: 'Status', w: 80 },
-    ];
-    const fixed = cols.reduce((a, c) => a + c.w, 0);
-    cols.find((c) => c.key === 'gift')!.w = pageW - m * 2 - fixed;
+    const totalW = tcols.reduce((a, c) => a + c.weight, 0) || 1;
+    const widths = tcols.map((c) => ((pageW - m * 2) * c.weight) / totalW);
     const fs = 8.5 * textScale;
     const rowH = Math.max(15, fs * 1.9);
 
@@ -361,10 +385,10 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
         pdf.setFont('helvetica', 'normal'); pdf.setFontSize(10); pdf.setTextColor(100);
         head.lines.filter(Boolean).forEach((l, i) => pdf.text(l, m, y + 32 + i * 14, { maxWidth: pageW - m * 2 }));
         y += 32 + head.lines.filter(Boolean).length * 14;
-        if (head.statusCounts) {
+        if (head.statusItems) {
           let cx = m;
           const counts = new Map<string, { n: number; rgb: [number, number, number] }>();
-          list.forEach((i) => { const c = chipOf(i); const prev = counts.get(c.label); counts.set(c.label, { n: (prev?.n ?? 0) + 1, rgb: c.rgb }); });
+          head.statusItems.forEach((i) => { const c = chipOf(i); const prev = counts.get(c.label); counts.set(c.label, { n: (prev?.n ?? 0) + 1, rgb: c.rgb }); });
           for (const [st, { n, rgb }] of counts) {
             pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8);
             const label = `${st}: ${n}`;
@@ -388,41 +412,126 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
       pdf.rect(m, y, pageW - m * 2, rowH, 'F');
       pdf.setFont('helvetica', 'bold'); pdf.setFontSize(fs); pdf.setTextColor(71, 85, 105);
       let x = m;
-      for (const c of cols) { pdf.text(c.label, x + 4, y + rowH * 0.65); x += c.w; }
+      tcols.forEach((c, i) => {
+        let t = c.label;
+        while (t.length > 1 && pdf.getTextWidth(t) > widths[i] - 8) t = t.slice(0, -2) + '…';
+        pdf.text(t, x + 4, y + rowH * 0.65);
+        x += widths[i];
+      });
       y += rowH;
     };
 
     header(true);
-    list.forEach((it, idx) => {
+    list.forEach((r, idx) => {
       if (y + rowH > pageH - m - footerH) header(false);
       if (idx % 2 === 1) { pdf.setFillColor(248, 250, 252); pdf.rect(m, y, pageW - m * 2, rowH, 'F'); }
-      const c = it.child;
-      const cells: Record<string, string> = {
-        id: c.publicId != null ? `#${c.publicId}` : '—',
-        name: c.name || '—',
-        age: typeof c.age === 'number' ? `${c.age} ${c.age === 1 ? 'ano' : 'anos'}` : '—',
-        place: c.community || c.city || '—',
-        gift: c.wantedGift || '—',
-        sponsor: it.unsponsored ? 'Sem padrinho' : it.sponsorName || '—',
-      };
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(fs); pdf.setTextColor(30, 41, 59);
       let x = m;
-      for (const col of cols) {
-        if (col.key === 'status') {
-          drawChip(pdf, x + 2, y + (rowH - fs * 1.4) / 2, it, fs * 0.85, col.w - 4);
+      tcols.forEach((col, i) => {
+        const chipItem = col.chip?.(r);
+        if (chipItem) {
+          drawChip(pdf, x + 2, y + (rowH - fs * 1.4) / 2, chipItem, fs * 0.85, widths[i] - 4);
         } else {
           // uma linha por célula, cortada com reticências
-          let t = cells[col.key];
-          while (t.length > 1 && pdf.getTextWidth(t) > col.w - 8) t = t.slice(0, -2) + '…';
-          if (col.key === 'name') pdf.setFont('helvetica', 'bold');
+          let t = col.text?.(r) || '—';
+          while (t.length > 1 && pdf.getTextWidth(t) > widths[i] - 8) t = t.slice(0, -2) + '…';
+          if (col.bold) pdf.setFont('helvetica', 'bold');
           pdf.text(t, x + 4, y + rowH * 0.65);
           pdf.setFont('helvetica', 'normal');
         }
-        x += col.w;
-      }
+        x += widths[i];
+      });
       y += rowH;
     });
   };
+
+  // colunas das crianças: as escolhidas na tela, ou o padrão de cada lista
+  const childCol = (key: string): TCol<PdfItem> | null => {
+    const f = CARD_LIST_FIELDS.find((x) => x.key === key);
+    if (!f) return null;
+    return key === 'status'
+      ? { label: f.label, weight: f.weight, chip: (it) => it }
+      : { label: f.label, weight: f.weight, text: (it) => cardCell(it, key), bold: key === 'name' };
+  };
+  const autoCols = (withSponsor: boolean) =>
+    ['id', 'name', 'age', ...((!withSponsor || manyPlaces) ? ['place'] : []), 'gift', ...(withSponsor ? ['sponsor'] : []), 'status'];
+  const listTable = (list: PdfItem[], head: { title: string; lines: string[]; statusCounts?: boolean }, withSponsor: boolean, kind: 'list' | 'general' = 'list') => {
+    const chosen = kind === 'general' ? opts.generalColumns : opts.listColumns;
+    // na lista de um padrinho, a coluna do padrinho seria repetida
+    const keys = chosen?.length ? chosen.filter((k) => withSponsor || k !== 'sponsor') : autoCols(withSponsor);
+    drawTable(list, { title: head.title, lines: head.lines, statusItems: head.statusCounts ? list : undefined }, keys.map(childCol).filter(Boolean) as TCol<PdfItem>[]);
+  };
+
+  // padrinhos do conjunto (última página) e resumo dos pontos de coleta
+  const sponsorPage = () => {
+    const map = new Map<string, { name: string; email: string | null; phone: string | null; count: number; gift: number; pix: number; pixAmount: number; points: Set<string>; communities: Set<string>; ids: number[] }>();
+    for (const it of items) {
+      if (it.unsponsored) continue;
+      const k = it.sponsorId || it.sponsorName || '—';
+      const s = map.get(k) ?? { name: it.sponsorName || 'Padrinho', email: it.sponsorEmail ?? null, phone: it.sponsorPhone ?? null, count: 0, gift: 0, pix: 0, pixAmount: 0, points: new Set<string>(), communities: new Set<string>(), ids: [] };
+      s.count++;
+      if (it.method === 'PIX') { s.pix++; s.pixAmount += it.donationAmount ?? 0; } else s.gift++;
+      if (it.collectionPoint) s.points.add(it.collectionPoint);
+      const place = it.child.community ? `${it.child.community}${it.child.city ? ` (${it.child.city})` : ''}` : it.child.city;
+      if (place) s.communities.add(place);
+      if (it.child.publicId != null) s.ids.push(it.child.publicId);
+      map.set(k, s);
+    }
+    const list = [...map.values()].sort((a, b) => cmpText(a.name, b.name));
+    if (!list.length) return;
+    const keys = opts.sponsorColumns?.length ? opts.sponsorColumns : DEFAULT_SPONSOR_FIELDS;
+    const cell = (s: (typeof list)[number], key: string): string => {
+      switch (key) {
+        case 'name': return s.name;
+        case 'count': return String(s.count);
+        case 'method': return methodText(s.gift, s.pix);
+        case 'email': return s.email ?? '';
+        case 'phone': return s.phone ?? '';
+        case 'pixAmount': return s.pixAmount ? s.pixAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '';
+        case 'points': return [...s.points].sort(cmpText).join('; ');
+        case 'communities': return [...s.communities].sort(cmpText).join('; ');
+        case 'ids': return [...s.ids].sort((a, b) => a - b).join(', ');
+        default: return '';
+      }
+    };
+    const total = list.reduce((n, s) => n + s.count, 0);
+    drawTable(list, {
+      title: `Padrinhos${opts.title ? ` — ${opts.title}` : ''}`,
+      lines: [[`${list.length} padrinho${list.length === 1 ? '' : 's'}`, kids(total), methodText(list.reduce((n, s) => n + s.gift, 0), list.reduce((n, s) => n + s.pix, 0))].filter(Boolean).join('  ·  ')],
+    }, keys.map((k) => SPONSOR_FIELDS.find((f) => f.key === k)).filter(Boolean).map((f) => ({ label: f!.label, weight: f!.weight, text: (s: (typeof list)[number]) => cell(s, f!.key), bold: f!.key === 'name' })));
+  };
+
+  const pointsPage = () => {
+    type P = { label: string; kind: number; children: number; sponsors: Set<string>; received: number; pending: number; communities: Set<string> };
+    const map = new Map<string, P>();
+    for (const it of items) {
+      if (it.unsponsored) continue;
+      const kind = it.method === 'PIX' ? 1 : it.collectionPoint ? 0 : 2;
+      const label = kind === 1 ? 'PIX (presente comprado pela equipe)' : kind === 2 ? 'Presente sem ponto de coleta' : it.collectionPoint!;
+      const p = map.get(label) ?? { label, kind, children: 0, sponsors: new Set<string>(), received: 0, pending: 0, communities: new Set<string>() };
+      p.children++;
+      if (['PACKED', 'BOXED', 'COMPLETED'].includes(it.status)) p.received++;
+      if (it.status === 'PENDING') p.pending++;
+      p.sponsors.add(it.sponsorId || it.sponsorName || '');
+      const place = it.child.community ? `${it.child.community}${it.child.city ? ` (${it.child.city})` : ''}` : it.child.city;
+      if (place) p.communities.add(place);
+      map.set(label, p);
+    }
+    const list = [...map.values()].sort((a, b) => a.kind - b.kind || cmpText(a.label, b.label));
+    if (!list.length) return;
+    drawTable(list, {
+      title: `Resumo dos pontos de coleta${opts.title ? ` — ${opts.title}` : ''}`,
+      lines: [`${list.filter((p) => p.kind === 0).length} ponto(s)  ·  recebidos = embalados, encaixotados ou entregues`],
+    }, [
+      { label: 'Ponto de coleta', weight: 2.6, text: (p) => p.label, bold: true },
+      { label: 'Crianças', weight: 0.9, text: (p) => String(p.children) },
+      { label: 'Padrinhos', weight: 0.9, text: (p) => String(p.sponsors.size) },
+      { label: 'Recebidos', weight: 0.9, text: (p) => String(p.received) },
+      { label: 'Pendentes', weight: 0.9, text: (p) => String(p.pending) },
+      { label: 'Comunidades', weight: 3, text: (p) => [...p.communities].sort(cmpText).join('; ') },
+    ]);
+  };
+  const kids = (n: number) => `${n} criança${n === 1 ? '' : 's'}`;
 
   // ===== cartões (grade)
   const { cols, rows } = gridFor(opts.perPage);
@@ -502,7 +611,6 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
 
   const campaignLine = sameCampaign ? campaigns[0] : `${campaigns.length} campanhas`;
   const orderLine = order === 'id' ? 'em ordem de ID' : 'em ordem alfabética';
-  const kids = (n: number) => `${n} criança${n === 1 ? '' : 's'}`;
   const cancelled = () => !!opts.signal?.cancelled;
   const grouped = groupBy !== 'none' || bySponsor;
 
@@ -555,9 +663,12 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
         title: `Listagem geral${opts.title ? ` — ${opts.title}` : ''}`,
         lines: [[campaignLine, kids(total), `${sponsorCount} padrinho${sponsorCount === 1 ? '' : 's'}`, freeCount ? `${freeCount} sem padrinho` : '', orderLine].filter(Boolean).join('  ·  ')],
         statusCounts: true,
-      }, true);
+      }, true, 'general');
     }
   }
+  // folhas finais: resumo dos pontos de coleta e, por último, os padrinhos do conjunto
+  if (opts.pointsSummary) pointsPage();
+  if (opts.sponsorPage) sponsorPage();
 
   // ===== rodapé em todas as páginas
   const pages = pdf.getNumberOfPages();
@@ -621,6 +732,7 @@ export function sponsorshipToPdfItem(sp: any): PdfItem {
     sponsorName: sp.sponsor?.name ?? null,
     sponsorEmail: sp.sponsor?.email ?? null,
     sponsorPhone: sp.sponsor?.profile?.phone || sp.sponsor?.phone || null,
+    donationAmount: sp.donationAmount != null && !isNaN(Number(sp.donationAmount)) ? Number(sp.donationAmount) : null,
     collectionPoint: cp?.name ? `${cp.name}${cp.cityName ? ` · ${cp.cityName}` : ''}` : null,
     campaign: { id: sp.campaign?.id ?? '', name: sp.campaign?.name ?? '', year: sp.campaign?.year ?? null },
     child: {

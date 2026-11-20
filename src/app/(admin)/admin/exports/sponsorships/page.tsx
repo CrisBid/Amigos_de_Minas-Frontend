@@ -10,9 +10,11 @@ import {
 } from 'lucide-react';
 import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 import {
-  cellText, DEFAULT_FIELDS, EXPORT_FIELDS, FIELD_LABEL, GROUP_LABEL, groupRows,
+  cellText, DEFAULT_FIELDS, DEFAULT_SPONSOR_FIELDS, EXPORT_FIELDS, FIELD_LABEL, GROUP_LABEL, groupRows, SPONSOR_FIELDS,
   type ExportRow, type GroupBy, type SortBy, type SponsorContact,
 } from '@/lib/exportFields';
+import ColumnPicker from '@/components/Admin/ColumnPicker';
+import { CARD_LIST_FIELDS, DEFAULT_GENERAL_COLUMNS, DEFAULT_LIST_COLUMNS } from '@/lib/exportFields';
 import { STATUS_PT, type SponsorshipStatus } from '@/lib/sponsorship-status';
 import type { PdfGroupBy, PdfItem } from '@/lib/pdf/exportSponsorshipsPdf';
 
@@ -58,11 +60,17 @@ type Opts = {
   format: Format; groupBy: GroupBy; sortBy: SortBy; bySponsor: boolean; includeFree: boolean;
   sponsorList: boolean; giftSum: boolean; layout: 'tabs' | 'single'; breakPerGroup: boolean; textScale: number;
   perPage: number; caption: boolean; includeNoPhoto: boolean; general: boolean;
+  /** colunas: listas dos cartões, listagem geral e padrinhos */
+  listCols: string[]; generalCols: string[]; sponsorCols: string[];
+  /** cartões: página final com os padrinhos; todos: folha de resumo dos pontos de coleta */
+  sponsorPage: boolean; pointsSummary: boolean;
 };
 const DEFAULT_OPTS: Opts = {
   format: 'list', groupBy: 'community', sortBy: 'id', bySponsor: true, includeFree: false,
   sponsorList: true, giftSum: true, layout: 'tabs', breakPerGroup: true, textScale: 1,
   perPage: 4, caption: true, includeNoPhoto: true, general: true,
+  listCols: DEFAULT_LIST_COLUMNS, generalCols: DEFAULT_GENERAL_COLUMNS, sponsorCols: DEFAULT_SPONSOR_FIELDS,
+  sponsorPage: true, pointsSummary: false,
 };
 
 function Section({ n, title, icon: Icon, children }: { n: number; title: string; icon: typeof FileText; children: React.ReactNode }) {
@@ -116,6 +124,13 @@ function ExportSponsorships() {
     } catch { /* sem preferências salvas */ }
     let saved: Opts = DEFAULT_OPTS;
     try { saved = { ...DEFAULT_OPTS, ...JSON.parse(localStorage.getItem(OPTS_KEY) ?? '{}') }; } catch { /* idem */ }
+    const valid = (list: unknown, allowed: { key: string }[], fallback: string[]) => {
+      const v = Array.isArray(list) ? list.filter((k) => typeof k === 'string' && allowed.some((f) => f.key === k)) : [];
+      return v.length ? v : fallback;
+    };
+    saved.listCols = valid(saved.listCols, CARD_LIST_FIELDS, DEFAULT_LIST_COLUMNS);
+    saved.generalCols = valid(saved.generalCols, CARD_LIST_FIELDS, DEFAULT_GENERAL_COLUMNS);
+    saved.sponsorCols = valid(saved.sponsorCols, SPONSOR_FIELDS, DEFAULT_SPONSOR_FIELDS);
     const fmt = params.get('format') as Format | null;
     const grp = params.get('group') as GroupBy | null;
     const sort = params.get('sort') as SortBy | null;
@@ -224,6 +239,8 @@ function ExportSponsorships() {
         q.set('layout', o.layout);
         q.set('sponsorList', o.sponsorList ? '1' : '0');
         q.set('giftSummary', o.giftSum ? '1' : '0');
+        q.set('sponsorFields', o.sponsorCols.join(','));
+        q.set('pointsSummary', o.pointsSummary ? '1' : '0');
         const res = await fetch(`/api/admin/sponsorships/export?${q}`);
         if (!res.ok) throw new Error((await res.text().catch(() => '')) || 'Falha ao exportar.');
         const blob = await res.blob();
@@ -247,6 +264,7 @@ function ExportSponsorships() {
           title: 'Lista de presentes e padrinhos',
           subtitle: subtitle(),
           fields, groupBy, sortBy, breakPerGroup: o.breakPerGroup, sponsorList: o.sponsorList, giftSummary: o.giftSum, textScale: o.textScale,
+          sponsorFields: o.sponsorCols, pointsSummary: o.pointsSummary,
           fileName: `lista-de-presentes-${stamp()}.pdf`,
         });
         setDone('PDF da lista baixado.');
@@ -284,6 +302,11 @@ function ExportSponsorships() {
         textScale: o.textScale,
         caption: o.caption,
         summary: o.general,
+        listColumns: o.listCols,
+        generalColumns: o.generalCols,
+        sponsorPage: o.sponsorPage,
+        sponsorColumns: o.sponsorCols,
+        pointsSummary: o.pointsSummary,
         signal: cancelRef.current,
         fileName: `cartoes-${stamp()}.pdf`,
         onProgress: (p) => setProgress(p.phase === 'compose' ? `Montando as artes… ${p.current}/${p.total}` : `Escrevendo o PDF… ${p.current}/${p.total}`),
@@ -485,7 +508,13 @@ function ExportSponsorships() {
           {o.format !== 'cards' && (
             <>
               <label className="flex items-center gap-2"><input type="checkbox" checked={o.giftSum} onChange={(e) => set({ giftSum: e.target.checked })} className="accent-emerald-600" /> Resumo dos presentes por {['city', 'school', 'collectionPoint'].includes(groupBy) ? groupNoun : 'comunidade'} (quantos de cada), no começo</label>
+              <label className="flex items-center gap-2"><input type="checkbox" checked={o.pointsSummary} onChange={(e) => set({ pointsSummary: e.target.checked })} className="accent-emerald-600" /> Resumo dos pontos de coleta (crianças, padrinhos, recebidos e comunidades de cada ponto)</label>
               <label className="flex items-center gap-2"><input type="checkbox" checked={o.sponsorList} onChange={(e) => set({ sponsorList: e.target.checked })} className="accent-emerald-600" /> Padrinhos com contato no final, separados por {['city', 'school', 'collectionPoint'].includes(groupBy) ? groupNoun : 'comunidade'}</label>
+              {o.sponsorList && (
+                <div className="ml-6 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                  <ColumnPicker title="Colunas dos padrinhos" all={SPONSOR_FIELDS} value={o.sponsorCols} onChange={(v) => set({ sponsorCols: v })} defaults={DEFAULT_SPONSOR_FIELDS} locked={['name']} />
+                </div>
+              )}
             </>
           )}
           {o.format === 'excel' && (
@@ -503,7 +532,33 @@ function ExportSponsorships() {
               </div>
               <label className="flex items-center gap-2"><input type="checkbox" checked={o.caption} onChange={(e) => set({ caption: e.target.checked })} className="accent-emerald-600" /> Legenda em cada cartão (nome, ID, idade, local, presente e status)</label>
               <label className="flex items-center gap-2"><input type="checkbox" checked={o.includeNoPhoto} onChange={(e) => set({ includeNoPhoto: e.target.checked })} className="accent-emerald-600" /> Incluir crianças sem foto (saem no fim de cada lista, só com o layout)</label>
-              <label className="flex items-center gap-2"><input type="checkbox" checked={o.general} onChange={(e) => set({ general: e.target.checked })} className="accent-emerald-600" /> {groupBy === 'none' ? 'Lista de todas as crianças no início' : 'Listagem geral no final (todas as crianças, com o padrinho)'}</label>
+              <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                <ColumnPicker
+                  title={groupBy === 'none' ? 'Colunas da lista das crianças' : 'Colunas das listas de cada grupo e padrinho'}
+                  hint="(na lista de um padrinho, a coluna Padrinho some)"
+                  all={CARD_LIST_FIELDS} value={o.listCols} onChange={(v) => set({ listCols: v })} defaults={DEFAULT_LIST_COLUMNS} locked={['name']}
+                />
+              </div>
+              {groupBy !== 'none' && (
+                <>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={o.general} onChange={(e) => set({ general: e.target.checked })} className="accent-emerald-600" /> Listagem geral no final (todas as crianças)</label>
+                  {o.general && (
+                    <div className="ml-6 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                      <ColumnPicker title="Colunas da listagem geral" hint="(ex.: ponto de coleta, escola)" all={CARD_LIST_FIELDS} value={o.generalCols} onChange={(v) => set({ generalCols: v })} defaults={DEFAULT_GENERAL_COLUMNS} locked={['name']} />
+                    </div>
+                  )}
+                </>
+              )}
+              {groupBy === 'none' && (
+                <label className="flex items-center gap-2"><input type="checkbox" checked={o.general} onChange={(e) => set({ general: e.target.checked })} className="accent-emerald-600" /> Lista de todas as crianças no início</label>
+              )}
+              <label className="flex items-center gap-2"><input type="checkbox" checked={o.pointsSummary} onChange={(e) => set({ pointsSummary: e.target.checked })} className="accent-emerald-600" /> Folha de resumo dos pontos de coleta (no final)</label>
+              <label className="flex items-center gap-2"><input type="checkbox" checked={o.sponsorPage} onChange={(e) => set({ sponsorPage: e.target.checked })} className="accent-emerald-600" /> Última página: os padrinhos deste conjunto (crianças de cada um, forma e contato)</label>
+              {o.sponsorPage && (
+                <div className="ml-6 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                  <ColumnPicker title="Colunas dos padrinhos" all={SPONSOR_FIELDS} value={o.sponsorCols} onChange={(v) => set({ sponsorCols: v })} defaults={DEFAULT_SPONSOR_FIELDS} locked={['name']} />
+                </div>
+              )}
             </>
           )}
           {o.format !== 'excel' && (

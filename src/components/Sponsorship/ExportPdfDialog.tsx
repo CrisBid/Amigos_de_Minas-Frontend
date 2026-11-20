@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDownAZ, ArrowDown01, CheckCircle2, UserX, Download, FileText, ImageOff, ListChecks, Loader2, Type, Users, X } from 'lucide-react';
+import { ArrowDownAZ, ArrowDown01, CheckCircle2, Store, UserX, Download, FileText, ImageOff, ListChecks, Loader2, Type, Users, X } from 'lucide-react';
 import { estimatePages, exportSponsorshipsPdf, type ExportResult, type PdfItem, type PdfOrder } from '@/lib/pdf/exportSponsorshipsPdf';
 
 const PER_PAGE = [1, 2, 4, 6, 9] as const;
@@ -13,7 +13,7 @@ const TEXT_SIZES = [
 ];
 const PREFS_KEY = 'pdf-export-prefs';
 
-type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean; order: PdfOrder; groupBySponsor: boolean; includeUnsponsored: boolean };
+type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean; order: PdfOrder; groupBySponsor: boolean; includeUnsponsored: boolean; sponsorPage: boolean; pointsSummary: boolean };
 
 function loadPrefs(fallback: Prefs): Prefs {
   try { return { ...fallback, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return fallback; }
@@ -39,7 +39,7 @@ export default function ExportPdfDialog({
   /** busca as crianças do mesmo recorte (cidade/comunidade) ainda sem padrinho; sem ela, a opção não aparece */
   loadUnsponsored?: () => Promise<PdfItem[]>;
 }) {
-  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true, order: 'name', groupBySponsor: true, includeUnsponsored: false });
+  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true, order: 'name', groupBySponsor: true, includeUnsponsored: false, sponsorPage: false, pointsSummary: false });
   const canGroup = sponsorCount > 1;
   const grouped = canGroup && prefs.groupBySponsor;
   const [busy, setBusy] = useState(false);
@@ -70,6 +70,7 @@ export default function ExportPdfDialog({
       localStorage.setItem(PREFS_KEY, JSON.stringify({
         perPage: next.perPage, textScale: next.textScale, caption: next.caption, includeNoPhoto: next.includeNoPhoto,
         order: next.order, groupBySponsor: next.groupBySponsor, includeUnsponsored: next.includeUnsponsored,
+        sponsorPage: next.sponsorPage, pointsSummary: next.pointsSummary,
       }));
     } catch { /* sem storage */ }
     return next;
@@ -223,6 +224,22 @@ export default function ExportPdfDialog({
               icon={<ListChecks className="w-4 h-4" />}
               label={grouped ? 'Listagem geral no final' : 'Página de resumo no início'}
               hint={grouped ? 'Todas as crianças, com o padrinho, o presente e o status' : 'Lista de todas as crianças com presente e status (boa para as compras)'}
+            />
+            <Toggle
+              checked={prefs.pointsSummary}
+              onChange={(v) => set({ pointsSummary: v })}
+              disabled={busy}
+              icon={<Store className="w-4 h-4" />}
+              label="Resumo dos pontos de coleta"
+              hint="Folha no final: crianças, padrinhos e recebidos de cada ponto"
+            />
+            <Toggle
+              checked={prefs.sponsorPage}
+              onChange={(v) => set({ sponsorPage: v })}
+              disabled={busy}
+              icon={<Users className="w-4 h-4" />}
+              label="Última página com os padrinhos"
+              hint="Crianças de cada um, forma (presente/PIX), e-mail e telefone"
             />
             <Toggle
               checked={prefs.includeNoPhoto}

@@ -1,7 +1,10 @@
 // Lista de presentes e padrinhos em PDF: tabela com as colunas escolhidas, separada por
 // grupo (comunidade, por padrão) e, no final, os padrinhos com os contatos.
 import jsPDF from 'jspdf';
-import { cellText, EXPORT_FIELDS, giftSummary, groupRows, sponsorGroups, type ExportRow, type GroupBy, type SortBy, type SponsorContact } from '@/lib/exportFields';
+import {
+  cellText, DEFAULT_SPONSOR_FIELDS, EXPORT_FIELDS, giftSummary, groupRows, pointSummary, SPONSOR_FIELDS, sponsorCell, sponsorStats,
+  type ExportRow, type GroupBy, type SortBy, type SponsorContact,
+} from '@/lib/exportFields';
 
 export type GiftListOptions = {
   title?: string;
@@ -12,6 +15,10 @@ export type GiftListOptions = {
   /** página nova para cada grupo */
   breakPerGroup?: boolean;
   sponsorList?: boolean;
+  /** colunas da lista de padrinhos (padrão: nome, crianças, forma, e-mail, telefone) */
+  sponsorFields?: string[];
+  /** página com o resumo dos pontos de coleta deste conjunto */
+  pointsSummary?: boolean;
   /** página(s) de resumo: quantos de cada presente em cada comunidade */
   giftSummary?: boolean;
   /** 0.85 (menor) a 1.2 (maior) */
@@ -137,20 +144,38 @@ export function giftListPdf(rows: ExportRow[], sponsors: SponsorContact[], opts:
     pdf.text('Nenhum apadrinhamento com estes filtros.', m, y + 10);
   }
 
-  // ===== padrinhos e contatos
+  // ===== resumo dos pontos de coleta
+  const points = pointSummary(rows);
+  if (opts.pointsSummary && points.length) {
+    pdf.addPage(); y = m;
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15 * scale); pdf.setTextColor(...INK);
+    pdf.text('Resumo dos pontos de coleta', m, y + 12);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9 * scale); pdf.setTextColor(...MUTED);
+    pdf.text(`${points.filter((x) => x.kind === 'point').length} ponto(s) · recebidos = embalados, encaixotados ou entregues`, m, y + 27);
+    y += 38;
+    const pw = [2.6, 0.9, 0.9, 0.9, 0.9, 3.2];
+    const pt = pw.reduce((a, b) => a + b, 0);
+    const pc = ['Ponto de coleta', 'Crianças', 'Padrinhos', 'Recebidos', 'Pendentes', 'Comunidades'].map((label, i) => ({ label, w: ((W - m * 2) * pw[i]) / pt, bold: i === 0 }));
+    table(pc, points.map((x) => [x.label, String(x.children), String(x.sponsors), String(x.received), String(x.pending), x.communities.join('; ')]));
+  }
+
+  // ===== padrinhos e contatos (colunas escolhidas), separados pelo grupo da lista
   if (opts.sponsorList && sponsors.length) {
+    const sf = (opts.sponsorFields?.length ? opts.sponsorFields : DEFAULT_SPONSOR_FIELDS)
+      .map((k) => SPONSOR_FIELDS.find((f) => f.key === k)).filter(Boolean) as typeof SPONSOR_FIELDS;
+    const by: GroupBy = opts.groupBy === 'city' || opts.groupBy === 'school' || opts.groupBy === 'collectionPoint' ? opts.groupBy : 'community';
     pdf.addPage(); y = m;
     pdf.setFont('helvetica', 'bold'); pdf.setFontSize(15 * scale); pdf.setTextColor(...INK);
     pdf.text('Padrinhos e contatos', m, y + 12);
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9 * scale); pdf.setTextColor(...MUTED);
-    pdf.text(`${sponsors.length} padrinho(s), separados por ${opts.groupBy === 'city' ? 'cidade' : opts.groupBy === 'school' ? 'escola' : opts.groupBy === 'collectionPoint' ? 'ponto de coleta' : 'comunidade'}`, m, y + 27);
+    pdf.text(`${sponsors.length} padrinho(s), separados por ${by === 'city' ? 'cidade' : by === 'school' ? 'escola' : by === 'collectionPoint' ? 'ponto de coleta' : 'comunidade'}`, m, y + 27);
     y += 38;
-    const weights = [2.2, 2.6, 1.3, 0.8, 2.2];
-    const tw = weights.reduce((a, b) => a + b, 0);
-    const sc = ['Padrinho', 'E-mail', 'Telefone', 'Crianças', 'IDs das crianças'].map((label, i) => ({ label, w: ((W - m * 2) * weights[i]) / tw, bold: i === 0 }));
-    for (const g of sponsorGroups(rows, opts.groupBy, opts.sortBy ?? 'name')) {
-      groupTitle(`${g.label}  —  ${g.sponsors.length} padrinho(s)`);
-      table(sc, g.sponsors.map((s) => [s.name, s.email ?? '', s.phone ?? '', String(s.children), s.ids.join(', ')]), { before: () => cont(g.label) });
+    const tw = sf.reduce((a, f) => a + f.weight, 0);
+    const sc = sf.map((f) => ({ label: f.label, w: ((W - m * 2) * f.weight) / tw, bold: f.key === 'name' }));
+    for (const g of groupRows(rows.filter((r) => r.sponsorId && !r.unsponsored), by, opts.sortBy ?? 'name')) {
+      const list = sponsorStats(g.rows);
+      groupTitle(`${g.label}  —  ${list.length} padrinho(s)`);
+      table(sc, list.map((x) => sf.map((f) => String(sponsorCell(x, f.key)))), { before: () => cont(g.label) });
       y += 12;
     }
   }
