@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Download, FileText, ImageOff, ListChecks, Loader2, Type, X } from 'lucide-react';
-import { estimatePages, exportSponsorshipsPdf, type ExportResult, type PdfItem } from '@/lib/pdf/exportSponsorshipsPdf';
+import { ArrowDownAZ, ArrowDown01, CheckCircle2, Download, FileText, ImageOff, ListChecks, Loader2, Type, Users, X } from 'lucide-react';
+import { estimatePages, exportSponsorshipsPdf, type ExportResult, type PdfItem, type PdfOrder } from '@/lib/pdf/exportSponsorshipsPdf';
 
 const PER_PAGE = [1, 2, 4, 6, 9] as const;
 const GRID: Record<number, [number, number]> = { 1: [1, 1], 2: [2, 1], 4: [2, 2], 6: [3, 2], 9: [3, 3] };
@@ -13,7 +13,7 @@ const TEXT_SIZES = [
 ];
 const PREFS_KEY = 'pdf-export-prefs';
 
-type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean };
+type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean; order: PdfOrder; groupBySponsor: boolean };
 
 function loadPrefs(fallback: Prefs): Prefs {
   try { return { ...fallback, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return fallback; }
@@ -24,7 +24,7 @@ function loadPrefs(fallback: Prefs): Prefs {
  * `loadItems` busca os dados na hora de gerar (com a imagem da campanha de cada apadrinhamento).
  */
 export default function ExportPdfDialog({
-  open, onClose, title, subtitle, count, loadItems, fileName, defaultSummary = false,
+  open, onClose, title, subtitle, count, loadItems, fileName, defaultSummary = false, sponsorCount = 1,
 }: {
   open: boolean;
   onClose: () => void;
@@ -34,8 +34,12 @@ export default function ExportPdfDialog({
   loadItems: () => Promise<PdfItem[]>;
   fileName: string;
   defaultSummary?: boolean;
+  /** quantos padrinhos diferentes: com mais de um, dá para separar por padrinho */
+  sponsorCount?: number;
 }) {
-  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true });
+  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true, order: 'name', groupBySponsor: true });
+  const canGroup = sponsorCount > 1;
+  const grouped = canGroup && prefs.groupBySponsor;
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number; phase: 'load' | 'compose' | 'pdf' } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +67,7 @@ export default function ExportPdfDialog({
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({
         perPage: next.perPage, textScale: next.textScale, caption: next.caption, includeNoPhoto: next.includeNoPhoto,
+        order: next.order, groupBySponsor: next.groupBySponsor,
       }));
     } catch { /* sem storage */ }
     return next;
@@ -81,6 +86,7 @@ export default function ExportPdfDialog({
       if (!items.length) throw new Error(`Nenhuma das ${all.length} criança(s) tem foto nesta campanha. Ative "Incluir crianças sem foto" para exportar mesmo assim.`);
       const r = await exportSponsorshipsPdf(items, {
         ...prefs,
+        groupBySponsor: grouped,
         title,
         fileName,
         signal: cancelRef.current,
@@ -95,7 +101,7 @@ export default function ExportPdfDialog({
     }
   }
 
-  const pages = estimatePages(count, prefs.perPage, prefs.summary);
+  const pages = estimatePages(count, prefs.perPage, prefs.summary, grouped ? sponsorCount : 0);
   const pct = progress ? Math.round((progress.current / Math.max(1, progress.total)) * 100) : 0;
 
   return (
@@ -157,7 +163,36 @@ export default function ExportPdfDialog({
             </div>
           </fieldset>
 
+          {/* ordem das crianças */}
+          <fieldset disabled={busy}>
+            <legend className="text-sm font-semibold text-gray-800 mb-2">Ordem das crianças</legend>
+            <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-gray-100">
+              {([['name', 'Alfabética', <ArrowDownAZ key="a" className="w-4 h-4" />], ['id', 'Por ID', <ArrowDown01 key="i" className="w-4 h-4" />]] as [PdfOrder, string, React.ReactNode][]).map(([v, label, icon]) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => set({ order: v })}
+                  className={`py-2 rounded-lg text-sm font-medium transition inline-flex items-center justify-center gap-1.5 ${prefs.order === v ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600'}`}
+                  aria-pressed={prefs.order === v}
+                >
+                  {icon} {label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Vale para as listas e para os cartões (as crianças sem foto continuam no fim).</p>
+          </fieldset>
+
           <div className="space-y-2">
+            {canGroup && (
+              <Toggle
+                checked={prefs.groupBySponsor}
+                onChange={(v) => set({ groupBySponsor: v })}
+                disabled={busy}
+                icon={<Users className="w-4 h-4" />}
+                label={`Separar por padrinho (${sponsorCount})`}
+                hint="Cada padrinho começa com a lista das crianças dele (com contato) e depois os cartões"
+              />
+            )}
             <Toggle
               checked={prefs.caption}
               onChange={(v) => set({ caption: v })}
@@ -170,8 +205,8 @@ export default function ExportPdfDialog({
               onChange={(v) => setPrefs((p) => ({ ...p, summary: v }))}
               disabled={busy}
               icon={<ListChecks className="w-4 h-4" />}
-              label="Página de resumo no início"
-              hint="Lista de todas as crianças com presente e status (boa para as compras)"
+              label={grouped ? 'Listagem geral no final' : 'Página de resumo no início'}
+              hint={grouped ? 'Todas as crianças, com o padrinho, o presente e o status' : 'Lista de todas as crianças com presente e status (boa para as compras)'}
             />
             <Toggle
               checked={prefs.includeNoPhoto}

@@ -2582,6 +2582,7 @@ export default function AdminSponsorshipsPage() {
         title={exportSponsor?.name ?? ''}
         count={exportItems.length}
         defaultSummary={exportItems.length > 1}
+        sponsorCount={new Set(exportItems.map((it) => it.sponsor?.id ?? it.sponsor?.name ?? '')).size}
         fileName={`apadrinhamentos-${slugFile(exportSponsor?.name || 'padrinho')}.pdf`}
         loadItems={async () => {
           // dados com a imagem da campanha de cada apadrinhamento (sem foto nela: sai sem foto)
