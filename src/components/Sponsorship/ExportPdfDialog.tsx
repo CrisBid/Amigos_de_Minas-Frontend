@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDownAZ, ArrowDown01, CheckCircle2, Download, FileText, ImageOff, ListChecks, Loader2, Type, Users, X } from 'lucide-react';
+import { ArrowDownAZ, ArrowDown01, CheckCircle2, UserX, Download, FileText, ImageOff, ListChecks, Loader2, Type, Users, X } from 'lucide-react';
 import { estimatePages, exportSponsorshipsPdf, type ExportResult, type PdfItem, type PdfOrder } from '@/lib/pdf/exportSponsorshipsPdf';
 
 const PER_PAGE = [1, 2, 4, 6, 9] as const;
@@ -13,7 +13,7 @@ const TEXT_SIZES = [
 ];
 const PREFS_KEY = 'pdf-export-prefs';
 
-type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean; order: PdfOrder; groupBySponsor: boolean };
+type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean; order: PdfOrder; groupBySponsor: boolean; includeUnsponsored: boolean };
 
 function loadPrefs(fallback: Prefs): Prefs {
   try { return { ...fallback, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return fallback; }
@@ -24,7 +24,7 @@ function loadPrefs(fallback: Prefs): Prefs {
  * `loadItems` busca os dados na hora de gerar (com a imagem da campanha de cada apadrinhamento).
  */
 export default function ExportPdfDialog({
-  open, onClose, title, subtitle, count, loadItems, fileName, defaultSummary = false, sponsorCount = 1,
+  open, onClose, title, subtitle, count, loadItems, fileName, defaultSummary = false, sponsorCount = 1, loadUnsponsored,
 }: {
   open: boolean;
   onClose: () => void;
@@ -36,14 +36,16 @@ export default function ExportPdfDialog({
   defaultSummary?: boolean;
   /** quantos padrinhos diferentes: com mais de um, dá para separar por padrinho */
   sponsorCount?: number;
+  /** busca as crianças do mesmo recorte (cidade/comunidade) ainda sem padrinho; sem ela, a opção não aparece */
+  loadUnsponsored?: () => Promise<PdfItem[]>;
 }) {
-  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true, order: 'name', groupBySponsor: true });
+  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true, order: 'name', groupBySponsor: true, includeUnsponsored: false });
   const canGroup = sponsorCount > 1;
   const grouped = canGroup && prefs.groupBySponsor;
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number; phase: 'load' | 'compose' | 'pdf' } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<(ExportResult & { skipped: number }) | null>(null);
+  const [result, setResult] = useState<(ExportResult & { skipped: number; unsponsored: number }) | null>(null);
   const cancelRef = useRef({ cancelled: false });
 
   // lembra as escolhas entre exportações (o resumo segue o padrão da tela)
@@ -67,7 +69,7 @@ export default function ExportPdfDialog({
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({
         perPage: next.perPage, textScale: next.textScale, caption: next.caption, includeNoPhoto: next.includeNoPhoto,
-        order: next.order, groupBySponsor: next.groupBySponsor,
+        order: next.order, groupBySponsor: next.groupBySponsor, includeUnsponsored: next.includeUnsponsored,
       }));
     } catch { /* sem storage */ }
     return next;
@@ -78,7 +80,9 @@ export default function ExportPdfDialog({
     cancelRef.current = { cancelled: false };
     try {
       setProgress({ current: 0, total: count, phase: 'load' });
-      const all = await loadItems();
+      const sponsoredItems = await loadItems();
+      const freeItems = loadUnsponsored && prefs.includeUnsponsored ? await loadUnsponsored() : [];
+      const all = [...sponsoredItems, ...freeItems];
       if (!all.length) throw new Error('Nenhum apadrinhamento para exportar.');
       // sem foto = sem foto nesta campanha (só o layout)
       const items = prefs.includeNoPhoto ? all : all.filter((i) => !!i.child.photoUrl);
@@ -92,7 +96,7 @@ export default function ExportPdfDialog({
         signal: cancelRef.current,
         onProgress: (p) => setProgress(p),
       });
-      if (!r.cancelled) setResult({ ...r, skipped });
+      if (!r.cancelled) setResult({ ...r, skipped, unsponsored: items.filter((i) => i.unsponsored).length });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Não foi possível gerar o PDF.');
     } finally {
@@ -193,6 +197,18 @@ export default function ExportPdfDialog({
                 hint="Cada padrinho começa com a lista das crianças dele (com contato) e depois os cartões"
               />
             )}
+            {loadUnsponsored && (
+              <Toggle
+                checked={prefs.includeUnsponsored}
+                onChange={(v) => set({ includeUnsponsored: v })}
+                disabled={busy}
+                icon={<UserX className="w-4 h-4" />}
+                label="Incluir as crianças sem padrinho"
+                hint={grouped
+                  ? 'Depois de todos os padrinhos: a lista delas e os cartões; também entram na listagem geral'
+                  : 'No fim, depois das apadrinhadas (e no resumo, com o selo "Sem padrinho")'}
+              />
+            )}
             <Toggle
               checked={prefs.caption}
               onChange={(v) => set({ caption: v })}
@@ -247,6 +263,7 @@ export default function ExportPdfDialog({
               <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
               <span>
                 PDF baixado: {result.cards} cartão(ões) em {result.pages} página(s)
+                {result.unsponsored ? ` · ${result.unsponsored} sem padrinho` : ''}
                 {result.withoutPhoto ? ` · ${result.withoutPhoto} sem foto` : ''}
                 {result.skipped ? ` · ${result.skipped} sem foto deixada(s) de fora` : ''}.
               </span>

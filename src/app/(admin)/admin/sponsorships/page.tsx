@@ -471,6 +471,8 @@ export default function AdminSponsorshipsPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportSponsor, setExportSponsor] = useState<{ id: string; name: string } | null>(null);
   const [exportItems, setExportItems] = useState<Sponsorship[]>([]);
+  // cidade/comunidade da exportação: permite incluir as crianças dali ainda sem padrinho
+  const [exportScope, setExportScope] = useState<{ city: string; community?: string } | null>(null);
 
   // ===== Transferência
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
@@ -576,14 +578,43 @@ export default function AdminSponsorshipsPage() {
   }, [campaignId, campaignReady]);
 
   // ===== Export PDF helper (abre o modal padrão com as opções)
-  function openExportModal(items: Sponsorship[], label: string, sponsorId?: string) {
+  function openExportModal(items: Sponsorship[], label: string, sponsorId?: string, scope?: { city: string; community?: string }) {
     if (!items?.length) {
       alert('Nenhum item para exportar.');
       return;
     }
+    setExportScope(scope ?? null);
     setExportItems(items);
     setExportSponsor({ id: sponsorId ?? '', name: label });
     setExportOpen(true);
+  }
+
+  /**
+   * Crianças da campanha no recorte da exportação (cidade/comunidade, com os mesmos nomes do
+   * agrupamento da tela) que não têm apadrinhamento — cancelado conta como sem padrinho.
+   */
+  async function loadUnsponsoredPdfItems(scope: { city: string; community?: string }) {
+    const campaign = campaigns.find((c) => c.id === campaignId);
+    const cityId = exportItems.map((s) => (s.child as any)?.city?.id ?? (s.child as any)?.cityId).find(Boolean);
+    const rows: any[] = [];
+    for (let skip = 0; ; skip += 100) {
+      const q = new URLSearchParams({ campaignId, skip: String(skip), take: '100' });
+      if (cityId) q.set('cityId', cityId);
+      const r = await fetch(`/api/admin/children?${q}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`Falha ao buscar as crianças sem padrinho: ${await errorMessage(r)}`);
+      const j = await r.json();
+      rows.push(...(j.items ?? []));
+      if (!j.hasMore || !(j.items ?? []).length) break;
+    }
+    return rows
+      .filter((c) =>
+        (c.city?.name || c.cityName || 'Sem cidade') === scope.city &&
+        (!scope.community || (c.community?.name || 'Sem comunidade') === scope.community) &&
+        !(c.sponsorships ?? []).some((sp: { status: string }) => sp.status !== 'CANCELLED'))
+      .map((c) => ({
+        ...sponsorshipToPdfItem({ id: `free:${c.id}`, status: 'PENDING', child: c, campaign: { id: campaignId, name: campaign?.name ?? '', year: campaign?.year ?? null }, sponsor: null }),
+        unsponsored: true,
+      }));
   }
 
   /* ===== Contagens por status ===== */
@@ -1765,7 +1796,7 @@ export default function AdminSponsorshipsPage() {
                   items={cityGroup.items}
                   selected={cityGroup.items.every((x) => isSelected(x.id))}
                   onSelect={(on) => selectMany(cityGroup.items.map((x) => x.id), on)}
-                  onPdf={() => openExportModal(cityGroup.items, cityGroup.city)}
+                  onPdf={() => openExportModal(cityGroup.items, cityGroup.city, undefined, { city: cityGroup.city })}
                   onTransfer={() => beginTransfer(cityGroup.items.map((x) => x.id))}
                 >
                   {cityGroup.byCommunity.map((comm) => {
@@ -1780,7 +1811,7 @@ export default function AdminSponsorshipsPage() {
                         items={comm.items}
                         selected={comm.items.every((x) => isSelected(x.id))}
                         onSelect={(on) => selectMany(comm.items.map((x) => x.id), on)}
-                        onPdf={() => openExportModal(comm.items, `${cityGroup.city} - ${comm.community}`)}
+                        onPdf={() => openExportModal(comm.items, `${cityGroup.city} - ${comm.community}`, undefined, { city: cityGroup.city, community: comm.community })}
                         onTransfer={() => beginTransfer(comm.items.map((x) => x.id))}
                       >
                         <ul className="divide-y divide-gray-100">
@@ -2578,7 +2609,8 @@ export default function AdminSponsorshipsPage() {
       {/* Exportar PDF (padrinho, cidade, comunidade, criança ou seleção) */}
       <ExportPdfDialog
         open={exportOpen}
-        onClose={() => { setExportOpen(false); setExportSponsor(null); setExportItems([]); }}
+        onClose={() => { setExportOpen(false); setExportSponsor(null); setExportItems([]); setExportScope(null); }}
+        loadUnsponsored={exportScope && campaignId ? () => loadUnsponsoredPdfItems(exportScope) : undefined}
         title={exportSponsor?.name ?? ''}
         count={exportItems.length}
         defaultSummary={exportItems.length > 1}

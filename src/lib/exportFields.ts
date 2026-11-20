@@ -3,6 +3,9 @@
 
 export type ExportRow = {
   sponsorshipId: string;
+  childId: string | null;
+  /** criança da campanha ainda sem padrinho (linha sem apadrinhamento) */
+  unsponsored?: boolean;
   publicId: number | null;
   childName: string;
   birthDate: string | null;
@@ -81,6 +84,7 @@ export function cellText(r: ExportRow, key: string): string {
     case 'createdAt': return br(r.createdAt);
     case 'method': return r.method === 'PIX' ? 'PIX' : r.method === 'GIFT' ? 'Presente' : '';
     case 'age': return r.age != null ? `${r.age} ${r.age === 1 ? 'ano' : 'anos'}` : '';
+    case 'sponsorName': return r.unsponsored ? 'Sem padrinho' : r.sponsorName ?? '';
     case 'donationAmount': return r.donationAmount != null ? r.donationAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '';
     default: {
       const v = (r as Record<string, unknown>)[key];
@@ -94,25 +98,32 @@ export function groupLabel(r: ExportRow, by: GroupBy): string {
     case 'community': return r.community ? `${r.community}${r.city ? ` (${r.city})` : ''}` : `Sem comunidade${r.city ? ` (${r.city})` : ''}`;
     case 'city': return r.city || 'Sem cidade';
     case 'school': return r.school || 'Sem escola';
-    case 'sponsor': return r.sponsorName || 'Sem padrinho';
-    case 'collectionPoint': return r.collectionPoint || 'Sem ponto de coleta';
+    case 'sponsor': return r.unsponsored ? FREE_LABEL : r.sponsorName || 'Sem padrinho';
+    case 'collectionPoint': return r.unsponsored ? FREE_LABEL : r.collectionPoint || 'Sem ponto de coleta';
     default: return 'Apadrinhamentos';
   }
 }
 
+export const FREE_LABEL = 'Crianças sem padrinho';
+
 const cmp = (a: string, b: string) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base', numeric: true });
 
-export type SortBy = 'name' | 'id';
+/** ordem dentro do grupo; "sponsor" = por padrinho (as sem padrinho no fim) e, dentro dele, por ID */
+export type SortBy = 'name' | 'id' | 'sponsor';
 
 /** Dentro do grupo: por nome da criança ou pelo ID */
+const byId = (x: ExportRow, y: ExportRow) => (x.publicId ?? 1e9) - (y.publicId ?? 1e9) || cmp(x.childName ?? '', y.childName ?? '');
 const byRow = (sortBy: SortBy) => (x: ExportRow, y: ExportRow) =>
-  sortBy === 'id' ? (x.publicId ?? 1e9) - (y.publicId ?? 1e9) || cmp(x.childName ?? '', y.childName ?? '') : cmp(x.childName ?? '', y.childName ?? '');
+  sortBy === 'id' ? byId(x, y)
+  : sortBy === 'sponsor' ? Number(!!x.unsponsored) - Number(!!y.unsponsored) || cmp(x.sponsorName ?? '', y.sponsorName ?? '') || byId(x, y)
+  : cmp(x.childName ?? '', y.childName ?? '');
 
 export function groupRows(rows: ExportRow[], by: GroupBy, sortBy: SortBy = 'name') {
   const map = new Map<string, { label: string; sort: string; rows: ExportRow[] }>();
   for (const r of rows) {
     const label = groupLabel(r, by);
-    const sort = by === 'community' ? `${r.city ?? '~'}|${r.community ?? '~'}` : label;
+    // as sem padrinho (quando o grupo é padrinho ou ponto de coleta) ficam no fim
+    const sort = label === FREE_LABEL ? '\uffff' : by === 'community' ? `${r.city ?? '~'}|${r.community ?? '~'}` : label;
     const g = map.get(label) ?? { label, sort, rows: [] };
     g.rows.push(r);
     map.set(label, g);
@@ -155,7 +166,8 @@ export type GiftCount = { gift: string; count: number; ids: number[] };
  */
 export function giftSummary(rows: ExportRow[], by: GroupBy) {
   const giftBy: GroupBy = by === 'city' || by === 'school' || by === 'collectionPoint' ? by : 'community';
-  return groupRows(rows, giftBy, 'id').map((g) => {
+  // só as apadrinhadas: é a lista do que será comprado/entregue
+  return groupRows(rows.filter((r) => !r.unsponsored), giftBy, 'id').map((g) => {
     const map = new Map<string, GiftCount>();
     for (const r of g.rows) {
       const text = (r.gift ?? '').trim().replace(/\s+/g, ' ');

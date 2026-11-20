@@ -27,6 +27,7 @@ export type PdfChildInput = {
 };
 
 export type PdfOrder = 'name' | 'id';
+export type PdfGroupBy = 'none' | 'community' | 'city' | 'collectionPoint';
 
 export type PdfCampaign = { id: string; name: string; year?: number | null };
 
@@ -39,6 +40,8 @@ export type PdfItem = {
   sponsorEmail?: string | null;
   sponsorPhone?: string | null;
   collectionPoint?: string | null;
+  /** criança da campanha ainda sem padrinho (não é um apadrinhamento) */
+  unsponsored?: boolean;
   child: PdfChildInput;
   campaign: PdfCampaign;
 };
@@ -56,8 +59,12 @@ export type ExportPdfOptions = {
   summary?: boolean;
   /** ordem das crianças nas listas e nos cartões */
   order?: PdfOrder;
-  /** cada padrinho com a lista das crianças dele antes dos cartões; listagem geral no fim */
+  /** separar por comunidade, cidade ou ponto de coleta (cada um começa com a lista dele) */
+  groupBy?: PdfGroupBy;
+  /** dentro de cada grupo (ou no todo): cada padrinho com a lista das crianças dele antes dos cartões */
   groupBySponsor?: boolean;
+  /** false = só as listas, sem os cartões com foto */
+  cards?: boolean;
   onProgress?: (p: { current: number; total: number; phase: 'compose' | 'pdf' }) => void;
   signal?: { cancelled: boolean };
 };
@@ -220,9 +227,13 @@ export function groupBySponsor(items: ReadonlyArray<PdfItem>) {
   return [...map.values()].sort((a, b) => cmpText(a.name, b.name));
 }
 
-function drawChip(pdf: jsPDF, x: number, y: number, status: SponsorshipStatus, size: number, maxW: number) {
-  const label = STATUS_PT[status] ?? status;
-  const rgb = STATUS_RGB[status] ?? [100, 116, 139];
+const FREE_RGB: [number, number, number] = [100, 116, 139];
+/** Selo de cada criança: o status do apadrinhamento ou "Sem padrinho" */
+const chipOf = (it: PdfItem): { label: string; rgb: [number, number, number] } =>
+  it.unsponsored ? { label: 'Sem padrinho', rgb: FREE_RGB } : { label: STATUS_PT[it.status] ?? it.status, rgb: STATUS_RGB[it.status] ?? FREE_RGB };
+
+function drawChip(pdf: jsPDF, x: number, y: number, it: PdfItem, size: number, maxW: number) {
+  const { label, rgb } = chipOf(it);
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(size);
   const padX = size * 0.6, h = size * 1.6;
@@ -243,13 +254,51 @@ function drawChip(pdf: jsPDF, x: number, y: number, status: SponsorshipStatus, s
 
 export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts: ExportPdfOptions = {}): Promise<ExportResult> {
   const order: PdfOrder = opts.order ?? 'name';
-  const groups = opts.groupBySponsor ? groupBySponsor(input) : null;
-  const grouped = !!groups && groups.length > 0;
-  // ordem final dos cartões: por padrinho (cada um na ordem escolhida) ou tudo junto
-  const sections = grouped
-    ? groups!.map((g) => ({ ...g, items: [...g.items].sort(byFlow(order)) }))
-    : [{ key: '', name: '', email: null, phone: null, items: [...input].sort(byFlow(order)) }];
-  const items = sections.flatMap((s) => s.items);
+  const groupBy: PdfGroupBy = opts.groupBy ?? 'none';
+  const bySponsor = !!opts.groupBySponsor;
+  const withCards = opts.cards !== false;
+
+  // grupos (comunidade, cidade, ponto de coleta) — as sem padrinho não têm ponto: grupo próprio no fim
+  type Section = { name: string; email: string | null; phone: string | null; items: PdfItem[]; free?: boolean };
+  type Top = { label: string | null; sort: string; items: PdfItem[]; sections: Section[] };
+  const topOf = (it: PdfItem): { label: string; sort: string } => {
+    const c = it.child;
+    if (groupBy === 'community') {
+      const label = `${c.community || 'Sem comunidade'}${c.city ? ` (${c.city})` : ''}`;
+      return { label, sort: `${c.city ?? '~'}|${c.community ?? '~'}` };
+    }
+    if (groupBy === 'city') return { label: c.city || 'Sem cidade', sort: c.city || '~' };
+    if (it.unsponsored) return { label: 'Crianças sem padrinho', sort: '\uffff' };
+    return { label: it.collectionPoint || 'Sem ponto de coleta', sort: it.collectionPoint || '\ufffe' };
+  };
+  const tops: Top[] = [];
+  if (groupBy === 'none') {
+    tops.push({ label: null, sort: '', items: [...input], sections: [] });
+  } else {
+    const map = new Map<string, Top>();
+    for (const it of input) {
+      const t = topOf(it);
+      const g = map.get(t.label) ?? { label: t.label, sort: t.sort, items: [], sections: [] };
+      g.items.push(it);
+      map.set(t.label, g);
+    }
+    tops.push(...[...map.values()].sort((x, y) => cmpText(x.sort, y.sort)));
+  }
+  // dentro de cada grupo: por padrinho (e as sem padrinho no fim) ou tudo junto, na ordem escolhida
+  for (const t of tops) {
+    const sponsored = t.items.filter((i) => !i.unsponsored);
+    const free = t.items.filter((i) => i.unsponsored).sort(byFlow(order));
+    t.sections = bySponsor
+      ? [
+          ...groupBySponsor(sponsored).map((g) => ({ name: g.name, email: g.email, phone: g.phone, items: [...g.items].sort(byFlow(order)) })),
+          ...(free.length ? [{ name: 'Crianças sem padrinho', email: null, phone: null, items: free, free: true }] : []),
+        ]
+      : [{ name: t.label ?? '', email: null, phone: null, items: [...[...sponsored].sort(byFlow(order)), ...free] }];
+    t.items = t.sections.flatMap((x) => x.items);
+  }
+  const items = tops.flatMap((t) => t.items);
+  const freeCount = items.filter((i) => i.unsponsored).length;
+  const sponsorCount = new Set(items.filter((i) => !i.unsponsored).map((i) => i.sponsorId || i.sponsorName)).size;
   const total = items.length;
   if (!total) return { cards: 0, withoutPhoto: 0, pages: 0 };
 
@@ -260,11 +309,13 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
   // ===== 1) artes (3 por vez; o navegador baixa as imagens em paralelo)
   const cards = new Map<PdfItem, { dataURL: string; aspect: number }>();
   let done = 0;
-  await runPool(items, 3, async (it) => {
-    if (opts.signal?.cancelled) return;
-    cards.set(it, await composeCard(it));
-    report(++done, 'compose');
-  });
+  if (withCards) {
+    await runPool(items, 3, async (it) => {
+      if (opts.signal?.cancelled) return;
+      cards.set(it, await composeCard(it));
+      report(++done, 'compose');
+    });
+  }
   if (opts.signal?.cancelled) return { cards: 0, withoutPhoto: 0, pages: 0, cancelled: true };
 
   const pdf = new jsPDF({ unit: 'pt', format: 'a4', compress: true });
@@ -312,14 +363,13 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
         y += 32 + head.lines.filter(Boolean).length * 14;
         if (head.statusCounts) {
           let cx = m;
-          const counts = new Map<SponsorshipStatus, number>();
-          list.forEach((i) => counts.set(i.status, (counts.get(i.status) ?? 0) + 1));
-          for (const [st, n] of counts) {
+          const counts = new Map<string, { n: number; rgb: [number, number, number] }>();
+          list.forEach((i) => { const c = chipOf(i); const prev = counts.get(c.label); counts.set(c.label, { n: (prev?.n ?? 0) + 1, rgb: c.rgb }); });
+          for (const [st, { n, rgb }] of counts) {
             pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8);
-            const label = `${STATUS_PT[st]}: ${n}`;
+            const label = `${st}: ${n}`;
             const w = pdf.getTextWidth(label) + 12;
             if (cx + w > pageW - m) { cx = m; y += 18; }
-            const rgb = STATUS_RGB[st];
             pdf.setFillColor(...tint(rgb)); pdf.setDrawColor(...tint(rgb, 0.6));
             pdf.roundedRect(cx, y, w, 14, 7, 7, 'FD');
             pdf.setTextColor(...rgb); pdf.text(label, cx + 6, y + 9.6);
@@ -353,13 +403,13 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
         age: typeof c.age === 'number' ? `${c.age} ${c.age === 1 ? 'ano' : 'anos'}` : '—',
         place: c.community || c.city || '—',
         gift: c.wantedGift || '—',
-        sponsor: it.sponsorName || '—',
+        sponsor: it.unsponsored ? 'Sem padrinho' : it.sponsorName || '—',
       };
       pdf.setFont('helvetica', 'normal'); pdf.setFontSize(fs); pdf.setTextColor(30, 41, 59);
       let x = m;
       for (const col of cols) {
         if (col.key === 'status') {
-          drawChip(pdf, x + 2, y + (rowH - fs * 1.4) / 2, it.status, fs * 0.85, col.w - 4);
+          drawChip(pdf, x + 2, y + (rowH - fs * 1.4) / 2, it, fs * 0.85, col.w - 4);
         } else {
           // uma linha por célula, cortada com reticências
           let t = cells[col.key];
@@ -391,6 +441,7 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
   let drawn = 0;
 
   const drawCards = async (list: PdfItem[]) => {
+    if (!withCards) return;
     for (let i = 0; i < list.length; i++) {
       if (opts.signal?.cancelled) return;
       const pos = i % density;
@@ -441,7 +492,7 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
           pdf.text(wrapped, imgX, y + l.size * 0.9);
           y += wrapped.length * lineH(l.size);
         }
-        drawChip(pdf, imgX, y + 2, it.status, metaSize * 0.9, drawW);
+        drawChip(pdf, imgX, y + 2, it, metaSize * 0.9, drawW);
         pdf.setTextColor(0);
       }
       report(++drawn, 'pdf');
@@ -451,18 +502,50 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
 
   const campaignLine = sameCampaign ? campaigns[0] : `${campaigns.length} campanhas`;
   const orderLine = order === 'id' ? 'em ordem de ID' : 'em ordem alfabética';
-  if (grouped) {
-    // cada padrinho: a lista das crianças dele e, em seguida, os cartões
-    for (const s of sections) {
-      listTable(s.items, {
-        title: s.name,
-        lines: [
-          [s.email, s.phone].filter(Boolean).join('  ·  '),
-          [opts.title, campaignLine, `${s.items.length} criança${s.items.length === 1 ? '' : 's'}`, orderLine].filter(Boolean).join('  ·  '),
-        ],
-      }, false);
-      await drawCards(s.items);
-      if (opts.signal?.cancelled) return { cards: 0, withoutPhoto: 0, pages: 0, cancelled: true };
+  const kids = (n: number) => `${n} criança${n === 1 ? '' : 's'}`;
+  const cancelled = () => !!opts.signal?.cancelled;
+  const grouped = groupBy !== 'none' || bySponsor;
+
+  if (!grouped) {
+    // tudo junto: resumo no início e os cartões
+    if (opts.summary || !withCards) {
+      listTable(items, {
+        title: opts.title || 'Apadrinhamentos',
+        lines: [[campaignLine, kids(total), freeCount ? `${freeCount} sem padrinho` : '', withoutPhoto && withCards ? `${withoutPhoto} sem foto` : '', `gerado em ${new Date().toLocaleDateString('pt-BR')}`].filter(Boolean).join('  ·  ')],
+        statusCounts: true,
+      }, sponsorCount > 1 || freeCount > 0);
+    }
+    await drawCards(items);
+    if (cancelled()) return { cards: 0, withoutPhoto: 0, pages: 0, cancelled: true };
+  } else {
+    for (const t of tops) {
+      // grupo (comunidade…) separado por padrinho: primeiro a lista do grupo inteiro, com o padrinho
+      if (t.label && bySponsor) {
+        listTable(t.items, {
+          title: t.label,
+          lines: [[opts.title, campaignLine, kids(t.items.length), `${t.sections.filter((x) => !x.free).length} padrinho(s)`, orderLine].filter(Boolean).join('  ·  ')],
+          statusCounts: true,
+        }, true);
+      }
+      for (const sec of t.sections) {
+        if (bySponsor) {
+          listTable(sec.items, {
+            title: sec.name,
+            lines: [
+              sec.free ? 'Crianças que ainda não foram apadrinhadas' : [sec.email, sec.phone].filter(Boolean).join('  ·  '),
+              [t.label, !t.label ? opts.title : '', campaignLine, kids(sec.items.length), orderLine].filter(Boolean).join('  ·  '),
+            ],
+          }, false);
+        } else {
+          listTable(sec.items, {
+            title: t.label ?? opts.title ?? 'Apadrinhamentos',
+            lines: [[opts.title, campaignLine, kids(sec.items.length), orderLine].filter(Boolean).join('  ·  ')],
+            statusCounts: true,
+          }, true);
+        }
+        await drawCards(sec.items);
+        if (cancelled()) return { cards: 0, withoutPhoto: 0, pages: 0, cancelled: true };
+      }
     }
     // no fim, a listagem geral (todas as crianças, com o padrinho)
     if (opts.summary) {
@@ -470,20 +553,10 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
         cmpText(a.child.community ?? a.child.city, b.child.community ?? b.child.city) || byChild(order)(a, b));
       listTable(all, {
         title: `Listagem geral${opts.title ? ` — ${opts.title}` : ''}`,
-        lines: [[campaignLine, `${total} criança${total === 1 ? '' : 's'}`, `${sections.length} padrinho${sections.length === 1 ? '' : 's'}`, orderLine].join('  ·  ')],
+        lines: [[campaignLine, kids(total), `${sponsorCount} padrinho${sponsorCount === 1 ? '' : 's'}`, freeCount ? `${freeCount} sem padrinho` : '', orderLine].filter(Boolean).join('  ·  ')],
         statusCounts: true,
       }, true);
     }
-  } else {
-    if (opts.summary) {
-      listTable(items, {
-        title: opts.title || 'Apadrinhamentos',
-        lines: [[campaignLine, `${total} criança${total === 1 ? '' : 's'}`, withoutPhoto ? `${withoutPhoto} sem foto` : '', `gerado em ${new Date().toLocaleDateString('pt-BR')}`].filter(Boolean).join('  ·  ')],
-        statusCounts: true,
-      }, false);
-    }
-    await drawCards(items);
-    if (opts.signal?.cancelled) return { cards: 0, withoutPhoto: 0, pages: 0, cancelled: true };
   }
 
   // ===== rodapé em todas as páginas
@@ -500,7 +573,7 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
   pdf.setTextColor(0);
 
   pdf.save(opts.fileName || `apadrinhamentos-${new Date().toISOString().slice(0, 10)}.pdf`);
-  return { cards: total, withoutPhoto, pages };
+  return { cards: withCards ? total : 0, withoutPhoto, pages };
 }
 
 /* ===== Conversão a partir do formato da API (/sponsorships/me e /sponsorships/pdf-data) ===== */
