@@ -188,10 +188,12 @@ function ExportSponsorships() {
   }, [cityId]);
 
   const canPickCity = level === 'city' || level === 'community' || level === 'school';
-  const canPickCommunity = level === 'community';
+  // escola é um filtro duplo: primeiro a comunidade, depois a escola dentro dela
+  const canPickCommunity = level === 'community' || level === 'school';
   const school = schools.find((x) => x.id === schoolId);
-  // comunidades para restringir a escola: as que ela atende (sem escola declarada: as da cidade)
-  const schoolCommunities: Option[] = schoolId === 'none' ? communities : school?.communities ?? [];
+  // escolas da comunidade escolhida (pelo vínculo escola × comunidade) e as demais da cidade
+  const schoolsHere = schools.filter((x) => x.communities.some((c) => c.id === communityId));
+  const schoolsElse = schools.filter((x) => !x.communities.some((c) => c.id === communityId));
   const freeAllowed = !!campaignId && level !== 'sponsor' && level !== 'selection';
   const includeFree = o.includeFree && freeAllowed;
   // o agrupamento escolhido pode não existir no formato (escola nos cartões): cai para comunidade
@@ -205,10 +207,7 @@ function ExportSponsorships() {
     if (campaignId) p.set('campaignId', campaignId);
     if (canPickCity && cityId) p.set('cityId', cityId);
     if (canPickCommunity && communityId) p.set('communityId', communityId);
-    if (level === 'school' && schoolId) {
-      p.set('schoolId', schoolId);
-      if (communityId) p.set('communityId', communityId);
-    }
+    if (level === 'school' && schoolId) p.set('schoolId', schoolId);
     if (level === 'sponsor' && sponsorId) p.set('sponsorId', sponsorId);
     if (level === 'selection') {
       const list = ids.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean).join(',');
@@ -224,6 +223,7 @@ function ExportSponsorships() {
     (level === 'city' && !cityId) ? 'Escolha a cidade.' :
     (level === 'community' && !communityId) ? 'Escolha a comunidade.' :
     (level === 'school' && !cityId) ? 'Escolha a cidade.' :
+    (level === 'school' && !communityId) ? 'Escolha a comunidade.' :
     (level === 'school' && !schoolId) ? 'Escolha a escola.' :
     (level === 'sponsor' && !sponsorId) ? 'Escolha o padrinho.' :
     (level === 'selection' && !ids.trim()) ? 'Cole os IDs dos apadrinhamentos.' :
@@ -245,10 +245,7 @@ function ExportSponsorships() {
     const parts = [camp ? camp.name + (camp.year ? ` (${camp.year})` : '') : 'Todas as campanhas'];
     if (canPickCity && cityId) parts.push(cities.find((c) => c.id === cityId)?.name ?? '');
     if (canPickCommunity && communityId) parts.push(communities.find((c) => c.id === communityId)?.name ?? '');
-    if (level === 'school' && schoolId) {
-      parts.push(schoolId === 'none' ? 'Sem escola declarada' : school?.name ?? '');
-      if (communityId) parts.push(schoolCommunities.find((c) => c.id === communityId)?.name ?? '');
-    }
+    if (level === 'school' && schoolId) parts.push(schoolId === 'none' ? 'Sem escola declarada' : school?.name ?? '');
     if (level === 'sponsor' && sponsorId) parts.push(sponsors.find((s) => s.id === sponsorId)?.name ?? '');
     return parts.filter(Boolean).join(' · ');
   };
@@ -423,7 +420,7 @@ function ExportSponsorships() {
           )}
           {canPickCommunity && (
             <label className="text-sm text-gray-600">Comunidade
-              <select value={communityId} onChange={(e) => setCommunityId(e.target.value)} disabled={!cityId} className={`${select} disabled:bg-gray-100`}>
+              <select value={communityId} onChange={(e) => { setCommunityId(e.target.value); setSchoolId(''); }} disabled={!cityId} className={`${select} disabled:bg-gray-100`}>
                 <option value="">— Selecionar —</option>
                 {communities.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
@@ -431,20 +428,19 @@ function ExportSponsorships() {
           )}
           {level === 'school' && (
             <label className="text-sm text-gray-600">Escola
-              <select value={schoolId} onChange={(e) => { setSchoolId(e.target.value); setCommunityId(''); }} disabled={!cityId} className={`${select} disabled:bg-gray-100`}>
-                <option value="">— Selecionar —</option>
-                {schools.map((x) => (
-                  <option key={x.id} value={x.id}>{x.name}{x.communities.length > 1 ? ` (${x.communities.length} comunidades)` : ''}</option>
-                ))}
+              <select value={schoolId} onChange={(e) => setSchoolId(e.target.value)} disabled={!communityId} className={`${select} disabled:bg-gray-100`}>
+                <option value="">{communityId ? '— Selecionar —' : 'Escolha a comunidade antes'}</option>
+                {schoolsHere.length > 0 && (
+                  <optgroup label="Escolas desta comunidade">
+                    {schoolsHere.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                  </optgroup>
+                )}
+                {schoolsElse.length > 0 && (
+                  <optgroup label="Outras escolas da cidade">
+                    {schoolsElse.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                  </optgroup>
+                )}
                 <option value="none">Sem escola declarada</option>
-              </select>
-            </label>
-          )}
-          {level === 'school' && schoolId && (schoolId === 'none' || schoolCommunities.length > 1) && (
-            <label className="text-sm text-gray-600">Comunidade
-              <select value={communityId} onChange={(e) => setCommunityId(e.target.value)} className={select}>
-                <option value="">Todas{schoolId === 'none' ? ' as da cidade' : ` as ${schoolCommunities.length} que a escola atende`}</option>
-                {schoolCommunities.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </label>
           )}
@@ -457,17 +453,6 @@ function ExportSponsorships() {
             </label>
           )}
         </div>
-        {level === 'school' && schoolId && !communityId && (schoolId === 'none' || schoolCommunities.length > 1) && (
-          <p className="text-xs text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-            {schoolId === 'none'
-              ? 'Crianças da cidade sem escola no cadastro. '
-              : `Esta escola atende ${schoolCommunities.length} comunidades. `}
-            Para não misturar as comunidades, use <b>Separar por: Comunidade › escola</b> (ou Comunidade) em Organização.
-            {groupBy !== 'school' && groupBy !== 'community' && (
-              <button type="button" onClick={() => set({ groupBy: 'school' })} className="ml-2 underline font-semibold">Usar Comunidade › escola</button>
-            )}
-          </p>
-        )}
         {level === 'selection' && (
           <textarea value={ids} onChange={(e) => setIds(e.target.value)} placeholder="IDs dos apadrinhamentos, separados por vírgula, espaço ou linha" className="w-full rounded-xl border border-gray-300 bg-white text-gray-900 min-h-[80px] p-3 text-sm" />
         )}
