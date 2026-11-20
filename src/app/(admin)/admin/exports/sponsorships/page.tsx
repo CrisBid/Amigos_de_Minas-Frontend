@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import CampaignFilter, { useAdminCampaign } from '@/components/Admin/CampaignFilter';
 import {
-  cellText, DEFAULT_FIELDS, DEFAULT_SPONSOR_FIELDS, EXPORT_FIELDS, FIELD_LABEL, GROUP_LABEL, groupRows, SPONSOR_FIELDS,
+  CAPTION_FIELDS, cellText, DEFAULT_CAPTION_FIELDS, DEFAULT_FIELDS, DEFAULT_SPONSOR_FIELDS, EXPORT_FIELDS, FIELD_LABEL, GROUP_LABEL, groupRows, SPONSOR_FIELDS,
   type ExportRow, type GroupBy, type SortBy, type SponsorContact,
 } from '@/lib/exportFields';
 import ColumnPicker from '@/components/Admin/ColumnPicker';
@@ -61,7 +61,7 @@ type Opts = {
   sponsorList: boolean; giftSum: boolean; layout: 'tabs' | 'single'; breakPerGroup: boolean; textScale: number;
   perPage: number; caption: boolean; includeNoPhoto: boolean; general: boolean;
   /** colunas: listas dos cartões, listagem geral e padrinhos */
-  listCols: string[]; generalCols: string[]; sponsorCols: string[];
+  listCols: string[]; generalCols: string[]; sponsorCols: string[]; captionCols: string[];
   /** cartões: página final com os padrinhos; todos: folha de resumo dos pontos de coleta */
   sponsorPage: boolean; pointsSummary: boolean;
 };
@@ -69,7 +69,7 @@ const DEFAULT_OPTS: Opts = {
   format: 'list', groupBy: 'community', sortBy: 'id', bySponsor: true, includeFree: false,
   sponsorList: true, giftSum: true, layout: 'tabs', breakPerGroup: true, textScale: 1,
   perPage: 4, caption: true, includeNoPhoto: true, general: true,
-  listCols: DEFAULT_LIST_COLUMNS, generalCols: DEFAULT_GENERAL_COLUMNS, sponsorCols: DEFAULT_SPONSOR_FIELDS,
+  listCols: DEFAULT_LIST_COLUMNS, generalCols: DEFAULT_GENERAL_COLUMNS, sponsorCols: DEFAULT_SPONSOR_FIELDS, captionCols: DEFAULT_CAPTION_FIELDS,
   sponsorPage: true, pointsSummary: false,
 };
 
@@ -131,6 +131,7 @@ function ExportSponsorships() {
     saved.listCols = valid(saved.listCols, CARD_LIST_FIELDS, DEFAULT_LIST_COLUMNS);
     saved.generalCols = valid(saved.generalCols, CARD_LIST_FIELDS, DEFAULT_GENERAL_COLUMNS);
     saved.sponsorCols = valid(saved.sponsorCols, SPONSOR_FIELDS, DEFAULT_SPONSOR_FIELDS);
+    saved.captionCols = valid(saved.captionCols, CAPTION_FIELDS, DEFAULT_CAPTION_FIELDS);
     const fmt = params.get('format') as Format | null;
     const grp = params.get('group') as GroupBy | null;
     const sort = params.get('sort') as SortBy | null;
@@ -300,7 +301,8 @@ function ExportSponsorships() {
         order: sortBy === 'sponsor' ? 'id' : sortBy,
         perPage: o.perPage,
         textScale: o.textScale,
-        caption: o.caption,
+        caption: o.caption && o.captionCols.length > 0,
+        captionFields: o.captionCols,
         summary: o.general,
         listColumns: o.listCols,
         generalColumns: o.generalCols,
@@ -530,7 +532,17 @@ function ExportSponsorships() {
                   {PER_PAGE.map((n) => <button key={n} type="button" onClick={() => set({ perPage: n })} className={`${seg(o.perPage === n)} px-4`}>{n}</button>)}
                 </div>
               </div>
-              <label className="flex items-center gap-2"><input type="checkbox" checked={o.caption} onChange={(e) => set({ caption: e.target.checked })} className="accent-emerald-600" /> Legenda em cada cartão (nome, ID, idade, local, presente e status)</label>
+              <label className="flex items-center gap-2"><input type="checkbox" checked={o.caption} onChange={(e) => set({ caption: e.target.checked })} className="accent-emerald-600" /> Legenda abaixo de cada arte</label>
+              {o.caption && (
+                <div className="ml-6 rounded-xl border border-gray-100 bg-gray-50/60 p-3 space-y-2">
+                  <ColumnPicker
+                    title="O que aparece na legenda"
+                    hint="(nome e ID saem juntos na primeira linha; idade e local, juntos numa linha)"
+                    all={CAPTION_FIELDS} value={o.captionCols} onChange={(v) => set({ captionCols: v })} defaults={DEFAULT_CAPTION_FIELDS}
+                  />
+                  <CaptionPreview fields={o.captionCols} />
+                </div>
+              )}
               <label className="flex items-center gap-2"><input type="checkbox" checked={o.includeNoPhoto} onChange={(e) => set({ includeNoPhoto: e.target.checked })} className="accent-emerald-600" /> Incluir crianças sem foto (saem no fim de cada lista, só com o layout)</label>
               <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-3">
                 <ColumnPicker
@@ -612,6 +624,37 @@ function ExportSponsorships() {
         </section>
       )}
       {stale && <p className="text-xs text-gray-500">Os filtros mudaram desde a prévia.</p>}
+    </div>
+  );
+}
+
+/** Como a legenda vai ficar, com uma criança de exemplo */
+function CaptionPreview({ fields }: { fields: string[] }) {
+  const lines: { text: string; cls: string }[] = [];
+  let meta = false;
+  for (const f of fields) {
+    if (f === 'name') lines.push({ text: `MARIA DA SILVA${fields.includes('id') ? ' — #612' : ''}`, cls: 'font-bold text-gray-900' });
+    else if (f === 'id' && !fields.includes('name')) lines.push({ text: '#612', cls: 'font-bold text-gray-900' });
+    else if (['age', 'place', 'community', 'city'].includes(f) && !meta) {
+      meta = true;
+      const parts = fields.filter((k) => ['age', 'place', 'community', 'city'].includes(k)).map((k) => (k === 'age' ? '7 anos' : k === 'city' ? 'Bonito' : 'Almescla'));
+      lines.push({ text: parts.join('  ·  '), cls: 'text-gray-600' });
+    } else if (f === 'school') lines.push({ text: 'Escola: Escola Municipal de Sumidouro', cls: 'text-gray-600' });
+    else if (f === 'gift') lines.push({ text: 'Presente: BONECA', cls: 'text-amber-800' });
+    else if (f === 'sponsor') lines.push({ text: 'Padrinho: Ana Souza', cls: 'text-gray-600' });
+    else if (f === 'method') lines.push({ text: 'Forma: Presente', cls: 'text-gray-600' });
+    else if (f === 'collectionPoint') lines.push({ text: 'Entrega: Igreja Matriz (Montes Claros)', cls: 'text-gray-600' });
+    else if (f === 'campaign') lines.push({ text: 'Natal 2026 (2026)', cls: 'text-gray-600' });
+  }
+  return (
+    <div className="flex items-start gap-3">
+      <div className="w-16 h-20 rounded bg-gradient-to-br from-gray-200 to-gray-100 border border-gray-200 shrink-0" />
+      <div className="text-xs space-y-0.5">
+        <p className="text-[11px] text-gray-500">Exemplo:</p>
+        {lines.map((l, i) => <p key={i} className={l.cls}>{l.text}</p>)}
+        {fields.includes('status') && <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-800 ring-1 ring-amber-300">Pendente</span>}
+        {!fields.length && <p className="text-gray-500">Nada marcado: o cartão sai só com a arte.</p>}
+      </div>
     </div>
   );
 }

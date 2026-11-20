@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDownAZ, ArrowDown01, CheckCircle2, Store, UserX, Download, FileText, ImageOff, ListChecks, Loader2, Type, Users, X } from 'lucide-react';
 import { estimatePages, exportSponsorshipsPdf, type ExportResult, type PdfItem, type PdfOrder } from '@/lib/pdf/exportSponsorshipsPdf';
+import { CAPTION_FIELDS, DEFAULT_CAPTION_FIELDS } from '@/lib/exportFields';
+import ColumnPicker from '@/components/Admin/ColumnPicker';
 
 const PER_PAGE = [1, 2, 4, 6, 9] as const;
 const GRID: Record<number, [number, number]> = { 1: [1, 1], 2: [2, 1], 4: [2, 2], 6: [3, 2], 9: [3, 3] };
@@ -13,7 +15,7 @@ const TEXT_SIZES = [
 ];
 const PREFS_KEY = 'pdf-export-prefs';
 
-type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean; order: PdfOrder; groupBySponsor: boolean; includeUnsponsored: boolean; sponsorPage: boolean; pointsSummary: boolean };
+type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean; order: PdfOrder; groupBySponsor: boolean; includeUnsponsored: boolean; sponsorPage: boolean; pointsSummary: boolean; captionFields: string[] };
 
 function loadPrefs(fallback: Prefs): Prefs {
   try { return { ...fallback, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return fallback; }
@@ -39,7 +41,7 @@ export default function ExportPdfDialog({
   /** busca as crianças do mesmo recorte (cidade/comunidade) ainda sem padrinho; sem ela, a opção não aparece */
   loadUnsponsored?: () => Promise<PdfItem[]>;
 }) {
-  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true, order: 'name', groupBySponsor: true, includeUnsponsored: false, sponsorPage: false, pointsSummary: false });
+  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true, order: 'name', groupBySponsor: true, includeUnsponsored: false, sponsorPage: false, pointsSummary: false, captionFields: DEFAULT_CAPTION_FIELDS });
   const canGroup = sponsorCount > 1;
   const grouped = canGroup && prefs.groupBySponsor;
   const [busy, setBusy] = useState(false);
@@ -51,7 +53,11 @@ export default function ExportPdfDialog({
   // lembra as escolhas entre exportações (o resumo segue o padrão da tela)
   useEffect(() => {
     if (!open) return;
-    setPrefs((p) => ({ ...loadPrefs(p), summary: defaultSummary }));
+    setPrefs((p) => {
+      const l = loadPrefs(p);
+      const valid = Array.isArray(l.captionFields) ? l.captionFields.filter((k) => CAPTION_FIELDS.some((f) => f.key === k)) : [];
+      return { ...l, captionFields: valid.length ? valid : DEFAULT_CAPTION_FIELDS, summary: defaultSummary };
+    });
     setResult(null); setError(null); setProgress(null);
   }, [open, defaultSummary]);
 
@@ -70,7 +76,7 @@ export default function ExportPdfDialog({
       localStorage.setItem(PREFS_KEY, JSON.stringify({
         perPage: next.perPage, textScale: next.textScale, caption: next.caption, includeNoPhoto: next.includeNoPhoto,
         order: next.order, groupBySponsor: next.groupBySponsor, includeUnsponsored: next.includeUnsponsored,
-        sponsorPage: next.sponsorPage, pointsSummary: next.pointsSummary,
+        sponsorPage: next.sponsorPage, pointsSummary: next.pointsSummary, captionFields: next.captionFields,
       }));
     } catch { /* sem storage */ }
     return next;
@@ -92,6 +98,7 @@ export default function ExportPdfDialog({
       const r = await exportSponsorshipsPdf(items, {
         ...prefs,
         groupBySponsor: grouped,
+        caption: prefs.caption && prefs.captionFields.length > 0,
         title,
         fileName,
         signal: cancelRef.current,
@@ -215,8 +222,19 @@ export default function ExportPdfDialog({
               onChange={(v) => set({ caption: v })}
               disabled={busy}
               label="Legenda em cada cartão"
-              hint="Nome, ID, idade, local, presente e status abaixo da arte"
+              hint="As informações abaixo da arte (escolha logo abaixo)"
             />
+            {prefs.caption && (
+              <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                <ColumnPicker
+                  title="O que aparece na legenda"
+                  all={CAPTION_FIELDS}
+                  value={prefs.captionFields}
+                  onChange={(v) => set({ captionFields: v })}
+                  defaults={DEFAULT_CAPTION_FIELDS}
+                />
+              </div>
+            )}
             <Toggle
               checked={prefs.summary}
               onChange={(v) => setPrefs((p) => ({ ...p, summary: v }))}

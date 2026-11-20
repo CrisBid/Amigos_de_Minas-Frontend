@@ -58,6 +58,8 @@ export type ExportPdfOptions = {
   textScale?: number;
   /** legenda com nome, idade, local, presente e status abaixo de cada arte */
   caption?: boolean;
+  /** o que vai na legenda, na ordem (sem: nome, ID, idade, local, presente e status) */
+  captionFields?: string[];
   /** lista de todas as crianças: no início (ou no fim, separando por padrinho) */
   summary?: boolean;
   /** ordem das crianças nas listas e nos cartões */
@@ -549,6 +551,11 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
   const lineH = (s: number) => s * 1.28;
   let drawn = 0;
 
+  // legenda: os campos escolhidos (a campanha entra sozinha quando há mais de uma)
+  const captionFields = opts.captionFields?.length
+    ? opts.captionFields
+    : ['name', 'id', ...(sameCampaign ? [] : ['campaign']), 'age', 'place', 'gift', 'status'];
+  const withChip = captionFields.includes('status');
   const drawCards = async (list: PdfItem[]) => {
     if (!withCards) return;
     for (let i = 0; i < list.length; i++) {
@@ -565,11 +572,38 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
       // legenda: medida antes para dar à arte o resto do espaço
       const lines: { text: string; bold?: boolean; color?: [number, number, number]; size: number }[] = [];
       if (caption) {
-        lines.push({ text: `${ch.name}${ch.publicId != null ? ` — #${ch.publicId}` : ''}`, bold: true, size: titleSize, color: [15, 23, 42] });
-        if (!sameCampaign) lines.push({ text: `${it.campaign.name}${it.campaign.year ? ` (${it.campaign.year})` : ''}`, size: metaSize, color: [71, 85, 105] });
-        const meta = [typeof ch.age === 'number' ? `${ch.age} ${ch.age === 1 ? 'ano' : 'anos'}` : '', ch.community || ch.city || ''].filter(Boolean).join('  ·  ');
-        if (meta) lines.push({ text: meta, size: metaSize, color: [71, 85, 105] });
-        if (ch.wantedGift) lines.push({ text: `Presente: ${ch.wantedGift}`, size: metaSize, color: [146, 64, 14] });
+        const GRAY: [number, number, number] = [71, 85, 105];
+        let metaDone = false;
+        for (const f of captionFields) {
+          switch (f) {
+            case 'name':
+              lines.push({ text: `${ch.name}${captionFields.includes('id') && ch.publicId != null ? ` — #${ch.publicId}` : ''}`, bold: true, size: titleSize, color: [15, 23, 42] });
+              break;
+            case 'id':
+              if (!captionFields.includes('name') && ch.publicId != null) lines.push({ text: `#${ch.publicId}`, bold: true, size: titleSize, color: [15, 23, 42] });
+              break;
+            case 'age': case 'place': case 'community': case 'city': {
+              // idade e local numa linha só, na posição do primeiro deles
+              if (metaDone) break;
+              metaDone = true;
+              const meta = captionFields.filter((k) => ['age', 'place', 'community', 'city'].includes(k)).map((k) =>
+                k === 'age' ? (typeof ch.age === 'number' ? `${ch.age} ${ch.age === 1 ? 'ano' : 'anos'}` : '')
+                : k === 'place' ? ch.community || ch.city || ''
+                : k === 'community' ? ch.community ?? '' : ch.city ?? '').filter(Boolean).join('  ·  ');
+              if (meta) lines.push({ text: meta, size: metaSize, color: GRAY });
+              break;
+            }
+            case 'school': if (ch.school) lines.push({ text: `Escola: ${ch.school}`, size: metaSize, color: GRAY }); break;
+            case 'gift': if (ch.wantedGift) lines.push({ text: `Presente: ${ch.wantedGift}`, size: metaSize, color: [146, 64, 14] }); break;
+            case 'sponsor': lines.push({ text: `Padrinho: ${it.unsponsored ? 'sem padrinho' : it.sponsorName || '—'}`, size: metaSize, color: GRAY }); break;
+            case 'method': if (!it.unsponsored) lines.push({ text: `Forma: ${it.method === 'PIX' ? 'PIX' : 'Presente'}`, size: metaSize, color: GRAY }); break;
+            case 'collectionPoint':
+              if (!it.unsponsored && it.method !== 'PIX') lines.push({ text: `Entrega: ${it.collectionPoint || 'sem ponto de coleta'}`, size: metaSize, color: GRAY });
+              break;
+            case 'campaign': lines.push({ text: `${it.campaign.name}${it.campaign.year ? ` (${it.campaign.year})` : ''}`, size: metaSize, color: GRAY }); break;
+            default: break;
+          }
+        }
       }
       let drawW = slotW;
       const measure = (w: number) => {
@@ -578,7 +612,7 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
           pdf.setFont('helvetica', l.bold ? 'bold' : 'normal'); pdf.setFontSize(l.size);
           h += pdf.splitTextToSize(l.text, w).slice(0, 2).length * lineH(l.size);
         }
-        return h + (caption ? metaSize * 1.6 + 4 : 0); // + chip
+        return h + (caption && withChip ? metaSize * 1.6 + 4 : 0); // + selo
       };
       let captionH = measure(drawW);
       let drawH = drawW / aspect;
@@ -601,7 +635,7 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
           pdf.text(wrapped, imgX, y + l.size * 0.9);
           y += wrapped.length * lineH(l.size);
         }
-        drawChip(pdf, imgX, y + 2, it, metaSize * 0.9, drawW);
+        if (withChip) drawChip(pdf, imgX, y + 2, it, metaSize * 0.9, drawW);
         pdf.setTextColor(0);
       }
       report(++drawn, 'pdf');

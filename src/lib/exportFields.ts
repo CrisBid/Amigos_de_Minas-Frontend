@@ -290,3 +290,24 @@ export const CARD_LIST_FIELDS: { key: string; label: string; weight: number }[] 
 ];
 export const DEFAULT_LIST_COLUMNS = ['id', 'name', 'age', 'place', 'gift', 'status'];
 export const DEFAULT_GENERAL_COLUMNS = ['id', 'name', 'age', 'place', 'gift', 'sponsor', 'status'];
+
+/* —— legenda de cada cartão (abaixo da arte) —— */
+
+/** O que pode aparecer abaixo da arte; idade, comunidade, cidade e local saem juntos numa linha */
+export const CAPTION_FIELDS: { key: string; label: string }[] = [
+  { key: 'name', label: 'Nome' },
+  { key: 'id', label: 'ID' },
+  { key: 'age', label: 'Idade' },
+  { key: 'place', label: 'Comunidade ou cidade' },
+  { key: 'community', label: 'Comunidade' },
+  { key: 'city', label: 'Cidade' },
+  { key: 'school', label: 'Escola' },
+  { key: 'gift', label: 'Presente' },
+  { key: 'sponsor', label: 'Padrinho' },
+  { key: 'method', label: 'Forma' },
+  { key: 'collectionPoint', label: 'Ponto de coleta' },
+  { key: 'campaign', label: 'Campanha' },
+  { key: 'status', label: 'Status (selo)' },
+];
+export const DEFAULT_CAPTION_FIELDS = ['name', 'id', 'age', 'place', 'gift', 'status'];
+
