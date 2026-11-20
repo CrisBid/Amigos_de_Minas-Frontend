@@ -29,7 +29,7 @@ export type PdfChildInput = {
 };
 
 export type PdfOrder = 'name' | 'id';
-export type PdfGroupBy = 'none' | 'community' | 'city' | 'collectionPoint';
+export type PdfGroupBy = 'none' | 'community' | 'city' | 'school' | 'collectionPoint';
 
 export type PdfCampaign = { id: string; name: string; year?: number | null };
 
@@ -70,6 +70,8 @@ export type ExportPdfOptions = {
   groupBySponsor?: boolean;
   /** false = só as listas, sem os cartões com foto */
   cards?: boolean;
+  /** false = separando por padrinho, sem a página de resumo de cada padrinho (os cartões dele continuam começando em página nova) */
+  sponsorSummaryPages?: boolean;
   /** colunas das listas de cada grupo/padrinho (sem: o padrão de cada lista) */
   listColumns?: string[];
   /** colunas da listagem geral */
@@ -303,6 +305,11 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
       return { label, sort: `${c.city ?? '~'}|${c.community ?? '~'}` };
     }
     if (groupBy === 'city') return { label: c.city || 'Sem cidade', sort: c.city || '~' };
+    if (groupBy === 'school') {
+      // comunidade e escola: a mesma escola em comunidades diferentes fica em grupos separados
+      const label = `${c.community || 'Sem comunidade'}${c.city ? ` (${c.city})` : ''} › ${c.school || 'Sem escola declarada'}`;
+      return { label, sort: `${c.city ?? '~'}|${c.community ?? '~'}|${c.school ?? '\uffff'}` };
+    }
     if (it.unsponsored) return { label: 'Crianças sem padrinho', sort: '\uffff' };
     return { label: it.collectionPoint || 'Sem ponto de coleta', sort: it.collectionPoint || '\ufffe' };
   };
@@ -670,7 +677,9 @@ export async function exportSponsorshipsPdf(input: ReadonlyArray<PdfItem>, opts:
         }, true);
       }
       for (const sec of t.sections) {
-        if (bySponsor) {
+        if (bySponsor && !sec.free && opts.sponsorSummaryPages === false) {
+          // sem a página de resumo do padrinho: direto para os cartões dele
+        } else if (bySponsor) {
           listTable(sec.items, {
             title: sec.name,
             lines: [

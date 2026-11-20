@@ -23,7 +23,8 @@ import type { PdfGroupBy, PdfItem } from '@/lib/pdf/exportSponsorshipsPdf';
    coleta ou padrinho, e as crianças sem padrinho, se quiser. */
 
 type Option = { id: string; name: string };
-type Level = 'general' | 'city' | 'community' | 'sponsor' | 'selection';
+type Level = 'general' | 'city' | 'community' | 'school' | 'sponsor' | 'selection';
+type SchoolOption = { id: string; name: string; communities: Option[] };
 type Format = 'list' | 'cards' | 'excel';
 
 const ALL_STATUS = Object.keys(STATUS_PT) as SponsorshipStatus[];
@@ -44,7 +45,7 @@ const FORMATS: { id: Format; title: string; desc: string; icon: typeof FileText 
 const GROUPS_FOR: Record<Format, GroupBy[]> = {
   list: ['community', 'city', 'collectionPoint', 'sponsor', 'school', 'none'],
   excel: ['community', 'city', 'collectionPoint', 'sponsor', 'school', 'none'],
-  cards: ['community', 'city', 'collectionPoint', 'sponsor', 'none'],
+  cards: ['community', 'city', 'school', 'collectionPoint', 'sponsor', 'none'],
 };
 const SORT_LABEL: Record<SortBy, string> = { id: 'Por ID', name: 'Alfabética', sponsor: 'Por padrinho' };
 const PER_PAGE = [1, 2, 4, 6, 9];
@@ -64,13 +65,15 @@ type Opts = {
   listCols: string[]; generalCols: string[]; sponsorCols: string[]; captionCols: string[];
   /** cartões: página final com os padrinhos; todos: folha de resumo dos pontos de coleta */
   sponsorPage: boolean; pointsSummary: boolean;
+  /** cartões separados por padrinho: página de resumo antes dos cartões de cada um */
+  sponsorSummaryPages: boolean;
 };
 const DEFAULT_OPTS: Opts = {
   format: 'list', groupBy: 'community', sortBy: 'id', bySponsor: true, includeFree: false,
   sponsorList: true, giftSum: true, layout: 'tabs', breakPerGroup: true, textScale: 1,
   perPage: 4, caption: true, includeNoPhoto: true, general: true,
   listCols: DEFAULT_LIST_COLUMNS, generalCols: DEFAULT_GENERAL_COLUMNS, sponsorCols: DEFAULT_SPONSOR_FIELDS, captionCols: DEFAULT_CAPTION_FIELDS,
-  sponsorPage: true, pointsSummary: false,
+  sponsorPage: true, pointsSummary: false, sponsorSummaryPages: true,
 };
 
 function Section({ n, title, icon: Icon, children }: { n: number; title: string; icon: typeof FileText; children: React.ReactNode }) {
@@ -96,6 +99,9 @@ function ExportSponsorships() {
   const [sponsors, setSponsors] = useState<Option[]>([]);
   const [cityId, setCityId] = useState('');
   const [communityId, setCommunityId] = useState('');
+  const [schools, setSchools] = useState<SchoolOption[]>([]);
+  // escola do recorte: o id, ou "none" = crianças sem escola declarada
+  const [schoolId, setSchoolId] = useState('');
   const [sponsorId, setSponsorId] = useState('');
   const [ids, setIds] = useState('');
   const [status, setStatus] = useState<string[]>(DEFAULT_STATUS);
@@ -167,15 +173,25 @@ function ExportSponsorships() {
   }, []);
   useEffect(() => {
     setCommunityId('');
-    if (!cityId) { setCommunities([]); return; }
+    setSchoolId('');
+    if (!cityId) { setCommunities([]); setSchools([]); return; }
+    fetch(`/api/admin/schools?cityId=${cityId}&take=500`, { cache: 'no-store' })
+      .then(async (r) => (r.ok ? r.json() : null))
+      .then((d) => d && setSchools((d?.items ?? d ?? []).map((x: any) => ({
+        id: x.id, name: x.name, communities: (x.communities ?? []).map((c: any) => ({ id: c.id, name: c.name })),
+      })).sort((a: SchoolOption, b: SchoolOption) => a.name.localeCompare(b.name, 'pt-BR'))))
+      .catch(() => {});
     fetch(`/api/admin/communities?cityId=${cityId}&take=500`, { cache: 'no-store' })
       .then(async (r) => (r.ok ? r.json() : null))
       .then((d) => d && setCommunities((d?.items ?? d ?? []).map((c: any) => ({ id: c.id, name: c.name }))))
       .catch(() => {});
   }, [cityId]);
 
-  const canPickCity = level === 'city' || level === 'community';
+  const canPickCity = level === 'city' || level === 'community' || level === 'school';
   const canPickCommunity = level === 'community';
+  const school = schools.find((x) => x.id === schoolId);
+  // comunidades para restringir a escola: as que ela atende (sem escola declarada: as da cidade)
+  const schoolCommunities: Option[] = schoolId === 'none' ? communities : school?.communities ?? [];
   const freeAllowed = !!campaignId && level !== 'sponsor' && level !== 'selection';
   const includeFree = o.includeFree && freeAllowed;
   // o agrupamento escolhido pode não existir no formato (escola nos cartões): cai para comunidade
@@ -189,6 +205,10 @@ function ExportSponsorships() {
     if (campaignId) p.set('campaignId', campaignId);
     if (canPickCity && cityId) p.set('cityId', cityId);
     if (canPickCommunity && communityId) p.set('communityId', communityId);
+    if (level === 'school' && schoolId) {
+      p.set('schoolId', schoolId);
+      if (communityId) p.set('communityId', communityId);
+    }
     if (level === 'sponsor' && sponsorId) p.set('sponsorId', sponsorId);
     if (level === 'selection') {
       const list = ids.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean).join(',');
@@ -198,11 +218,13 @@ function ExportSponsorships() {
     if (method.length) p.set('method', method.join(','));
     if (includeFree) p.set('includeUnsponsored', '1');
     return p.toString();
-  }, [level, campaignId, canPickCity, cityId, canPickCommunity, communityId, sponsorId, ids, status, method, includeFree]);
+  }, [level, campaignId, canPickCity, cityId, canPickCommunity, communityId, schoolId, sponsorId, ids, status, method, includeFree]);
 
   const missing =
     (level === 'city' && !cityId) ? 'Escolha a cidade.' :
     (level === 'community' && !communityId) ? 'Escolha a comunidade.' :
+    (level === 'school' && !cityId) ? 'Escolha a cidade.' :
+    (level === 'school' && !schoolId) ? 'Escolha a escola.' :
     (level === 'sponsor' && !sponsorId) ? 'Escolha o padrinho.' :
     (level === 'selection' && !ids.trim()) ? 'Cole os IDs dos apadrinhamentos.' :
     !status.length ? 'Marque pelo menos um status.' :
@@ -223,6 +245,10 @@ function ExportSponsorships() {
     const parts = [camp ? camp.name + (camp.year ? ` (${camp.year})` : '') : 'Todas as campanhas'];
     if (canPickCity && cityId) parts.push(cities.find((c) => c.id === cityId)?.name ?? '');
     if (canPickCommunity && communityId) parts.push(communities.find((c) => c.id === communityId)?.name ?? '');
+    if (level === 'school' && schoolId) {
+      parts.push(schoolId === 'none' ? 'Sem escola declarada' : school?.name ?? '');
+      if (communityId) parts.push(schoolCommunities.find((c) => c.id === communityId)?.name ?? '');
+    }
     if (level === 'sponsor' && sponsorId) parts.push(sponsors.find((s) => s.id === sponsorId)?.name ?? '');
     return parts.filter(Boolean).join(' · ');
   };
@@ -293,7 +319,7 @@ function ExportSponsorships() {
       }
       const items = o.includeNoPhoto ? all : all.filter((i) => !!i.child.photoUrl);
       if (!items.length) throw new Error('Nenhuma criança com foto nesta campanha. Marque "Incluir crianças sem foto".');
-      const pdfGroup: PdfGroupBy = groupBy === 'community' || groupBy === 'city' || groupBy === 'collectionPoint' ? groupBy : 'none';
+      const pdfGroup: PdfGroupBy = groupBy === 'community' || groupBy === 'city' || groupBy === 'school' || groupBy === 'collectionPoint' ? groupBy : 'none';
       const r = await exportSponsorshipsPdf(items, {
         title: subtitle(),
         groupBy: pdfGroup,
@@ -309,6 +335,7 @@ function ExportSponsorships() {
         sponsorPage: o.sponsorPage,
         sponsorColumns: o.sponsorCols,
         pointsSummary: o.pointsSummary,
+        sponsorSummaryPages: o.sponsorSummaryPages,
         signal: cancelRef.current,
         fileName: `cartoes-${stamp()}.pdf`,
         onProgress: (p) => setProgress(p.phase === 'compose' ? `Montando as artes… ${p.current}/${p.total}` : `Escrevendo o PDF… ${p.current}/${p.total}`),
@@ -381,6 +408,7 @@ function ExportSponsorships() {
               <option value="general">Todas</option>
               <option value="city">Uma cidade</option>
               <option value="community">Uma comunidade</option>
+              <option value="school">Uma escola</option>
               <option value="sponsor">Um padrinho</option>
               <option value="selection">Lista de IDs de apadrinhamento</option>
             </select>
@@ -401,6 +429,25 @@ function ExportSponsorships() {
               </select>
             </label>
           )}
+          {level === 'school' && (
+            <label className="text-sm text-gray-600">Escola
+              <select value={schoolId} onChange={(e) => { setSchoolId(e.target.value); setCommunityId(''); }} disabled={!cityId} className={`${select} disabled:bg-gray-100`}>
+                <option value="">— Selecionar —</option>
+                {schools.map((x) => (
+                  <option key={x.id} value={x.id}>{x.name}{x.communities.length > 1 ? ` (${x.communities.length} comunidades)` : ''}</option>
+                ))}
+                <option value="none">Sem escola declarada</option>
+              </select>
+            </label>
+          )}
+          {level === 'school' && schoolId && (schoolId === 'none' || schoolCommunities.length > 1) && (
+            <label className="text-sm text-gray-600">Comunidade
+              <select value={communityId} onChange={(e) => setCommunityId(e.target.value)} className={select}>
+                <option value="">Todas{schoolId === 'none' ? ' as da cidade' : ` as ${schoolCommunities.length} que a escola atende`}</option>
+                {schoolCommunities.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </label>
+          )}
           {level === 'sponsor' && (
             <label className="text-sm text-gray-600 md:col-span-2">Padrinho
               <select value={sponsorId} onChange={(e) => setSponsorId(e.target.value)} className={select}>
@@ -410,6 +457,17 @@ function ExportSponsorships() {
             </label>
           )}
         </div>
+        {level === 'school' && schoolId && !communityId && (schoolId === 'none' || schoolCommunities.length > 1) && (
+          <p className="text-xs text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+            {schoolId === 'none'
+              ? 'Crianças da cidade sem escola no cadastro. '
+              : `Esta escola atende ${schoolCommunities.length} comunidades. `}
+            Para não misturar as comunidades, use <b>Separar por: Comunidade › escola</b> (ou Comunidade) em Organização.
+            {groupBy !== 'school' && groupBy !== 'community' && (
+              <button type="button" onClick={() => set({ groupBy: 'school' })} className="ml-2 underline font-semibold">Usar Comunidade › escola</button>
+            )}
+          </p>
+        )}
         {level === 'selection' && (
           <textarea value={ids} onChange={(e) => setIds(e.target.value)} placeholder="IDs dos apadrinhamentos, separados por vírgula, espaço ou linha" className="w-full rounded-xl border border-gray-300 bg-white text-gray-900 min-h-[80px] p-3 text-sm" />
         )}
@@ -464,7 +522,7 @@ function ExportSponsorships() {
             <span className="text-xs text-gray-500">{sortBy === 'sponsor' ? 'Agrupadas pelo padrinho dentro de cada grupo (e por ID dentro dele).' : 'Vale para as listas e os cartões.'}</span>
           </div>
         </div>
-        {o.format === 'cards' && (groupBy === 'community' || groupBy === 'city' || groupBy === 'collectionPoint') && (
+        {o.format === 'cards' && (groupBy === 'community' || groupBy === 'city' || groupBy === 'school' || groupBy === 'collectionPoint') && (
           <label className="flex items-start gap-2 text-sm text-gray-700">
             <input type="checkbox" className="mt-0.5 accent-emerald-600" checked={o.bySponsor} onChange={(e) => set({ bySponsor: e.target.checked })} />
             <span>
@@ -563,6 +621,15 @@ function ExportSponsorships() {
               )}
               {groupBy === 'none' && (
                 <label className="flex items-center gap-2"><input type="checkbox" checked={o.general} onChange={(e) => set({ general: e.target.checked })} className="accent-emerald-600" /> Lista de todas as crianças no início</label>
+              )}
+              {(groupBy === 'sponsor' || (o.bySponsor && ['community', 'city', 'school', 'collectionPoint'].includes(groupBy))) && (
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" className="mt-0.5 accent-emerald-600" checked={!o.sponsorSummaryPages} onChange={(e) => set({ sponsorSummaryPages: !e.target.checked })} />
+                  <span>
+                    Sem a página de resumo de cada padrinho (os cartões de cada um continuam em página nova)
+                    {!o.captionCols.includes('sponsor') && <span className="block text-xs text-gray-500">Dica: inclua &quot;Padrinho&quot; na legenda para saber de quem é cada cartão.</span>}
+                  </span>
+                </label>
               )}
               <label className="flex items-center gap-2"><input type="checkbox" checked={o.pointsSummary} onChange={(e) => set({ pointsSummary: e.target.checked })} className="accent-emerald-600" /> Folha de resumo dos pontos de coleta (no final)</label>
               <label className="flex items-center gap-2"><input type="checkbox" checked={o.sponsorPage} onChange={(e) => set({ sponsorPage: e.target.checked })} className="accent-emerald-600" /> Última página: os padrinhos deste conjunto (crianças de cada um, forma e contato)</label>

@@ -15,7 +15,7 @@ const TEXT_SIZES = [
 ];
 const PREFS_KEY = 'pdf-export-prefs';
 
-type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean; order: PdfOrder; groupBySponsor: boolean; includeUnsponsored: boolean; sponsorPage: boolean; pointsSummary: boolean; captionFields: string[] };
+type Prefs = { perPage: number; textScale: number; caption: boolean; summary: boolean; includeNoPhoto: boolean; order: PdfOrder; groupBySponsor: boolean; includeUnsponsored: boolean; sponsorPage: boolean; pointsSummary: boolean; captionFields: string[]; sponsorSummaryPages: boolean };
 
 function loadPrefs(fallback: Prefs): Prefs {
   try { return { ...fallback, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return fallback; }
@@ -41,7 +41,7 @@ export default function ExportPdfDialog({
   /** busca as crianças do mesmo recorte (cidade/comunidade) ainda sem padrinho; sem ela, a opção não aparece */
   loadUnsponsored?: () => Promise<PdfItem[]>;
 }) {
-  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true, order: 'name', groupBySponsor: true, includeUnsponsored: false, sponsorPage: false, pointsSummary: false, captionFields: DEFAULT_CAPTION_FIELDS });
+  const [prefs, setPrefs] = useState<Prefs>({ perPage: 4, textScale: 1, caption: true, summary: defaultSummary, includeNoPhoto: true, order: 'name', groupBySponsor: true, includeUnsponsored: false, sponsorPage: false, pointsSummary: false, captionFields: DEFAULT_CAPTION_FIELDS, sponsorSummaryPages: true });
   const canGroup = sponsorCount > 1;
   const grouped = canGroup && prefs.groupBySponsor;
   const [busy, setBusy] = useState(false);
@@ -76,7 +76,7 @@ export default function ExportPdfDialog({
       localStorage.setItem(PREFS_KEY, JSON.stringify({
         perPage: next.perPage, textScale: next.textScale, caption: next.caption, includeNoPhoto: next.includeNoPhoto,
         order: next.order, groupBySponsor: next.groupBySponsor, includeUnsponsored: next.includeUnsponsored,
-        sponsorPage: next.sponsorPage, pointsSummary: next.pointsSummary, captionFields: next.captionFields,
+        sponsorPage: next.sponsorPage, pointsSummary: next.pointsSummary, captionFields: next.captionFields, sponsorSummaryPages: next.sponsorSummaryPages,
       }));
     } catch { /* sem storage */ }
     return next;
@@ -203,6 +203,16 @@ export default function ExportPdfDialog({
                 icon={<Users className="w-4 h-4" />}
                 label={`Separar por padrinho (${sponsorCount})`}
                 hint="Cada padrinho começa com a lista das crianças dele (com contato) e depois os cartões"
+              />
+            )}
+            {grouped && (
+              <Toggle
+                checked={!prefs.sponsorSummaryPages}
+                onChange={(v) => set({ sponsorSummaryPages: !v })}
+                disabled={busy}
+                icon={<ListChecks className="w-4 h-4" />}
+                label="Sem a página de resumo de cada padrinho"
+                hint="Os cartões de cada padrinho continuam em página nova, só sem a lista antes deles"
               />
             )}
             {loadUnsponsored && (
